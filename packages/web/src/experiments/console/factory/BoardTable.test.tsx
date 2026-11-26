@@ -59,7 +59,7 @@ test("a Table row's round and returned cells are the card's own for the same ite
           projectId: 'web',
           packs: new Map([['flow', PACK]]),
           packsError: false,
-          itemAsks: null,
+          itemAsks: NO_ITEM_ASKS,
         }}
       >
         <CardList reads={reads} projectId="web" className="" />

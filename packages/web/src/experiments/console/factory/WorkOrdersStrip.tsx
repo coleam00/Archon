@@ -9,8 +9,9 @@
 import { useId, useState, type ReactElement } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { displayItemKey } from '../lib/item-key';
-import { CHIP, chipOf, type Chip } from '../routes/board/standing';
+import { CHIP, type Chip } from '../routes/board/standing';
 import { useFactoryCards } from './cards-context';
+import { askedOf, shownChip } from './lib/item-asks';
 import { useForgeTitles } from './FactoryCards';
 import { itemTitle } from './lib/item-card';
 import { orderSummary, type WorkOrder } from './lib/work-orders';
@@ -140,6 +141,8 @@ function WorkOrderRow({
   const mergedWords = `${String(summary.merged)} of ${String(summary.total)} merged`;
   // A member with no run has no card to light.
   const lightable = order.members.some(member => member.read !== undefined);
+  // A member with open asks says so by its card's rule; the strip sits in the board's provider.
+  const asks = useFactoryCards()?.itemAsks ?? null;
   return (
     <li
       data-work-order={order.item.key}
@@ -186,7 +189,11 @@ function WorkOrderRow({
       ) : null}
       <span className="flex flex-wrap items-center gap-1 md:shrink-0">
         {order.members.map(member => {
-          const state = member.read === undefined ? 'not started' : CHIP[chipOf(member.read)].label;
+          const chip: Chip | undefined =
+            member.read === undefined
+              ? undefined
+              : shownChip(member.read, askedOf(asks, member.read) === true);
+          const state = chip === undefined ? 'not started' : CHIP[chip].label;
           const label = `${displayItemKey(member.item.key, order.item.key)}: ${state}`;
           return (
             <span
@@ -194,7 +201,7 @@ function WorkOrderRow({
               role="img"
               aria-label={label}
               title={label}
-              className={`inline-block h-2 w-2 rounded-full ${member.read === undefined ? 'ring-1 ring-inset ring-text-tertiary' : CHIP_DOT[chipOf(member.read)]}`}
+              className={`inline-block h-2 w-2 rounded-full ${chip === undefined ? 'ring-1 ring-inset ring-text-tertiary' : CHIP_DOT[chip]}`}
             />
           );
         })}

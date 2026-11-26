@@ -6,7 +6,7 @@ import { K } from '../store/keys';
 import type { PackView } from './api';
 import type { PackBoardGroups } from './lib/board-numbers';
 import { shippedFile, shippedGraph } from './curated.test-fixtures';
-import { itemOn, MOVING_ITEMS } from './items.test-fixtures';
+import { asksOn, itemOn, MOVING_ITEMS } from './items.test-fixtures';
 import { installDom } from './test-dom.test-helpers';
 
 const { mount: mountTree, settle } = await installDom();
@@ -49,7 +49,10 @@ const BOARD: PackBoardGroups = {
   },
 };
 
-async function mount(view: PackView, search = ''): Promise<HTMLElement> {
+/** Open asks on the two items the map counts as needing you (b2 on build, g1 at the land gate). */
+const ASKS = asksOn(MOVING_ITEMS.filter(read => ['b2', 'g1'].includes(read.item.key)));
+
+async function mount(view: PackView, search = '', asks = ASKS): Promise<HTMLElement> {
   set(K.packView(PROJECT, PACK), view);
   set(K.packGraph(PROJECT, PACK), shippedGraph);
   const mounted = await mountTree(
@@ -57,7 +60,15 @@ async function mount(view: PackView, search = ''): Promise<HTMLElement> {
       <Routes>
         <Route
           path="/console/p/:projectId/overview"
-          element={<PackMap projectId={PROJECT} pack={PACK} board={BOARD} itemsError={undefined} />}
+          element={
+            <PackMap
+              projectId={PROJECT}
+              pack={PACK}
+              board={BOARD}
+              itemsError={undefined}
+              asks={asks}
+            />
+          }
         />
       </Routes>
     </MemoryRouter>
@@ -252,6 +263,23 @@ describe('the stage modal', () => {
       shippedGraph.stages.find(stage => stage.workflow === 'stage-build')?.nodes.map(n => n.id) ??
         []
     );
+  });
+
+  test("a stage's 'N need you' counts exactly its Items here now lines that say Needs you (#243)", async () => {
+    // b1 runs with an open ask, b2 waits with one: both have a card's Needs you button.
+    set(K.cardReads(PROJECT, ['run-b1', 'run-b2']), { records: [], missing: [], unreadable: [] });
+    const page = await mount(
+      CURATED,
+      '',
+      asksOn(MOVING_ITEMS.filter(read => ['b1', 'b2'].includes(read.item.key)))
+    );
+    const stage = page.querySelector('[data-stage="stage-build"]');
+    const chip = Number(stage?.getAttribute('aria-label')?.match(/(\d+) needs? you/)?.[1] ?? 0);
+    await click(stage);
+    await openTab('Items here now');
+    const lines = dialog().querySelectorAll('[data-item] [data-state="needs-you"]').length;
+    expect(chip).toBe(2);
+    expect(lines).toBe(chip);
   });
 
   test("the landed stage lists and counts the board's Merged column", async () => {

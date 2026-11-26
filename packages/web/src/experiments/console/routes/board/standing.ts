@@ -1,6 +1,7 @@
 /**
- * How Rasmus's board reads an item's standing in the engine's own facts: its chip, the run it
- * stands at, and why it needs a decision. Shared by the board's card and its column headings.
+ * How Rasmus's board reads an item's standing in the engine's own facts: its state's words and
+ * tone, the run it stands at, and why it needs a decision. Shared by the board's card and its
+ * column headings. Whether an item has open asks is not read here (`factory/lib/item-asks.ts`).
  */
 import type { ItemRead } from '../../skills/items';
 
@@ -14,11 +15,12 @@ export const isMoving = (read: ItemRead): boolean =>
 
 /**
  * Each chip's words, in the order chips are counted on a stage heading, and its tone: the
- * state's colour as text on its soft background, with Needs you the one filled chip (Visual
- * standard, rule 5).
+ * state's colour as text on its soft background (Visual standard, rule 5). A card's label is
+ * its item's state; `needs_you` is the words and tone where a surface says an item has open
+ * asks (a column header's chip, a stage's item line, a work-order dot), soft like the others.
  */
 export const CHIP: Record<Chip, { label: string; tone: string }> = {
-  needs_you: { label: 'Needs you', tone: 'bg-warning font-semibold text-surface-inset' },
+  needs_you: { label: 'Needs you', tone: 'bg-[color:var(--warning-soft)] text-warning' },
   running: { label: 'Running', tone: 'bg-[color:var(--running-soft)] text-[color:var(--running)]' },
   waiting: { label: 'Waiting', tone: 'bg-surface-inset text-text-tertiary' },
   queued: { label: 'Queued', tone: 'bg-surface-inset text-text-tertiary' },
@@ -30,12 +32,6 @@ export const CHIP: Record<Chip, { label: string; tone: string }> = {
     tone: 'bg-surface-inset text-text-secondary ring-1 ring-inset ring-border',
   },
 };
-
-/** An item that waits on the operator says so, whatever else is true of it. */
-export function chipOf(read: ItemRead): Chip {
-  const asked = read.questions.some(question => question.kind !== 'stopped');
-  return asked && read.standing.state === 'waiting' ? 'needs_you' : read.standing.state;
-}
 
 /** The run the engine says the item stands at. */
 export function standingRun(read: ItemRead): ItemRead['runs'][number] | undefined {

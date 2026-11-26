@@ -505,6 +505,13 @@ One 4/8 px grid: Tailwind's 4 px scale, every value a multiple of 4.
 - **"Needs you" is the one loud colour.** A card's Needs you state pill is the only filled pill
   (`--warning` background, semibold `--surface-inset` text), and only needs-you has the ping
   (rule 7). Chips that count needs-you (a column header, a map card) stay soft like the others.
+  *On `combined` (#241, #243) no card has a Needs you pill: a card's top-right chip is its state
+  label and its open asks are its "Needs you · N" button. A column header, the map, the derived
+  flow, a stage's "Items here now" and a work-order dot say an item needs you exactly when that
+  button is there (`factory/lib/item-asks.ts`), never from the item read's questions. Where a
+  surface names one state for an item (an "Items here now" line, a work-order dot, the Table's
+  State sort), open asks win over the run line (`shownChip`), so a stage's "N need you" equals
+  its lines that say Needs you.*
 - The brand gradient only where the console already uses it (the active tab bar).
 - Components never write raw hex or oklch: they use `var(--token)` or the token's Tailwind colour
   utility.
@@ -572,7 +579,8 @@ text. The factory's own surfaces that point at an ask follow the rules above:
 - A 3 px top bar in the column's colour (rule 5).
 - Label: `--text-console-15`, semibold.
 - Subtitle: `--text-console-12`, `--text-tertiary`, one line, truncated, naming the column's stages
-  ("order, triage"). The Merged column's subtitle is "last 7 days".
+  by their labels, as the map names them ("Order, Triage"; the ids only as its hover title).
+  The Merged column's subtitle is "last 7 days".
 - Count: `--text-console-22`, `tabular-nums`; a skeleton bar while it is not known (rule 6).
 - State chips: `--text-console-12`, `rounded-full`, `px-2 py-0.5`, the state's soft background
   with the state's colour as text ("running 2", "needs you 1"). Only a state with a count above 0
@@ -956,7 +964,11 @@ panel). Port the logic and ideas, not the styling: Mission Control used its own 
    (`--text-console-13`, accent, underlined). No questions, recommendations or answering on the
    Overview: Needs you is drawn in two places only, Archon's platform-wide Needs you page and
    the project's Needs you tab (owner and Rasmus, 2026-11-25, #218). Nothing shows while the
-   asks are read or when nothing waits, and the map follows right after.
+   asks are read or when nothing waits, and the map follows right after. When the asks could not
+   be read and none were read before, the line's place says so, with the error and a Retry
+   (`factory/AsksUnread.tsx`), and the need-you tile shows "?" rather than a skeleton; the Board
+   says the same once, above its columns, where its cards show no Needs you button and its
+   headers no needs-you chip (#258).
 4. **The map.**
 
 ## The map

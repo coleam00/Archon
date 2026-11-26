@@ -8,31 +8,46 @@
  */
 import type { ReactElement } from 'react';
 import type { ItemRead } from '../skills/items';
-import { CHIP, chipOf, type Chip } from '../routes/board/standing';
+import { CHIP, type Chip } from '../routes/board/standing';
+import { useFactoryCards } from './cards-context';
+import { askedCount, type AskRead } from './lib/item-asks';
 
-/** A column's chips stay soft, Needs you included (rule 5: only a card's pill is filled). */
-const SOFT: Partial<Record<Chip, string>> = {
-  needs_you: 'bg-[color:var(--warning-soft)] text-warning',
-};
-
-/** How many of `items` are in each state, in the chips' order; states with none are left out. */
-function chipsOf(items: readonly ItemRead[]): { chip: Chip; count: number }[] {
-  return (Object.keys(CHIP) as Chip[]).flatMap(chip => {
-    const count = items.filter(read => chipOf(read) === chip).length;
+/**
+ * The header's chips, in `CHIP`'s order, each a count above 0 (rule 9): needs-you by the cards'
+ * own rule (`askedCount`, which their Needs you buttons follow), null while the asks are not
+ * known, and every other chip by the state each card's label shows (`read.standing.state`). A
+ * running item with open asks counts under both, so the chips can add up to more than the column.
+ */
+export function chipsOf(
+  items: readonly ItemRead[],
+  asks: AskRead | null
+): { needYou: number | null; states: { chip: Chip; count: number }[] } {
+  const states = (Object.keys(CHIP) as Chip[]).flatMap(chip => {
+    if (chip === 'needs_you') return [];
+    const count = items.filter(read => read.standing.state === chip).length;
     return count === 0 ? [] : [{ chip, count }];
   });
+  return { needYou: askedCount(asks, items), states };
 }
+
+const CHIP_CLASS = 'rounded-full px-2 py-0.5 text-console-12';
 
 export function ColumnHeader({
   label,
+  labelHover = label,
   subtitle,
+  subtitleHover = subtitle,
   items,
   count = items.length,
   bar,
   chips = true,
 }: {
   label: string;
+  /** The label's hover title, where it names ids the label puts in words; else the label. */
+  labelHover?: string;
   subtitle: string;
+  /** The subtitle's hover title, where it names ids the subtitle puts in words; else the subtitle. */
+  subtitleHover?: string;
   items: readonly ItemRead[];
   /**
    * Null while it is read: a skeleton bar stands in (rule 6). `unknown` when the read failed,
@@ -59,13 +74,13 @@ export function ColumnHeader({
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col">
           <h3
-            title={label}
+            title={labelHover}
             className={`truncate text-console-15 font-semibold ${empty ? 'text-text-tertiary' : 'text-text-primary'}`}
           >
             {label}
           </h3>
           {empty ? null : (
-            <p title={subtitle} className="truncate text-console-12 text-text-tertiary">
+            <p title={subtitleHover} className="truncate text-console-12 text-text-tertiary">
               {subtitle}
             </p>
           )}
@@ -88,18 +103,41 @@ export function ColumnHeader({
           </span>
         )}
       </div>
-      {!chips || empty ? null : (
-        <ul aria-label={`${label} by state`} className="flex flex-wrap gap-1">
-          {chipsOf(items).map(({ chip, count: n }) => (
-            <li
-              key={chip}
-              className={`rounded-full px-2 py-0.5 text-console-12 ${SOFT[chip] ?? CHIP[chip].tone}`}
-            >
-              {CHIP[chip].label.toLowerCase()} {n}
-            </li>
-          ))}
-        </ul>
-      )}
+      {!chips || empty ? null : <HeaderChips label={label} items={items} />}
     </header>
+  );
+}
+
+/**
+ * The header's chip row. With no provider (a pack board drawn alone) no asks are given, so no
+ * needs-you chip and no skeleton; while they are read a skeleton stands in for its count (rule
+ * 6); when they could not be read the cards show no button and the header no chip, and the
+ * board says why once, above its columns (`AsksUnread`).
+ */
+function HeaderChips({
+  label,
+  items,
+}: {
+  label: string;
+  items: readonly ItemRead[];
+}): ReactElement {
+  const asks = useFactoryCards()?.itemAsks ?? null;
+  const { needYou, states } = chipsOf(items, asks);
+  const chipped: { chip: Chip; count: number }[] =
+    needYou === null || needYou === 0 ? states : [{ chip: 'needs_you', count: needYou }, ...states];
+  return (
+    <ul aria-label={`${label} by state`} className="flex flex-wrap gap-1">
+      {asks === 'reading' ? (
+        <li data-chip-reading title="Reading" className="flex">
+          <span className="inline-block h-5 w-16 rounded-full bg-surface-elevated motion-safe:animate-pulse" />
+          <span className="sr-only">Reading</span>
+        </li>
+      ) : null}
+      {chipped.map(({ chip, count: n }) => (
+        <li key={chip} data-header-chip={chip} className={`${CHIP_CLASS} ${CHIP[chip].tone}`}>
+          {CHIP[chip].label.toLowerCase()} {n}
+        </li>
+      ))}
+    </ul>
   );
 }

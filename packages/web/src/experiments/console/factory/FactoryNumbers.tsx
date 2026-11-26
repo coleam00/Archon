@@ -3,7 +3,8 @@
  * merged today, "N of M" merged and the median time to merged. Every figure but "need you" is
  * `packBoard`'s, the function the Board's columns and Merged column count with, so the two
  * pages cannot disagree. "Need you" is the project's open asks, the same count the project's
- * Needs you tab badge and the Overview's Needs you line show.
+ * Needs you tab badge and the Overview's Needs you line show. When the asks could not be read
+ * its tile shows "?", and the page says why once (`AsksUnread`).
  */
 import type { ReactElement, ReactNode } from 'react';
 import {
@@ -17,17 +18,25 @@ import {
 import type { BoardNumbers } from './lib/board-numbers';
 import { durationWords } from './lib/duration';
 
+/**
+ * The project's open asks: `reading` until the attention list first answers, `failed` when it
+ * could not be read and nothing was read before (`askReadOf`).
+ */
+export type NeedYou = number | 'reading' | 'failed';
+
 interface Tile {
   name: string;
   label: string;
   icon: LucideIcon;
   /** The figure; null while it is read. */
   value: string | null;
+  /** The figure could not be read: "?" in place of a skeleton that would never resolve. */
+  unread?: true;
   /** What the number means, as the tile's tooltip. */
   means?: string;
 }
 
-function tiles(numbers: BoardNumbers | undefined, needYou: number | undefined): Tile[] {
+function tiles(numbers: BoardNumbers | undefined, needYou: NeedYou): Tile[] {
   const of = (value: (n: BoardNumbers) => string): string | null =>
     numbers === undefined ? null : value(numbers);
   return [
@@ -42,7 +51,8 @@ function tiles(numbers: BoardNumbers | undefined, needYou: number | undefined): 
       name: 'need-you',
       label: needYou === 1 ? 'needs you' : 'need you',
       icon: MessageCircleQuestionMark,
-      value: needYou === undefined ? null : String(needYou),
+      value: typeof needYou === 'number' ? String(needYou) : null,
+      ...(needYou === 'failed' ? { unread: true as const } : {}),
     },
     {
       name: 'merged-today',
@@ -76,8 +86,7 @@ export function FactoryNumbers({
 }: {
   /** Undefined while every item is read. */
   numbers: BoardNumbers | undefined;
-  /** The project's open asks; undefined until the attention list answers. */
-  needYou: number | undefined;
+  needYou: NeedYou;
   /** The every-item read failed. */
   error: Error | undefined;
 }): ReactElement {
@@ -93,7 +102,11 @@ export function FactoryNumbers({
       <ul data-numbers aria-label="Numbers" className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         {tiles(numbers, needYou).map(tile => (
           <NumberTile key={tile.name} tile={tile}>
-            {tile.value === null ? (
+            {tile.unread ? (
+              <span data-value-unread title="Could not be read" className="text-text-tertiary">
+                ?
+              </span>
+            ) : tile.value === null ? (
               <span title="Reading" className="inline-flex items-center">
                 <span className="inline-block h-5.5 w-12 rounded bg-surface-elevated motion-safe:animate-pulse" />
                 <span className="sr-only">Reading</span>

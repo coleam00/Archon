@@ -1,21 +1,22 @@
 /**
  * The map's live chips: which items sit on each map stage, how many a run works now, and which
  * need a person. An item sits where the engine's `standing` puts it, the placement the board
- * draws (`stageAt` and `chipOf` in `routes/board/standing.ts`): on the map stage listing the
- * stage it stands at. So a stage's count is the board's count for the same stages, and no
- * second placement exists. The board's Merged column (`packBoard`'s recent merged items) sits on
+ * draws (`stageAt` in `routes/board/standing.ts`): on the map stage listing the stage it stands
+ * at. So a stage's count is the board's count for the same stages, and no second placement
+ * exists. An item needs a person by the board cards' own rule (`askedOf` in `item-asks.ts`). The board's Merged column (`packBoard`'s recent merged items) sits on
  * the map's landed stage (`curated-view.ts`), so every stage's count is the items it lists.
  */
-import { chipOf, stageAt, type Retired } from '../../routes/board/standing';
+import { stageAt, type Retired } from '../../routes/board/standing';
 import type { ItemRead, PackGraph } from '../../skills/items';
 import type { CuratedView } from './curated-view';
+import { askedOf, type AskRead } from './item-asks';
 
 interface StageLive {
   /** The items placed on this stage, in the order the items read returned them. */
   items: ItemRead[];
   /** How many of them a run works now. */
   working: number;
-  /** Those with an open ask a person answers. */
+  /** Those with an open ask a person answers; empty while the asks are not known. */
   needYou: ItemRead[];
 }
 
@@ -58,6 +59,7 @@ export function stageLive(
   merged: readonly ItemRead[],
   /** The graph's stages, which place a run that recorded no workflow name (`stageAt`). */
   graphStages: PackGraph['stages'] | undefined,
+  asks: AskRead | null,
   /** The view's retired workflows, which place their runs' items (`stageAt`). */
   retired: readonly Retired[] = []
 ): MapLive {
@@ -76,7 +78,7 @@ export function stageLive(
     }
     live.items.push(read);
     if (read.standing.state === 'running') live.working += 1;
-    if (chipOf(read) === 'needs_you') live.needYou.push(read);
+    if (askedOf(asks, read) === true) live.needYou.push(read);
   }
   const landed = stages.get(view.landed.stage);
   landed?.items.push(...merged);

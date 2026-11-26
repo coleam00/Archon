@@ -58,7 +58,14 @@ test('the Needs you line comes under the tiles and before the map', () => {
   seedPack();
   const html = renderToStaticMarkup(
     <MemoryRouter>
-      <PackOverview projectId="p1" pack="flow" items={[merged]} itemsError={undefined} needYou={12}>
+      <PackOverview
+        projectId="p1"
+        pack="flow"
+        items={[merged]}
+        itemsError={undefined}
+        needYou={12}
+        asks="reading"
+      >
         <NeedsYouLine projectId="p1" count={12} />
       </PackOverview>
     </MemoryRouter>
@@ -119,4 +126,24 @@ test('the Overview shows its asks as the one count link, never as ask rows', () 
   expect(html).not.toContain('Rename the column?');
   expect(html).not.toContain('data-ask-ref');
   expect(html).not.toContain('data-recommended');
+});
+
+test('while the asks are read, the need-you tile shows its skeleton and nothing says they failed', () => {
+  seedPack();
+  set(K.projects, [{ id: 'p1', name: 'p', itemPacks: ['flow'] } as unknown as Project]);
+  set(K.boardOrders('p1'), [merged]);
+  invalidate(K.runsAttention);
+  const html = renderToStaticMarkup(
+    <MemoryRouter initialEntries={['/console/p/p1/overview']}>
+      <Routes>
+        <Route path="/console/p/:projectId/overview" element={<OverviewPage />} />
+      </Routes>
+    </MemoryRouter>
+  );
+  const start = html.indexOf('data-number="need-you"');
+  expect(start).toBeGreaterThan(-1);
+  const tile = html.slice(start, html.indexOf('</li>', start));
+  expect(tile).toContain('title="Reading"');
+  expect(tile).not.toContain('data-value-unread');
+  expect(html).not.toContain('data-asks-unread');
 });
