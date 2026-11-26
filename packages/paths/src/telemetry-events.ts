@@ -265,7 +265,8 @@ export type WorkflowExitReason =
   | 'not_finalized'
   | 'process_terminated'
   | 'launch_failed'
-  | 'run_not_created';
+  | 'run_not_created'
+  | 'outcome_unknown';
 
 /** Why a run was cancelled — a fixed enum. Mirrored from `@archon/workflows`. */
 export type WorkflowCancelReason =
@@ -295,7 +296,8 @@ export type WorkflowErrorClass =
   | 'max_iterations'
   | 'child_failed'
   | 'cancelled'
-  | 'config';
+  | 'config'
+  | 'outcome_unknown';
 
 /** Closed set of DAG node types, mirrored from `@archon/workflows` schemas. */
 export type WorkflowNodeType =

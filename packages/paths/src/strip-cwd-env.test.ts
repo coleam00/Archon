@@ -87,7 +87,7 @@ describe('stripCwdEnv', () => {
   });
 });
 
-describe('stripCwdEnv — operator logging (#1302)', () => {
+describe('stripCwdEnv — what it reports', () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'archon-strip-cwd-env-log-test-'));
   let stderrSpy: ReturnType<typeof spyOn>;
   let stderrWrites: string[];
@@ -109,40 +109,25 @@ describe('stripCwdEnv — operator logging (#1302)', () => {
     delete process.env.TEST_STRIP_LOG_C;
   });
 
-  it('emits [archon] stripped line with count and filename when keys are stripped', () => {
-    writeFileSync(join(tmpDir, '.env'), 'TEST_STRIP_LOG_A=leaked\nTEST_STRIP_LOG_B=leaked\n');
-    process.env.TEST_STRIP_LOG_A = 'leaked';
-    process.env.TEST_STRIP_LOG_B = 'leaked';
-    stripCwdEnv(tmpDir);
-    const line = stderrWrites.find(s => s.startsWith('[archon] stripped'));
-    expect(line).toBeDefined();
-    expect(line).toContain('stripped 2 keys');
-    expect(line).toContain(tmpDir);
-    expect(line).toContain('(.env)');
-  });
-
-  it('lists every contributing filename when keys span multiple .env files', () => {
+  it('strips the keys without writing to stderr', () => {
     writeFileSync(join(tmpDir, '.env'), 'TEST_STRIP_LOG_A=leaked\n');
-    writeFileSync(join(tmpDir, '.env.local'), 'TEST_STRIP_LOG_B=leaked\n');
     process.env.TEST_STRIP_LOG_A = 'leaked';
-    process.env.TEST_STRIP_LOG_B = 'leaked';
     stripCwdEnv(tmpDir);
-    const line = stderrWrites.find(s => s.startsWith('[archon] stripped'));
-    expect(line).toBeDefined();
-    expect(line).toContain('(.env, .env.local)');
+    expect(process.env.TEST_STRIP_LOG_A).toBeUndefined();
+    expect(stderrWrites).toEqual([]);
   });
 
-  it('emits no [archon] stripped line when no CWD .env files exist', () => {
-    stripCwdEnv(tmpDir);
-    const line = stderrWrites.find(s => s.startsWith('[archon] stripped'));
-    expect(line).toBeUndefined();
-  });
-
-  it('emits no [archon] stripped line when .env file is empty', () => {
-    writeFileSync(join(tmpDir, '.env'), '');
-    stripCwdEnv(tmpDir);
-    const line = stderrWrites.find(s => s.startsWith('[archon] stripped'));
-    expect(line).toBeUndefined();
+  it('returns the files and sorted key names it stripped, never values', () => {
+    writeFileSync(join(tmpDir, '.env'), 'TEST_STRIP_LOG_B=value-b\nTEST_STRIP_LOG_A=value-a\n');
+    writeFileSync(
+      join(tmpDir, '.env.local'),
+      'TEST_STRIP_LOG_A=value-c\nTEST_STRIP_LOG_C=value-d\n'
+    );
+    expect(stripCwdEnv(tmpDir)).toEqual({
+      cwd: tmpDir,
+      files: ['.env', '.env.local'],
+      keys: ['TEST_STRIP_LOG_A', 'TEST_STRIP_LOG_B', 'TEST_STRIP_LOG_C'],
+    });
   });
 });
 

@@ -254,6 +254,7 @@ export const mockHydrateResumableRun = mock<typeof WorkflowRunResume.hydrateResu
     priorCompletedNodes: new Map([['n1', { output: 'v1' }]]),
     priorFailedNodes: new Map(),
     resumeCause: candidate.status === 'paused' ? 'continue_after_wait' : 'retry_failed',
+    claimedByHand: true,
     priorUsage: { costUsd: 0 },
     priorNodeSessions: [],
   })

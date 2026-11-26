@@ -3,6 +3,7 @@
  * A start no run caused (a fire, a schedule, a webhook, a label) that is refused records why
  * on its binding row, and attention lists it while it is its item's newest step.
  */
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdtemp, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -125,7 +126,19 @@ test('a start refused at its limit lists its item with the limit until a run sta
     }),
   ]);
 
-  // A run on the item after the refusal moves it on.
+  // A run that observes the item after the refusal moves nothing on; a step does.
+  const shadow = await store().createWorkflowRun({
+    workflow_name: 'shadow',
+    user_message: '',
+    codebase_id: CODEBASE_ID,
+    item_key: 'issue-1',
+    metadata: observesItemMetadata({ observes: true }),
+  });
+  await getDatabase().query(
+    "UPDATE remote_agent_workflow_runs SET started_at = datetime(started_at, '+1 minute') WHERE id = $1",
+    [shadow.id]
+  );
+  expect(await refused()).toHaveLength(1);
   await store().createWorkflowRun({
     workflow_name: 'build',
     user_message: '',
@@ -152,20 +165,31 @@ test('a start refused in preparation names its reason and detail until the bindi
     }),
   ]);
 
-  // The same binding starting on the item later closes it.
+  // The same binding starting a workflow that observes the item leaves it listed; starting a
+  // step on the item later closes it.
   await getDatabase().query(
     "UPDATE remote_agent_start_receipt_bindings SET updated_at = datetime(updated_at, '-1 minute')"
   );
+  const observer = await claimed(intent());
+  const base = launch();
+  await store().completeStartBindingPreparation({
+    ...observer,
+    launch: { ...base, run: { ...base.run, metadata: observesItemMetadata({ observes: true }) } },
+  });
+  expect(await refused()).toHaveLength(1);
   const next = await claimed(intent());
   await store().completeStartBindingPreparation({ ...next, launch: launch() });
   expect(await refused()).toEqual([]);
 });
 
 test('a start a run caused is shown on that run, and a source rejection with no item nowhere', async () => {
-  const caused = await claimed(intent(), {
-    source: RUN_ENDED_SOURCE_ACTOR,
-    id: crypto.randomUUID(),
+  const run = await store().createWorkflowRun({
+    workflow_name: 'plan',
+    user_message: '',
+    codebase_id: CODEBASE_ID,
+    item_key: 'issue-1',
   });
+  const caused = await claimed(intent(), { source: RUN_ENDED_SOURCE_ACTOR, id: run.id });
   await store().failStartBindingPreparation({
     ...caused,
     error: 'launch_preparation_failed',

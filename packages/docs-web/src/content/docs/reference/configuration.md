@@ -534,10 +534,12 @@ worktree:
 2. If omitted: Auto-detects — `origin` if it exists, otherwise the sole remote if only one is configured. Merged cleanup is the exception: it judges merges only against `origin` and keeps, with a reason, the worktrees of a repository that has no `origin`.
 3. If multiple remotes exist and none is named `origin`: Worktree creation **fails with an actionable error** listing the available remotes and suggesting the config fix. Registration still succeeds but records no repository URL, unless one of the remotes already belongs to a registered project, which refuses it as a second clone. A project registered this way owns none of its remotes, so a later clone of one of them registers as a separate project; set `worktree.remote` before registering to avoid that.
 
-**Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
+**Base branch behavior:** For a repository with a remote, base synchronization fetches the base branch without moving a locally registered checkout and resets an Archon-managed clone to the fetched remote code. When a run's captured start commit is already present in the repository, worktree creation skips this synchronization. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).
 2. If omitted: Uses the project's stored explicit branch, if present; otherwise resolves the default from the remote's live HEAD advertisement. Renames are followed even when local remote HEAD is stale. A reachable remote with a known symbolic HEAD is required; no branch name is guessed.
 3. If a workflow references `$BASE_BRANCH` while its base is unresolved, the node fails. See [`$BASE_BRANCH` fail-fast](/reference/variables/#base_branch-fail-fast) for causes and recovery.
+
+Without a remote, nothing is fetched or synced. The selected base (`--base`, `worktree.baseBranch`, or the registered codebase's stored default branch) is used as a local branch; the checkout's current branch is used only when none is set. Creation fails if the selected local branch is missing, a detached HEAD has no selected base, the fallback current branch has no commit, or a `--from` start point does not exist. See [Base branch precedence](/reference/cli/#base-branch-precedence) for the full resolution order.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
 
@@ -813,11 +815,13 @@ The CLI makes exceptions to this order: selected chat scope is read from the exp
 
 A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
 
-**Operator log lines** (stderr, emitted only when there is something to report):
+**Seeing what the guard strips.** Commands print nothing about the target repo's `.env` keys they strip. Run `archon doctor` in the repository to see them:
 
 ```
-[archon] stripped 2 keys from /path/to/target-repo (.env, .env.local) to prevent target repo env from leaking into Archon processes
+✓ Target repo .env: 2 keys from /path/to/target-repo/.env, /path/to/target-repo/.env.local are kept out of runs, so the target repo's secrets cannot reach Archon's processes: API_URL, OPENAI_API_KEY
 ```
+
+Every command that loads its env also logs an `env.cwd_keys_stripped` record at debug level with the same files and key names, when those files name a key. A command whose env loading fails (an Archon env file that cannot be read, or a refused key in `.archon/.env`) exits before the record is written. It is written while Archon loads its env files, before command options apply, so only `LOG_LEVEL=debug` (in the shell or an Archon env file) shows it: `--verbose` does not, and `--quiet` or `--json` do not hide it. The CLI writes it to stderr; a server writes it with its own logs. Neither the doctor line nor the record ever contains a value.
 
 The `[archon] loaded N keys from …` lines are suppressed by default (they would otherwise interleave with `archon setup`/`archon doctor` checklist output). To enable them, set `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug` before running:
 

@@ -135,15 +135,17 @@ describe('trigger check refuses what a fire refuses', () => {
       };
       const problems =
         kind === 'runEnded'
-          ? await runEndedBindingCheck(
-              {
-                file: 'b.json',
-                sourceInstanceId: 'b',
-                binding,
-                runEnded: { workflowName: 'plan', outcome: 'ready' },
-              },
-              deps
-            )
+          ? (
+              await runEndedBindingCheck(
+                {
+                  file: 'b.json',
+                  sourceInstanceId: 'b',
+                  binding,
+                  runEnded: { workflowName: 'plan', outcome: 'ready' },
+                },
+                deps
+              )
+            ).problems
           : await asksSettledBindingCheck(
               {
                 file: 'b.json',
@@ -169,28 +171,30 @@ describe('trigger check refuses what a fire refuses', () => {
       join(workflowsDir, 'build.yaml'),
       'name: build\ndescription: build\ninputs:\n  plan: { required: true }\n  issue: { required: true }\nnodes:\n  - id: one\n    bash: echo one\n'
     );
-    const check = (inputs: Record<string, string>, mapped: string[]) =>
-      runEndedBindingCheck(
-        {
-          file: 'b.json',
-          sourceInstanceId: 'b',
-          binding: {
-            bindingId: 'b',
-            bindingRevision: null,
-            hostId: 'host',
-            runAsUserId: 'operator',
-            resource: 'r',
-            overlap: 'queue' as const,
-            launch: { cwd: root, workflowName: 'build', inputs, isolation: { kind: 'default' } },
+    const check = async (inputs: Record<string, string>, mapped: string[]) =>
+      (
+        await runEndedBindingCheck(
+          {
+            file: 'b.json',
+            sourceInstanceId: 'b',
+            binding: {
+              bindingId: 'b',
+              bindingRevision: null,
+              hostId: 'host',
+              runAsUserId: 'operator',
+              resource: 'r',
+              overlap: 'queue' as const,
+              launch: { cwd: root, workflowName: 'build', inputs, isolation: { kind: 'default' } },
+            },
+            runEnded: {
+              workflowName: 'plan',
+              outcome: 'ready',
+              inputs: Object.fromEntries(mapped.map(name => [name, { input: name }])),
+            },
           },
-          runEnded: {
-            workflowName: 'plan',
-            outcome: 'ready',
-            inputs: Object.fromEntries(mapped.map(name => [name, { input: name }])),
-          },
-        },
-        deps
-      );
+          deps
+        )
+      ).problems;
 
     expect(await check({ issue: '1', stale: 'x' }, ['plan'])).toContainEqual(
       expect.stringContaining("does not declare input 'stale'")

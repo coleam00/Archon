@@ -13,10 +13,12 @@
  * The same files hold asks-settled bindings (`asks-settled.ts`); this module reads both
  * forms and builds the receipt either form writes.
  */
+import { observesItem } from '@archon/workflows/schemas/item-role';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import type { z } from 'zod';
 import type { RunEndedFacts, RunEndedStarts } from '@archon/workflows/deps';
 import { resolveJsonPointer } from '@archon/workflows/json-pointer';
 import type { JsonValue } from '@archon/workflows/output-ref';
@@ -32,6 +34,7 @@ import {
   type SourceReceiptAcceptance,
   type SourceReceiptInput,
   type TriggerConfig,
+  withCheckoutFrom,
 } from '@archon/workflows/schemas/resource-start';
 import {
   ITEM_KEY_MAX_LENGTH,
@@ -40,9 +43,15 @@ import {
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import { declaredOutcome, outcomeValues } from '@archon/workflows/completed-outcome';
-import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import type { EndedCheckout } from '@archon/workflows/schemas/resource-start';
+import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
+import { readCompletedRunResult } from '@archon/workflows/run-result';
+import {
+  readSubrunMetadata,
+  type StartRefusalReason,
+} from '@archon/workflows/schemas/run-metadata';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { getArchonHome } from '@archon/paths';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import {
@@ -52,6 +61,7 @@ import {
 } from '@archon/workflows/schemas/binding-input-source';
 import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { selectStartedWorkflow, startedWorkflowInputProblems } from './binding-workflow';
+import { declaredInputNames, undeclaredInputReads } from './declared-inputs';
 import { itemAnswers, type ItemAnswers } from './item-answers';
 
 /** `ARCHON_HOME/triggers`: where run-ended trigger files are read from. */
@@ -132,22 +142,48 @@ export async function readOnBindings(directory: string): Promise<OnBinding[]> {
 export async function readTriggerFileHosts(
   directory: string
 ): Promise<{ hostIds: string[]; failures: TriggerFileError[] }> {
+  const read = await readStartFiles(directory);
+  return { hostIds: [...read.hosts], failures: read.unread };
+}
+
+/** One file registering a start's source on its host: its binding with `on`, or why it does not read. */
+export type StartFileEntry = { binding: OnBinding | undefined } | { unreadable: TriggerFileError };
+
+/** The trigger files of a directory, each read on its own, for a scan that must not fail on one. */
+export interface StartFiles {
+  /**
+   * The files by the `sourceInstanceId` and `binding.hostId` they name. A file whose JSON
+   * does not parse names nothing, so it is in no entry.
+   */
+  byStart: Map<string, StartFileEntry[]>;
+  /** The hosts the readable files name. */
+  hosts: Set<string>;
+  /** The files that did not read, each naming its file. */
+  unread: TriggerFileError[];
+}
+
+/** The `byStart` key of a start of `sourceInstanceId` on `hostId`. */
+export function startFileKey(sourceInstanceId: string, hostId: string): string {
+  return JSON.stringify([sourceInstanceId, hostId]);
+}
+
+/** Every trigger file in `directory`, read one at a time (see `StartFiles`). */
+export async function readStartFiles(directory: string): Promise<StartFiles> {
+  const read: StartFiles = { byStart: new Map(), hosts: new Set(), unread: [] };
   let names: string[];
   try {
     names = (await readdir(directory)).filter(name => name.endsWith('.json')).sort();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { hostIds: [], failures: [] };
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return read;
     throw error;
   }
-  const hostIds = new Set<string>();
-  const failures: TriggerFileError[] = [];
   for (const name of names) {
     const file = join(directory, name);
     let value: unknown;
     try {
       value = JSON.parse(await readFile(file, 'utf8')) as unknown;
     } catch (error) {
-      failures.push(
+      read.unread.push(
         new TriggerFileError(
           `Trigger file ${file} is not readable JSON: ${(error as Error).message}`,
           { cause: error }
@@ -155,16 +191,36 @@ export async function readTriggerFileHosts(
       );
       continue;
     }
+    const add = (sourceInstanceId: unknown, hostId: unknown, entry: StartFileEntry) => {
+      if (typeof sourceInstanceId !== 'string' || typeof hostId !== 'string') return;
+      const key = startFileKey(sourceInstanceId, hostId);
+      read.byStart.set(key, [...(read.byStart.get(key) ?? []), entry]);
+    };
     const parsed = triggerConfigSchema.safeParse(value);
-    if (parsed.success) hostIds.add(parsed.data.binding.hostId);
-    else
-      failures.push(
-        new TriggerFileError(
-          `Trigger file ${file} is invalid: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
-        )
-      );
+    if (!parsed.success) {
+      const unreadable = invalidFile(file, parsed.error);
+      read.unread.push(unreadable);
+      // The identity it names, read loosely, so the start it registers waits on it.
+      const raw = value as { sourceInstanceId?: unknown; binding?: { hostId?: unknown } } | null;
+      add(raw?.sourceInstanceId, raw?.binding?.hostId, { unreadable });
+      continue;
+    }
+    const { sourceInstanceId, binding } = parsed.data;
+    read.hosts.add(binding.hostId);
+    try {
+      add(sourceInstanceId, binding.hostId, { binding: onBindingOf(file, parsed.data) });
+    } catch (error) {
+      read.unread.push(error as TriggerFileError);
+      add(sourceInstanceId, binding.hostId, { unreadable: error as TriggerFileError });
+    }
   }
-  return { hostIds: [...hostIds], failures };
+  return read;
+}
+
+function invalidFile(file: string, error: z.ZodError): TriggerFileError {
+  return new TriggerFileError(
+    `Trigger file ${file} is invalid: ${error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
+  );
 }
 
 /** Every run-ended binding in `directory`; any broken `on` file throws (see `readOnBindings`). */
@@ -192,11 +248,13 @@ async function readOnFile(file: string): Promise<OnBinding | undefined> {
   }
   if (value === null || typeof value !== 'object' || !('on' in value)) return undefined;
   const parsed = triggerConfigSchema.safeParse(value);
-  if (!parsed.success)
-    throw new TriggerFileError(
-      `Trigger file ${file} is invalid: ${parsed.error.issues.map(issue => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ')}`
-    );
-  const { on, sourceInstanceId, binding } = parsed.data;
+  if (!parsed.success) throw invalidFile(file, parsed.error);
+  return onBindingOf(file, parsed.data);
+}
+
+/** A parsed trigger file as a binding with `on`, or undefined when it has none. */
+function onBindingOf(file: string, config: TriggerConfig): OnBinding | undefined {
+  const { on, sourceInstanceId, binding } = config;
   if (!on) return undefined;
   if (!isAbsolute(binding.launch.cwd))
     throw new TriggerFileError(
@@ -225,11 +283,9 @@ export function runEndedBindingProblems(
     problems.push(
       `outcome '${runEnded.outcome}' is not one '${runEnded.workflowName}' completes with (${values.map(value => `'${value}'`).join(', ')})`
     );
-  for (const [target, source] of Object.entries(runEnded.inputs ?? {}))
-    if ('input' in source && !ended.declaredInputs.includes(source.input))
-      problems.push(
-        `input '${target}' reads '${source.input}', which '${runEnded.workflowName}' does not declare`
-      );
+  problems.push(
+    ...undeclaredInputReads(runEnded.inputs, runEnded.workflowName, ended.declaredInputs)
+  );
   return problems;
 }
 
@@ -409,11 +465,168 @@ async function bindingMatches(
 ): Promise<boolean> {
   // A binding that launches in another project is not about this item, even when a
   // workflow there has the same name.
-  if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) return false;
+  const launchProject = await bindingProjectKey(candidate, dependencies);
+  if (launchProject !== item.projectKey) return false;
   const problems = runEndedBindingProblems(candidate.runEnded, ended);
   if (problems.length > 0)
     throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
-  return candidate.runEnded.outcome === ended.outcome.value;
+  return bindsRunEnd(candidate.runEnded, launchProject, {
+    workflowName: ended.run.workflow_name,
+    outcome: ended.outcome.value,
+    projectKey: item.projectKey,
+  });
+}
+
+/**
+ * Whether a run-ended binding launching in `launchProject` is about the end of a run of
+ * `workflowName` with `outcome` on an item of `projectKey`: the matcher's rule, which the
+ * rebuild of a waiting start (`rebuildRunEndedStart`) applies again.
+ */
+export function bindsRunEnd(
+  runEnded: RunEndedTrigger,
+  launchProject: string | null,
+  end: { workflowName: string; outcome: string; projectKey: string }
+): boolean {
+  return (
+    launchProject === end.projectKey &&
+    runEnded.workflowName === end.workflowName &&
+    runEnded.outcome === end.outcome
+  );
+}
+
+/** What a rebuild reads a waiting start's recorded cause through. */
+export interface RebuildReads {
+  store: Pick<
+    IWorkflowStore,
+    | 'getWorkflowRun'
+    | 'getItem'
+    | 'getItemRuns'
+    | 'listItemAsks'
+    | 'listItemLinks'
+    | 'listWorkflowEvents'
+  >;
+  projectKeyOf: (cwd: string) => Promise<string | null>;
+  now: Date;
+}
+
+export type RebuiltStart =
+  | { intent: ResourceStartBindingIntent }
+  | { refused: { reason: StartRefusalReason; detail: string } };
+
+/**
+ * A waiting start as `file` builds it now (`bindingReceipt`), keeping the item it was
+ * matched for and its recorded checkout hand-off: the intent, or the refusal the receipt
+ * would record (an input that does not map).
+ */
+export function rebuiltStart(
+  file: OnBinding,
+  receipt: Pick<StartReceiptInspection, 'sourceActor' | 'itemKey'>,
+  mapped: ReturnType<typeof mappedInputs>,
+  stored: ResourceStartBindingIntent,
+  now: Date
+): RebuiltStart {
+  const actor = receipt.sourceActor;
+  if (!actor || receipt.itemKey === null)
+    return {
+      refused: { reason: 'launch_preparation_failed', detail: 'the receipt names no cause' },
+    };
+  const built = bindingReceipt(
+    file,
+    { deliveryId: actor.id, sourceActor: actor, itemKey: receipt.itemKey },
+    mapped,
+    stored.checkoutFrom ? { handoff: stored.checkoutFrom } : undefined,
+    now
+  );
+  const [intent] = built.bindings;
+  if (!intent)
+    return {
+      refused: { reason: 'inputs_unmapped', detail: built.reason ?? `${file.file} starts nothing` },
+    };
+  return { intent: stored.itemKey === undefined ? intent : { ...intent, itemKey: stored.itemKey } };
+}
+
+/**
+ * A waiting run-ended start rebuilt from `file` and the end its receipt records, read as
+ * the completing write read it (`runEndedFacts`), or refused when the run is gone or the
+ * file no longer binds that end on the item it started.
+ */
+export async function rebuildRunEndedStart(
+  file: RunEndedBinding,
+  receipt: Pick<StartReceiptInspection, 'sourceActor' | 'itemKey'>,
+  stored: ResourceStartBindingIntent,
+  reads: RebuildReads
+): Promise<RebuiltStart> {
+  const runId = receipt.sourceActor?.id ?? '';
+  const run = await reads.store.getWorkflowRun(runId);
+  const item = run?.item_id ? await reads.store.getItem(run.item_id) : null;
+  const end = run &&
+    item && {
+      workflowName: run.workflow_name,
+      outcome: receipt.sourceActor?.display ?? '',
+      projectKey: item.projectKey,
+    };
+  const linked = file.runEnded.linked;
+  if (
+    !run ||
+    !item ||
+    !end ||
+    !bindsRunEnd(file.runEnded, await bindingProjectKey(file, reads), end) ||
+    (linked !== undefined) !== (receipt.itemKey !== item.key)
+  )
+    return {
+      refused: {
+        reason: 'launch_preparation_failed',
+        detail: `${file.file} no longer binds the end of run '${runId}' on item '${receipt.itemKey}'`,
+      },
+    };
+  const sources = Object.values(file.runEnded.inputs ?? {});
+  const result =
+    linked?.items !== undefined || sources.some(source => 'result' in source)
+      ? readCompletedRunResult(run, await reads.store.listWorkflowEvents(run.id))
+      : undefined;
+  const value = result?.kind === 'result' ? result.value : undefined;
+  // A linked start keeps its item only while the file still selects it: the item holds
+  // the file's link to the ended item, and with `items`, the run's list names it.
+  const entries = linked?.items === undefined ? undefined : linkedEntries(value, linked.items);
+  const entry = Array.isArray(entries)
+    ? entries.find(named => named.key === receipt.itemKey)?.entry
+    : undefined;
+  if (
+    linked &&
+    (!(await holdsLink(reads, linked, item.id, receipt.itemKey)) ||
+      (linked.items !== undefined && entry === undefined))
+  )
+    return {
+      refused: {
+        reason: 'link_refused',
+        detail: `${file.file} no longer starts item '${receipt.itemKey}' over its ${linked.kind} link`,
+      },
+    };
+  const mapped = mappedInputs(file.runEnded.inputs, {
+    // The run's `$INPUTS`, as `resolveRunInputs` reads them for the completing write.
+    inputs: readSubrunMetadata(run.metadata).inputs ?? {},
+    result: value,
+    itemKey: item.key,
+    ...(entry === undefined ? {} : { entry }),
+    ...(sources.some(readsItemAnswers)
+      ? { itemAnswers: itemAnswers(await reads.store.listItemAsks(item.id)) }
+      : {}),
+  });
+  return rebuiltStart(file, receipt, mapped, stored, reads.now);
+}
+
+/** Whether `holderKey` holds an active `link` to the ended item, as `holdersOf` reads it at completion. */
+async function holdsLink(
+  reads: RebuildReads,
+  link: RunEndedLinked,
+  endedItemId: string,
+  holderKey: string | null
+): Promise<boolean> {
+  return (await reads.store.listItemLinks(endedItemId)).some(read => {
+    if ('type' in read || read.ended !== null || read.kind !== link.kind) return false;
+    const [holder, member] = link.holder === 'to' ? [read.to, read.from] : [read.from, read.to];
+    return member.id === endedItemId && holder.key === holderKey;
+  });
 }
 
 /** The receipt a matched binding writes for the end of `ended` on `item`. */
@@ -493,7 +706,7 @@ function namedLinkedStart(
  * The entries of the list `pointer` holds in the run's result, each with its item key: an
  * entry is the key itself or an object with a string `key`. Or why the list cannot be read.
  */
-function linkedEntries(
+export function linkedEntries(
   result: JsonValue | undefined,
   pointer: string
 ): { key: string; entry: JsonValue }[] | string {
@@ -560,7 +773,7 @@ export async function bindingProjectKey(
  * checkout (`checkout: "ended-run"` or `checkout: "asking-run"`).
  */
 export function bindingReceipt(
-  candidate: OnBindingFile,
+  candidate: OnBinding,
   delivery: {
     deliveryId: string;
     sourceActor: NonNullable<SourceReceiptInput['sourceActor']>;
@@ -580,10 +793,7 @@ export function bindingReceipt(
         : undefined;
   const refusal = 'missing' in mapped ? (mapped.reason ?? 'inputs_unmapped') : 'checkout_refused';
   const handoff = checkout && 'handoff' in checkout ? checkout.handoff : undefined;
-  // Computed as `trigger fire` computes it, over the binding alone.
-  const bindingRevision = createHash('sha256')
-    .update(JSON.stringify(candidate.binding))
-    .digest('hex');
+  const bindingRevision = startRevision(candidate);
   const content = refused ?? inputs;
   const receipt = {
     id: randomUUID(),
@@ -614,28 +824,38 @@ export function bindingReceipt(
         },
       ],
     });
-  const binding: ResourceStartBindingIntent = {
-    ...candidate.binding,
-    bindingRevision,
-    ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
-    // `launch.isolation` names the branch for an older binary, which reads no hand-off: it
-    // runs the stage on that branch or fails to check it out, never on the base branch.
-    ...(handoff
-      ? {
-          launch: {
-            ...candidate.binding.launch,
-            isolation: { kind: 'worktree' as const, branch: handoff.branch },
-          },
-          checkoutFrom: handoff,
-        }
-      : {}),
-  };
+  const binding: ResourceStartBindingIntent = withCheckoutFrom(
+    {
+      ...candidate.binding,
+      bindingRevision,
+      ...(Object.keys(inputs).length > 0 ? { eventInputs: inputs } : {}),
+    },
+    handoff
+  );
   return sourceReceiptAcceptanceSchema.parse({ receipt, outcome: 'matched', bindings: [binding] });
 }
 
-/** The input names a workflow declares: its own `inputs:` and its pack's settings. */
-export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | 'pack'>): string[] {
-  return [...Object.keys(workflow.inputs ?? {}), ...Object.keys(workflow.pack?.settings ?? {})];
+/**
+ * The revision of a trigger file as registered: its binding and its `on`, which holds a
+ * run-ended or asks-settled file's input mapping, workflow and outcome. Every receipt
+ * records it, and a waiting start whose file's revision is no longer its own follows the
+ * file (`waiting-start.ts`).
+ */
+export function triggerRevision(config: Pick<TriggerConfig, 'binding' | 'on'>): string {
+  return createHash('sha256')
+    .update(JSON.stringify({ binding: config.binding, on: config.on }))
+    .digest('hex');
+}
+
+/** `triggerRevision` of the file a binding with `on` was read from. */
+export function startRevision(candidate: OnBinding): string {
+  return triggerRevision({
+    binding: candidate.binding,
+    on:
+      'runEnded' in candidate
+        ? { runEnded: candidate.runEnded }
+        : { asksSettled: candidate.asksSettled },
+  });
 }
 
 /**
@@ -643,17 +863,19 @@ export function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | '
  * launches in: the ended workflow exists and declares the outcome and every input the
  * binding reads, and the started workflow exists and accepts its inputs as a start would:
  * `launch.inputs` and the mapped names, none undeclared and no required one missing. With
- * `checkout: "ended-run"`, neither workflow may be pinned in place. The
- * check a run gets before it starts; `runEndedTriggerCheck` reports it with the rest.
+ * `checkout: "ended-run"`, neither workflow may be pinned in place. The check a run gets
+ * before it starts; `runEndedTriggerCheck` reports it with the rest. `startsStep` says whether
+ * the started workflow, as resolved, is a step of its item (`observesItem`), as the static
+ * readers count a start; one that does not resolve is a problem and counted as a step.
  */
 export async function runEndedBindingCheck(
   { binding, runEnded }: RunEndedBinding,
   deps: BindingDefinitionsDeps,
   /** The run starting now whose end or asks may fire the binding; see `discoverBindingWorkflows`. */
   launchRun?: Pick<WorkflowRun, 'metadata'>
-): Promise<string[]> {
+): Promise<{ problems: string[]; startsStep: boolean }> {
   const read = await discoverBindingWorkflows(binding.launch, deps, launchRun);
-  if ('refused' in read) return [read.refused];
+  if ('refused' in read) return { problems: [read.refused], startsStep: true };
   const { discovered } = read;
   const workflows = discovered.workflows.map(found => found.workflow);
   const problems: string[] = [];
@@ -690,7 +912,7 @@ export async function runEndedBindingCheck(
       mapped: Object.keys(runEnded.inputs ?? {}),
     })
   );
-  return problems;
+  return { problems, startsStep: !('workflow' in started && observesItem(started.workflow)) };
 }
 
 /**
@@ -728,7 +950,7 @@ export async function runEndedTriggerCheck(
       link ? { kind: link.kind, holder: link.holder } : null,
     ]);
     stages.set(stage, [...(stages.get(stage) ?? []), index]);
-    const found = await runEndedBindingCheck(candidate, deps);
+    const found = (await runEndedBindingCheck(candidate, deps)).problems;
     if (!runEnded.linked && binding.launch.workflowName === runEnded.workflowName)
       found.push(
         `binding starts '${runEnded.workflowName}', the workflow whose end fires it: each run that completes with '${runEnded.outcome}' starts another on the same item`
@@ -767,7 +989,7 @@ export function createRunEndedPreflight(
     for (const candidate of candidates) {
       if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
       // Checked against the definitions this run executes.
-      const problems = await runEndedBindingCheck(candidate, dependencies, run);
+      const { problems } = await runEndedBindingCheck(candidate, dependencies, run);
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
     }

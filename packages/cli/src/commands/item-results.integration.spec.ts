@@ -17,6 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { itemReadSchema, type ItemRun } from '@archon/workflows/item-read';
 
 const CLI_PATH = resolve(import.meta.dir, '..', 'cli.ts');
@@ -124,6 +125,8 @@ nodes:
 interface Fixture {
   /** The project checkout every run works in. */
   projectRoot: string;
+  /** The Archon home every run uses. */
+  home: string;
   /** The run rows, oldest first. */
   rows: () => { id: string; status: string; metadata: string }[];
   /** Overwrite a run's terminal event data, as a damaged row reads. */
@@ -216,7 +219,7 @@ async function makeFixture(
       database.close();
     }
   };
-  return { projectRoot, cli, attempt, rows, corruptTerminalEvent };
+  return { projectRoot, home: join(root, 'home'), cli, attempt, rows, corruptTerminalEvent };
 }
 
 const run = (workflow: string, ...inputs: string[]): string[] => [
@@ -324,6 +327,73 @@ test('a stage reads the latest result of its own workflow on the item', async ()
   const runs = await itemRuns(fixture);
   expect((await detail(fixture, runs[0]?.id)).terminal_record.returns.value).toEqual({ round: 1 });
   expect((await detail(fixture, runs[1]?.id)).terminal_record.returns.value).toEqual({ round: 2 });
+}, 120_000);
+
+/** Install a pack as `acme/stages`, the way `archon plugin add` leaves it; each file an entrypoint. */
+function installPack(fixture: Fixture, workflowFiles: Record<string, string>): void {
+  const pluginsDir = join(fixture.home, 'plugins');
+  const id = 'acme/stages';
+  const commit = 'a'.repeat(40);
+  const manifest = {
+    schemaVersion: 1,
+    kind: 'workflow-pack',
+    name: 'stages',
+    description: 'stages',
+    entrypoints: Object.fromEntries(
+      Object.keys(workflowFiles).map(name => [name, `${name}/${name}.yaml`])
+    ),
+  };
+  const tree = packTreePath(pluginsDir, id, commit);
+  mkdirSync(tree, { recursive: true });
+  writeFileSync(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+  for (const [name, body] of Object.entries(workflowFiles)) {
+    mkdirSync(join(tree, name), { recursive: true });
+    writeFileSync(join(tree, name, `${name}.yaml`), body);
+  }
+  const receipt = receiptPath(pluginsDir, id);
+  mkdirSync(join(receipt, '..'), { recursive: true });
+  writeFileSync(
+    receipt,
+    JSON.stringify({
+      schemaVersion: 1,
+      id,
+      manifest,
+      commit,
+      installedAt: new Date(0).toISOString(),
+    })
+  );
+}
+
+test("an installed pack's bare result_of reads that pack's own workflow (#6357)", async () => {
+  // The project has its own `stage-a`, which the pack's bare `stage-a` must not read.
+  const fixture = await makeFixture('installed', { 'stage-a': STAGE_A });
+  installPack(fixture, {
+    'stage-a': STAGE_A,
+    'stage-c': reader('stage-c', 'stage-a'),
+    'reads-project': reader('reads-project', 'stage-b'),
+    again: AGAIN,
+  });
+  writeFileSync(join(fixture.projectRoot, '.archon', 'workflows', 'stage-b.yaml'), STAGE_B);
+  await fixture.cli(run('acme/stages:stage-a', 'tag=pack'));
+  await fixture.cli(run('stage-a', 'tag=project'));
+  await fixture.cli(run('stage-b'));
+  const [packA, , projectB] = await itemRuns(fixture);
+
+  const output = await fixture.cli(run('acme/stages:stage-c'));
+  expect(output).toContain(`result of \`acme/stages:stage-a\` run \`${String(packA?.id)}\``);
+  // A name the pack does not hold reads the project's workflow, as before.
+  const outside = await fixture.cli(run('acme/stages:reads-project'));
+  expect(outside).toContain(`result of \`stage-b\` run \`${String(projectB?.id)}\``);
+  await fixture.cli(run('acme/stages:again'));
+  await fixture.cli(run('acme/stages:again'));
+
+  const runs = await itemRuns(fixture);
+  const value = async (index: number): Promise<unknown> =>
+    (await detail(fixture, runs[index]?.id)).terminal_record.returns.value;
+  expect(await value(3)).toEqual({ read: { tag: 'pack', pad: '' } });
+  expect(await value(4)).toEqual({ read: { done: true } });
+  expect(await value(5)).toEqual({ round: 1 });
+  expect(await value(6)).toEqual({ round: 2 });
 }, 120_000);
 
 test('a reader with no item is refused before it starts, unless the value is supplied', async () => {

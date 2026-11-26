@@ -697,10 +697,11 @@ nodes:
     if (workflow === null) throw new Error('Expected the workflow to load');
     const resolved = resolveWorkflow(workflow);
     const node = resolved.nodes.find(candidate => candidate.id === 'host');
-    expect(node?.output_format?.properties).toEqual({
+    if (node === undefined) throw new Error('Expected the host node');
+    expect(node.output_format?.properties).toEqual({
       summary: { type: 'string' },
       asks: itemAsksJsonSchema(),
-      waits: itemWaitsJsonSchema(),
+      waits: itemWaitsJsonSchema(node),
     });
     expect(node?.output_format?.required).toEqual(['asks', 'waits']);
     expect(validateWorkflowResultContract(resolved)).toBeNull();
@@ -716,7 +717,7 @@ nodes:
   });
 });
 
-describe('workflow result contract: returns.final and returns.summary', () => {
+describe('workflow result contract: returns.ends, observes and returns.summary', () => {
   const parse = (
     declaration: string,
     properties = `stage: { type: string, enum: [approve, replan, landed] }
@@ -740,17 +741,38 @@ nodes:
       'deliver.yaml'
     );
 
-  it('loads final outcomes of an enum and a declared string summary', () => {
+  it('loads finishing outcomes of an enum and a declared string summary', () => {
     const { workflow, error } = parse(
-      'returns: { node: result, outcome: stage, final: [landed], summary: why }'
+      'returns: { node: result, outcome: stage, ends: [landed], summary: why }'
     );
     expect(error).toBeNull();
-    expect(workflow?.result).toEqual({ outcome: 'stage', final: ['landed'], summary: 'why' });
+    expect(workflow?.result).toEqual({ outcome: 'stage', ends: ['landed'], summary: 'why' });
+  });
+
+  it('loads observes: true on a workflow', () => {
+    const { workflow, error } = parse('observes: true\nreturns: { node: result, outcome: stage }');
+    expect(error).toBeNull();
+    expect(workflow?.observes).toBe(true);
+  });
+
+  it('refuses returns.final, naming both declarations that replace it', () => {
+    const message = parse('returns: { node: result, outcome: stage, final: [landed] }').error
+      ?.error;
+    expect(message).toContain('returns.final was removed');
+    expect(message).toContain('returns.ends');
+    expect(message).toContain('observes: true');
+  });
+
+  it('refuses an observing workflow that ends its item', () => {
+    expect(
+      parse('observes: true\nreturns: { node: result, outcome: stage, ends: [landed] }').error
+        ?.error
+    ).toContain('both observes: true and returns.ends');
   });
 
   it('takes the boolean form by its outcome names', () => {
     const { error } = parse(
-      'returns: { node: result, outcome: green, final: [succeeded] }',
+      'returns: { node: result, outcome: green, ends: [succeeded] }',
       'green: { type: boolean }',
       'green'
     );
@@ -758,9 +780,9 @@ nodes:
   });
 
   it.each([
-    ['a value the outcome cannot take', 'outcome: stage, final: [merged]', "names 'merged'"],
-    ['a value named twice', 'outcome: stage, final: [landed, landed]', "'landed' twice"],
-    ['final without an outcome', 'final: [landed]', 'needs returns.outcome'],
+    ['a value the outcome cannot take', 'outcome: stage, ends: [merged]', "names 'merged'"],
+    ['a value named twice', 'outcome: stage, ends: [landed, landed]', "'landed' twice"],
+    ['ends without an outcome', 'ends: [landed]', 'needs returns.outcome'],
     ['an undeclared summary', 'outcome: stage, summary: reason', "returns.summary: 'reason'"],
     [
       'a summary that is not a string',

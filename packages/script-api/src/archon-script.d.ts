@@ -2154,7 +2154,7 @@ declare module 'archon:script' {
       readonly node_id: string;
       readonly state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
       readonly error?: string;
-      readonly failure_kind?: 'fatal' | 'transient' | 'unknown' | 'rate_limited' | 'overloaded' | 'timeout' | 'exec_failed' | 'output_contract' | 'schema_unmet' | 'max_iterations' | 'child_failed' | 'cancelled' | 'config';
+      readonly failure_kind?: 'fatal' | 'transient' | 'unknown' | 'rate_limited' | 'overloaded' | 'timeout' | 'exec_failed' | 'output_contract' | 'schema_unmet' | 'max_iterations' | 'child_failed' | 'cancelled' | 'config' | 'outcome_unknown';
       readonly reason?: 'prior_success' | 'when_condition' | 'when_condition_parse_error' | 'trigger_rule' | 'timeout';
       readonly cause?: {
         readonly kind: 'condition';
@@ -2375,6 +2375,10 @@ declare module 'archon:script' {
     readonly waits: ReadonlyArray<{
       readonly event: string;
       readonly about: string;
+      readonly subject: {
+        readonly kind: 'pr' | 'issue';
+        readonly number: number;
+      } | null;
       readonly workflow: string;
       readonly runId: string;
       readonly waitingSince: string;
@@ -2510,6 +2514,7 @@ declare module 'archon:script' {
         readonly node: string;
       };
       readonly resetAt: string;
+      readonly provider?: string;
     } | {
       readonly kind: 'unreadable';
       readonly ref: string;
@@ -2650,6 +2655,7 @@ declare module 'archon:script' {
       }>;
       readonly failed?: {
         readonly error: string | null;
+        readonly outcomeUnknown?: ReadonlyArray<string>;
       };
       readonly checkout: string | null;
     } | {
@@ -2914,6 +2920,25 @@ declare module 'archon:script' {
         readonly nodePath: string;
       } | null;
     } | null;
+    readonly workOrder: {
+      readonly state: 'open' | 'done' | 'unknown';
+      readonly members: ReadonlyArray<{
+        readonly item: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+      }>;
+    } | null;
+    readonly dependsOn: ReadonlyArray<{
+      readonly item: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+    }>;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';
       readonly reason: 'run_unreadable';
@@ -2938,6 +2963,27 @@ declare module 'archon:script' {
       readonly type: 'degraded';
       readonly reason: 'end_unreadable';
       readonly endId: string;
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'member_unreadable';
+      readonly member: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly report: {
+        readonly type: 'degraded';
+        readonly reason: 'merge_unreadable';
+        readonly itemId: string;
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'end_unreadable';
+        readonly endId: string;
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'link_unreadable';
+        readonly linkId: string;
+      };
     }>;
   };
 
@@ -3091,6 +3137,10 @@ declare module 'archon:script' {
       readonly waits: ReadonlyArray<{
         readonly event: string;
         readonly about: string;
+        readonly subject: {
+          readonly kind: 'pr' | 'issue';
+          readonly number: number;
+        } | null;
         readonly workflow: string;
         readonly runId: string;
         readonly waitingSince: string;
@@ -3226,6 +3276,7 @@ declare module 'archon:script' {
           readonly node: string;
         };
         readonly resetAt: string;
+        readonly provider?: string;
       } | {
         readonly kind: 'unreadable';
         readonly ref: string;
@@ -3366,6 +3417,7 @@ declare module 'archon:script' {
         }>;
         readonly failed?: {
           readonly error: string | null;
+          readonly outcomeUnknown?: ReadonlyArray<string>;
         };
         readonly checkout: string | null;
       } | {
@@ -3630,6 +3682,25 @@ declare module 'archon:script' {
           readonly nodePath: string;
         } | null;
       } | null;
+      readonly workOrder: {
+        readonly state: 'open' | 'done' | 'unknown';
+        readonly members: ReadonlyArray<{
+          readonly item: {
+            readonly id: string;
+            readonly projectKey: string;
+            readonly key: string;
+          };
+          readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+        }>;
+      } | null;
+      readonly dependsOn: ReadonlyArray<{
+        readonly item: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+      }>;
       readonly degraded: ReadonlyArray<{
         readonly type: 'degraded';
         readonly reason: 'run_unreadable';
@@ -3654,6 +3725,27 @@ declare module 'archon:script' {
         readonly type: 'degraded';
         readonly reason: 'end_unreadable';
         readonly endId: string;
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'member_unreadable';
+        readonly member: {
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        };
+        readonly report: {
+          readonly type: 'degraded';
+          readonly reason: 'merge_unreadable';
+          readonly itemId: string;
+        } | {
+          readonly type: 'degraded';
+          readonly reason: 'end_unreadable';
+          readonly endId: string;
+        } | {
+          readonly type: 'degraded';
+          readonly reason: 'link_unreadable';
+          readonly linkId: string;
+        };
       }>;
     }>;
     readonly next: string | null;

@@ -117,14 +117,8 @@ function table(rows: Row[]): string {
       condition === '—' ? condition : `\`${condition}\``,
     ]),
   ].map(row => row.map(cell => cell.replaceAll('|', '\\|').replaceAll('\n', ' ')));
-  const widths = cells[0].map((_, index) => Math.max(3, ...cells.map(row => row[index].length)));
-  const line = (row: string[]): string =>
-    `| ${row.map((cell, index) => cell.padEnd(widths[index])).join(' | ')} |`;
-  return [
-    line(cells[0]),
-    line(widths.map(width => '-'.repeat(width))),
-    ...cells.slice(1).map(line),
-  ].join('\n');
+  const line = (row: string[]): string => `| ${row.join(' | ')} |`;
+  return [line(cells[0]), line(cells[0].map(() => '---')), ...cells.slice(1).map(line)].join('\n');
 }
 
 export function renderSchemaTable(schema: z.ZodType, grouped = false): string {

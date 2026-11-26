@@ -2,12 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
 import { mapOf, wf } from './include-expander.fixtures';
 import {
+  bindingWorkflowNames,
   buildPackGraph,
+  declaredStops,
   type InstalledArrow,
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
-import { packAsksSettledBindingSchema, packRunEndedBindingSchema } from './schemas/pack-bindings';
+import {
+  packAsksSettledBindingSchema,
+  packEventBindingSchema,
+  packRunEndedBindingSchema,
+} from './schemas/pack-bindings';
 
 function decide(values: string[]) {
   return {
@@ -52,7 +58,8 @@ function installed(
   outcome: string,
   to: string,
   id: string,
-  problems: string[] = []
+  problems: string[] = [],
+  startsStep = true
 ): InstalledArrow {
   return {
     file: `/home/triggers/${id}.json`,
@@ -61,6 +68,7 @@ function installed(
     launchWorkflow: to,
     linked: null,
     problems,
+    startsStep,
   };
 }
 
@@ -165,6 +173,7 @@ describe('a pack graph', () => {
           launchWorkflow: 'a',
           linked: null,
           problems: [],
+          startsStep: true,
         },
       ],
     });
@@ -174,7 +183,7 @@ describe('a pack graph', () => {
     ]);
     // An asks arrow starts on answers, not on an outcome.
     expect(graph.stages[0]?.outcome?.values).toEqual([
-      { value: 'ready', startsNothing: true, final: false },
+      { value: 'ready', startsNothing: true, ends: false, stops: true },
     ]);
   });
 
@@ -196,6 +205,7 @@ describe('a pack graph', () => {
           launchWorkflow: 'b',
           linked: null,
           problems: [],
+          startsStep: true,
         },
       ],
     });
@@ -216,6 +226,7 @@ describe('a pack graph', () => {
           launchWorkflow: 'b',
           linked: null,
           problems: [],
+          startsStep: true,
         },
       ],
     });
@@ -224,7 +235,7 @@ describe('a pack graph', () => {
       [{ stage: 'a', settled: 'answered' }, true],
     ]);
     expect(graph.stages[0]?.outcome?.values).toEqual([
-      { value: 'asks:answered', startsNothing: true, final: false },
+      { value: 'asks:answered', startsNothing: true, ends: false, stops: true },
     ]);
   });
 
@@ -277,7 +288,7 @@ describe('a pack graph', () => {
       },
     ]);
     expect(graph.stages[0]?.outcome?.values).toEqual([
-      { value: 'ready', startsNothing: false, final: false },
+      { value: 'ready', startsNothing: false, ends: false, stops: false },
     ]);
   });
 
@@ -375,7 +386,7 @@ describe('a pack graph', () => {
       installed: { problems: ["input 'x' reads 'y'"] },
     });
     expect(graph.stages[0]?.outcome?.values).toEqual([
-      { value: 'ready', startsNothing: true, final: false },
+      { value: 'ready', startsNothing: true, ends: false, stops: true },
     ]);
   });
 
@@ -407,8 +418,8 @@ describe('a pack graph', () => {
       field: 'outcome',
       form: 'enum',
       values: [
-        { value: 'approve', startsNothing: true, final: false },
-        { value: 'reject', startsNothing: true, final: false },
+        { value: 'approve', startsNothing: true, ends: false, stops: true },
+        { value: 'reject', startsNothing: true, ends: false, stops: true },
       ],
     });
     const blocks = [{ include: 'check', workflow: 'review' }];
@@ -518,10 +529,67 @@ describe('a pack graph', () => {
       field: 'green',
       form: 'boolean',
       values: [
-        { value: 'succeeded', startsNothing: false, final: false },
-        { value: 'failed', startsNothing: true, final: false },
+        { value: 'succeeded', startsNothing: false, ends: false, stops: false },
+        { value: 'failed', startsNothing: true, ends: false, stops: true },
       ],
     });
+  });
+
+  test('an outcome stops its item unless it ends it, its stage observes, or a step starts on it', () => {
+    const review = wf('review', [decide(['close', 'not_ready', 'ready', 'advise'])], {
+      returns: 'decide',
+      result: { outcome: 'outcome', ends: ['close'] },
+    });
+    const shadow = wf('shadow', [decide(['agree', 'disagree'])], {
+      returns: 'decide',
+      result: { outcome: 'outcome' },
+      observes: true,
+    });
+    const staged = stages(
+      review,
+      shadow,
+      stage('build', ['done']),
+      stage('host', ['open'], false, true)
+    );
+    const declared = {
+      'build-after-review': runEnded('build', 'review', 'ready'),
+      // Starts only an observing stage, which moves nothing on.
+      'shadow-after-review': runEnded('shadow', 'review', 'advise'),
+      // Starts on linked items, so it starts nothing on the ended run's own item.
+      'build-linked': packRunEndedBindingSchema.parse({
+        workflow: 'build',
+        resource: 'build',
+        overlap: 'queue',
+        run_ended: { workflow: 'review', outcome: 'not_ready', linked: partOfOrder },
+      }),
+    };
+    const graph = graphOf(staged, {
+      declared,
+      installed: [
+        installed('review', 'ready', 'build', 'file-build'),
+        // The check resolved the file's target as a workflow that observes its item.
+        installed('review', 'advise', 'shadow', 'file-shadow', [], false),
+      ],
+    });
+
+    const [reviewed, shadowed] = graph.stages;
+    expect(reviewed?.outcome?.values).toEqual([
+      { value: 'close', startsNothing: true, ends: true, stops: false },
+      { value: 'not_ready', startsNothing: true, ends: false, stops: true },
+      { value: 'ready', startsNothing: false, ends: false, stops: false },
+      { value: 'advise', startsNothing: false, ends: false, stops: true },
+    ]);
+    expect(shadowed?.observes).toBe(true);
+    expect(shadowed?.outcome?.values.map(v => v.stops)).toEqual([false, false]);
+    // Read from the declared bindings alone, as `archon validate workflows` reads them.
+    // A stage that can leave a wait stops its item only when a run leaves none.
+    expect(graph.stages[3]?.outcome?.values.map(v => v.stops)).toEqual([true]);
+    expect(declaredStops('chain', staged, declared)).toEqual([
+      { stage: 'review', outcome: 'not_ready', unless: [] },
+      { stage: 'review', outcome: 'advise', unless: [] },
+      { stage: 'build', outcome: 'done', unless: [] },
+      { stage: 'host', outcome: 'open', unless: ['waits'] },
+    ]);
   });
 
   test('every discovery error is listed, so a missing stage is visible', () => {
@@ -552,5 +620,26 @@ describe('a pack graph', () => {
       stages: graph.stages.map(s => ({ ...s, laterField: true })),
     };
     expect(packGraphSchema.safeParse(newer).success).toBe(true);
+  });
+});
+
+describe('bindingWorkflowNames', () => {
+  test('lists every workflow a binding names, as pack bindings resolves them', () => {
+    const event = packEventBindingSchema.parse({
+      workflow: 'build',
+      resource: 'build',
+      overlap: 'queue',
+      event: { kind: 'issue.comment' },
+      limit: { starts: 2, reset_on: 'plan' },
+      wake: { workflow: 'review', wait: 'answer', about: 'subject.number' },
+    });
+    expect(bindingWorkflowNames(event)).toEqual(['build', 'plan', 'review']);
+    const settled = packAsksSettledBindingSchema.parse({
+      workflow: 'build',
+      resource: 'build',
+      overlap: 'queue',
+      asks_settled: { workflow: 'triage', settled: 'answered' },
+    });
+    expect(bindingWorkflowNames(settled)).toEqual(['build', 'triage']);
   });
 });

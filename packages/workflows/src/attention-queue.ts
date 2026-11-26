@@ -53,6 +53,7 @@ import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
 import type { IWorkflowStore } from './store';
 import { isItemWithoutRunRef } from './attention-item-refs';
+import { limitFailureProvider } from './node-record-reader';
 
 /**
  * A project as the engine identifies it. `key` is the identity: the project storage key
@@ -129,9 +130,10 @@ const itemBase = {
  * item and its resource slot among them, and the engine never ends it by itself;
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
- * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
- * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
- * so nothing moves it: it takes no answer, and any newer run on the item closes it;
+ * on the item, or a withdrawal closes; `stopped`, which takes no answer, is an item whose newest
+ * step (not an `observes: true` run) failed, or completed starting no step, asking nothing and
+ * ending nothing, until a newer step, its end or its merge; or a failed run whose outcome is
+ * unknown, until it is resumed or abandoned;
  * `refused_start` is a start no run caused that was refused and is its item's newest step;
  * `preparation_lost` is a binding start whose preparer this process can prove gone, which
  * `archon trigger recover-preparation` returns to pending.
@@ -172,6 +174,7 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     ...itemBase,
     run: z.object({ ...heldRunFields, node: z.string() }),
     resetAt: z.string().datetime(),
+    provider: z.string().optional(),
   }),
   z.object({
     kind: z.literal('unreadable'),
@@ -216,8 +219,10 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** Set when the start the run caused was refused: at its limit, or before launch. */
     limit: stoppedLimitSchema.optional(),
     refused: z.array(stoppedRefusalSchema).optional(),
-    /** Set when the run failed: its recorded error, or null when it recorded none. */
-    failed: z.object({ error: z.string().nullable() }).optional(),
+    /** Set when the run failed: its error or null; `outcomeUnknown` names uncertain nodes. */
+    failed: z
+      .object({ error: z.string().nullable(), outcomeUnknown: z.array(z.string()).optional() })
+      .optional(),
     /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
   }),
@@ -355,6 +360,8 @@ export interface AttentionQueueItemSources {
   branch: string | null;
   /** The item the run belongs to; null when it belongs to none. */
   item: WorkflowItem | null;
+  /** For a usage-limit wait, the provider its node's failure record names, when it names one. */
+  limitProvider?: string;
 }
 
 /**
@@ -466,6 +473,7 @@ export function toAttentionQueueItem(
         ...base,
         run: { ...held, node: attention.nodeId },
         resetAt: attention.resumeAt,
+        provider: sources.limitProvider,
       };
     case 'unreadable':
       return {
@@ -488,6 +496,7 @@ export interface AttentionQueueSource {
     | 'getWorkflowRunForAttention'
     | 'getCodebase'
     | 'getItem'
+    | 'listEventsForRuns'
   >;
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
@@ -535,6 +544,16 @@ async function itemFor(
     branch: await source.branchOf(run),
     // Only a run started for an item has one, so most reads skip the store.
     item: run.item_id === null ? null : await source.store.getItem(run.item_id),
+    // The wait stores no provider, so a binary that reads it strictly still reads it.
+    ...(attention.kind === 'usage_limit'
+      ? {
+          limitProvider: limitFailureProvider(
+            await source.store.listEventsForRuns([run.id], ['node_failed']),
+            run.id,
+            attention.nodeId
+          ),
+        }
+      : {}),
   });
 }
 
@@ -637,6 +656,7 @@ async function runAttentionQueueItems(
       getWorkflowRunForAttention: id => source.store.getWorkflowRunForAttention(id),
       getCodebase: id => source.store.getCodebase(id),
       getItem: id => source.store.getItem(id),
+      listEventsForRuns: (...args) => source.store.listEventsForRuns(...args),
       getWorkflowRun: async id => {
         // The batch already reports this row. Rereading it could log stored parser text;
         // treating it as missing would instead invent a missing-child queue item.

@@ -257,7 +257,11 @@ async function prepareParentResume(
 ): Promise<Awaited<ReturnType<typeof hydrateResumableRun>> | undefined> {
   const parentRunId = parent.id;
   try {
-    return await hydrateResumableRun(deps, parent);
+    // A continuation by itself: the claim refuses a parent holding a live unknown outcome.
+    return await hydrateResumableRun(deps, parent, {
+      kind: 'child',
+      ...(childRunId !== undefined ? { childRunId } : {}),
+    });
   } catch (err) {
     // Nothing has been mutated yet on a pre-CAS throw (resumeWorkflowRun's CAS is
     // hydrate's last step; a lost CAS throws WorkflowNotResumableError instead) —

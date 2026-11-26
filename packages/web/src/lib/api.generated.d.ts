@@ -5307,6 +5307,10 @@ export interface components {
             groupId: string;
             iteration: number;
           }[];
+          fanOutPath?: {
+            scope: string;
+            identity: string;
+          }[];
           checkoutStart?:
             | {
                 /** @enum {string} */
@@ -5572,7 +5576,8 @@ export interface components {
                 | 'max_iterations'
                 | 'child_failed'
                 | 'cancelled'
-                | 'config';
+                | 'config'
+                | 'outcome_unknown';
               providerFailure?: {
                 /** @enum {string} */
                 class:
@@ -6212,6 +6217,7 @@ export interface components {
         };
       };
       returns?: string;
+      observes?: boolean;
       deprecated?: {
         message: string;
       };
@@ -6228,7 +6234,7 @@ export interface components {
           cost: string;
         }[];
         waits?: string;
-        final?: string[];
+        ends?: string[];
         summary?: string;
       };
     };
@@ -7056,6 +7062,10 @@ export interface components {
               groupId: string;
               iteration: number;
             }[];
+            fanOutPath?: {
+              scope: string;
+              identity: string;
+            }[];
             checkoutStart?:
               | {
                   /** @enum {string} */
@@ -7329,7 +7339,8 @@ export interface components {
                   | 'max_iterations'
                   | 'child_failed'
                   | 'cancelled'
-                  | 'config';
+                  | 'config'
+                  | 'outcome_unknown';
                 providerFailure?: {
                   /** @enum {string} */
                   class:
@@ -7692,7 +7703,8 @@ export interface components {
         | 'not_finalized'
         | 'process_terminated'
         | 'launch_failed'
-        | 'run_not_created';
+        | 'run_not_created'
+        | 'outcome_unknown';
       /** @enum {string} */
       signal?: 'SIGINT' | 'SIGTERM';
     };
@@ -7845,6 +7857,7 @@ export interface components {
           };
           /** Format: date-time */
           resetAt: string;
+          provider?: string;
         }
       | {
           /** @enum {string} */
@@ -8026,6 +8039,7 @@ export interface components {
           }[];
           failed?: {
             error: string | null;
+            outcomeUnknown?: string[];
           };
           checkout: string | null;
         }
@@ -8342,6 +8356,7 @@ export interface components {
             };
             /** Format: date-time */
             resetAt: string;
+            provider?: string;
           }
         | {
             /** @enum {string} */
@@ -8523,6 +8538,7 @@ export interface components {
             }[];
             failed?: {
               error: string | null;
+              outcomeUnknown?: string[];
             };
             checkout: string | null;
           }
@@ -8815,6 +8831,15 @@ export interface components {
       waits: {
         event: string;
         about: string;
+        subject: {
+          /**
+           * @description 'pr' for a pull request, 'issue' for an issue.
+           * @enum {string}
+           */
+          kind: 'pr' | 'issue';
+          /** @description The number of the pull request or issue on the forge. */
+          number: number;
+        } | null;
         workflow: string;
         runId: string;
         /** Format: date-time */
@@ -8972,6 +8997,7 @@ export interface components {
             };
             /** Format: date-time */
             resetAt: string;
+            provider?: string;
           }
         | {
             /** @enum {string} */
@@ -9153,6 +9179,7 @@ export interface components {
             }[];
             failed?: {
               error: string | null;
+              outcomeUnknown?: string[];
             };
             checkout: string | null;
           }
@@ -9488,6 +9515,28 @@ export interface components {
           nodePath: string;
         } | null;
       } | null;
+      workOrder: {
+        /** @enum {string} */
+        state: 'open' | 'done' | 'unknown';
+        members: {
+          item: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** @enum {string} */
+          state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+        }[];
+      } | null;
+      dependsOn: {
+        item: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        /** @enum {string} */
+        state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+      }[];
       degraded: (
         | {
             /** @enum {string} */
@@ -9530,6 +9579,39 @@ export interface components {
             /** @enum {string} */
             reason: 'end_unreadable';
             endId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'member_unreadable';
+            member: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            report:
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'merge_unreadable';
+                  itemId: string;
+                }
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'end_unreadable';
+                  endId: string;
+                }
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'link_unreadable';
+                  linkId: string;
+                };
           }
       )[];
     };
@@ -9713,6 +9795,15 @@ export interface components {
         waits: {
           event: string;
           about: string;
+          subject: {
+            /**
+             * @description 'pr' for a pull request, 'issue' for an issue.
+             * @enum {string}
+             */
+            kind: 'pr' | 'issue';
+            /** @description The number of the pull request or issue on the forge. */
+            number: number;
+          } | null;
           workflow: string;
           runId: string;
           /** Format: date-time */
@@ -9870,6 +9961,7 @@ export interface components {
               };
               /** Format: date-time */
               resetAt: string;
+              provider?: string;
             }
           | {
               /** @enum {string} */
@@ -10057,6 +10149,7 @@ export interface components {
               }[];
               failed?: {
                 error: string | null;
+                outcomeUnknown?: string[];
               };
               checkout: string | null;
             }
@@ -10392,6 +10485,28 @@ export interface components {
             nodePath: string;
           } | null;
         } | null;
+        workOrder: {
+          /** @enum {string} */
+          state: 'open' | 'done' | 'unknown';
+          members: {
+            item: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            /** @enum {string} */
+            state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+          }[];
+        } | null;
+        dependsOn: {
+          item: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** @enum {string} */
+          state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+        }[];
         degraded: (
           | {
               /** @enum {string} */
@@ -10434,6 +10549,39 @@ export interface components {
               /** @enum {string} */
               reason: 'end_unreadable';
               endId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'member_unreadable';
+              member: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              report:
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'merge_unreadable';
+                    itemId: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'end_unreadable';
+                    endId: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'link_unreadable';
+                    linkId: string;
+                  };
             }
         )[];
       }[];
@@ -10518,11 +10666,6 @@ export interface components {
             /** @enum {string} */
             kind: 'queued_start';
             requestId: string;
-          }
-        | {
-            /** @enum {string} */
-            kind: 'held_start';
-            receiptId: string;
           }
         | {
             /** @enum {string} */
@@ -10707,6 +10850,7 @@ export interface components {
                 };
                 /** Format: date-time */
                 resetAt: string;
+                provider?: string;
               }
             | {
                 /** @enum {string} */
@@ -10894,6 +11038,7 @@ export interface components {
                 }[];
                 failed?: {
                   error: string | null;
+                  outcomeUnknown?: string[];
                 };
                 checkout: string | null;
               }
@@ -11130,6 +11275,7 @@ export interface components {
               | 'child_failed'
               | 'cancelled'
               | 'config'
+              | 'outcome_unknown'
               | null;
           } | null;
           reason?: string[];
@@ -11457,7 +11603,8 @@ export interface components {
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'
-              | 'config';
+              | 'config'
+              | 'outcome_unknown';
             /** @enum {string} */
             reason?:
               | 'prior_success'
@@ -11679,7 +11826,8 @@ export interface components {
             | 'max_iterations'
             | 'child_failed'
             | 'cancelled'
-            | 'config';
+            | 'config'
+            | 'outcome_unknown';
           /** @enum {string} */
           reason?:
             | 'prior_success'
@@ -11809,7 +11957,8 @@ export interface components {
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'
-              | 'config';
+              | 'config'
+              | 'outcome_unknown';
             /** @enum {string} */
             reason?:
               | 'prior_success'
@@ -12432,9 +12581,11 @@ export interface components {
           values: {
             value: string;
             startsNothing: boolean;
-            final: boolean;
+            ends: boolean;
+            stops: boolean;
           }[];
         } | null;
+        observes: boolean;
         asks: boolean;
         waits: boolean;
         nodes: {

@@ -25,6 +25,7 @@ import { describeRunsAndClaimsConformance } from './store-conformance/runs-and-c
 import { describeSourceReleaseConformance } from './store-conformance/source-release';
 import { describeOperatorPauseConformance } from './store-conformance/operator-pause';
 import { describeStartReceiptConformance } from './store-conformance/start-receipts';
+import { describeUnknownOutcomeConformance } from './store-conformance/unknown-outcome';
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
@@ -76,5 +77,6 @@ export function describeWorkflowStoreConformance(
     describeResumeReductionConformance(current);
     describeListingConformance(current);
     describeMetricRecordsConformance(current);
+    describeUnknownOutcomeConformance(current);
   });
 }

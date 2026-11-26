@@ -14,6 +14,7 @@ import {
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { WORKTREE_REMOVAL_OWNER } from '@archon/isolation/types';
 import {
+  claimedFailureStatuses,
   sourceReleaseMetadata,
   DETACHED_LAUNCH_METADATA_KEY,
   EXECUTION_CLAIM_METADATA_KEY,
@@ -66,9 +67,8 @@ import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
 import { recordStartLimitReset } from './start-limits';
 import { insertLinkedStarts } from './linked-starts';
-import { openItemAsksForCompletedRun } from './item-asks';
+import { recordCompletedItemFacts } from './completed-item-facts';
 import { recordRefusedHandoffStops } from './item-stops';
-import { openItemWaitsForCompletedRun } from './item-waits';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -160,13 +160,13 @@ async function insertRunRow(
   origin: WorkflowRunOrigin,
   itemId: string | null
 ): Promise<WorkflowRunRow> {
+  // The run id is a UUID wherever it is read: resource admission validates it as one
+  // (`preparedRunShape`), and every caller-side handle — `workflow get`, `resume`,
+  // `--item` — is that value. A caller may reserve it (`prepareWorkflowSource`); otherwise
+  // the store generates it here rather than leaving the table's legacy hex default in
+  // place, which would produce a run no admission accepts.
   const result = await query<WorkflowRunRow>(
-    data.id === undefined
-      ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, item_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING *, CAST(origin AS TEXT) AS origin`
-      : `INSERT INTO remote_agent_workflow_runs
+    `INSERT INTO remote_agent_workflow_runs
        (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, item_id, id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *, CAST(origin AS TEXT) AS origin`,
@@ -183,7 +183,7 @@ async function insertRunRow(
       data.adopted_from_run_id ?? null,
       JSON.stringify(origin),
       itemId,
-      ...(data.id === undefined ? [] : [data.id]),
+      data.id ?? getDialect().generateUuid(),
     ]
   );
   const row = result.rows[0];
@@ -469,11 +469,8 @@ export async function completeWorkflowRun(
         for (const receipt of result?.startReceipts ?? [])
           if (!(await insertStartReceipt(query, receipt)).replay) started.push(receipt);
         started.push(...(await insertLinkedStarts(query, result?.linkedStarts ?? [])));
-        // The asks it leaves open with it too, replacing its workflow's open set on the item.
-        if (result?.asks !== undefined) await openItemAsksForCompletedRun(query, id, result.asks);
-        // And the waits, replacing its workflow's open set of waits on the item.
-        if (result?.waits !== undefined)
-          await openItemWaitsForCompletedRun(query, id, result.waits);
+        // The asks, waits and end it leaves on its item, with it too.
+        await recordCompletedItemFacts(query, id, result);
         // A start refused at the hand-off is recorded on this run, as the stop it causes.
         await recordRefusedHandoffStops(query, started);
       }
@@ -519,6 +516,7 @@ export async function failWorkflowRun(
     pendingOnly,
     changeSize,
   } = options;
+  const claimed = claimedFailureStatuses(options).map(status => `'${status}'`);
   const dialect = getDialect();
   // Both keys belong to ONE failure: the stop reason is written wholesale below, and a
   // quota schedule an older binary wrote with a previous failure is spent once the run
@@ -536,7 +534,7 @@ export async function failWorkflowRun(
   const claimPredicate =
     expectedExecutionClaim === undefined
       ? ''
-      : ` AND status = 'running' AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
+      : ` AND status IN (${claimed.join(', ')}) AND ${dialect.jsonText('metadata', EXECUTION_CLAIM_METADATA_KEY)} ${
           expectedExecutionClaim === null
             ? 'IS NULL'
             : `= $${pendingLaunchToken !== undefined ? 4 : 3}`
@@ -552,7 +550,7 @@ export async function failWorkflowRun(
          WHERE id = $1 AND ${
            pendingLaunchToken !== undefined
              ? `status = 'pending' AND ${dialect.jsonText('metadata', DETACHED_LAUNCH_METADATA_KEY)} = $3`
-             : "status IN ('running', 'pending')"
+             : `status IN (${[...claimed, "'pending'"].join(', ')})`
          }${pendingOnly ? " AND status = 'pending'" : ''}${claimPredicate}`,
         [
           id,

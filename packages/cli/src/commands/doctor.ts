@@ -5,9 +5,10 @@
  * return value so a doctor failure does not abort setup (the env file was
  * already written successfully).
  */
+import { cwdEnvStrip } from '@archon/paths/strip-cwd-env-boot';
 import { providerRegistry } from '@archon/providers';
 import { doctorLog, type CheckResult } from './doctor-check';
-import { checkConfigFiles, checkProviderDeprecation } from './doctor-config';
+import { checkConfigFiles, checkCwdEnvIsolation, checkProviderDeprecation } from './doctor-config';
 import { checkInstalledProviders, checkProviderDiagnostics } from './doctor-providers';
 import { checkAssistantLogin } from './doctor-assistant-login';
 import { checkDatabase } from './doctor-database';
@@ -24,6 +25,7 @@ async function runDefaultChecks(env: NodeJS.ProcessEnv): Promise<CheckOutcome[]>
   const workflows = await checkWorkflows();
   return [
     checkConfigFiles(),
+    Promise.resolve(checkCwdEnvIsolation(cwdEnvStrip)),
     Promise.resolve(workflows.files),
     Promise.resolve(workflows.providers),
     checkInstalledProviders(undefined, undefined, workflows.allowEmptyProviderInventory),

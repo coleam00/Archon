@@ -13,6 +13,7 @@ import {
   type WorkflowLoadError,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
+import { declaredStops, nearestPackBindings } from '@archon/workflows/pack-graph';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
@@ -31,9 +32,17 @@ import type {
   CommandValidationResult,
 } from '@archon/workflows/validator';
 import { loadConfig, loadRepoConfig } from '@archon/core';
+import { packWakeInputProblems } from '@archon/core/workflows/declared-inputs';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
+import { bindingWorkflowNames, packWorkflowName } from '@archon/workflows/pack-graph';
+import {
+  loadPackDeclaration,
+  PACK_DECLARATION_PATH,
+  PackSettingsError,
+  type PackDeclaration,
+} from '@archon/workflows/pack-settings';
 import { discoverInstalledForgePlugins } from './forge';
 import {
   PLUGIN_MANIFEST_FILE,
@@ -208,6 +217,8 @@ async function collectWorkflowResults(
     );
   }
 
+  const stops = stopIssues(workflowEntries);
+  const wakeInputs = wakeInputIssues(workflowEntries);
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
       workflow,
@@ -239,17 +250,94 @@ async function collectWorkflowResults(
       }
     }
 
+    issues.push(...(stops.get(workflow.name) ?? []), ...(wakeInputs.get(workflow.name) ?? []));
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
   return results;
 }
 
+/** The workflows by pack key; a workflow outside a pack is a group of its own. */
+function packGroups(entries: readonly WorkflowWithSource[]): Map<string, WorkflowWithSource[]> {
+  const groups = new Map<string, WorkflowWithSource[]>();
+  for (const entry of entries) {
+    const key = entry.workflow.pack?.key ?? `\0${entry.workflow.name}`;
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  return groups;
+}
+
+/**
+ * Each input a pack's wake binding reads, as `{ input }`, that its `wake.workflow` does not
+ * declare, by that workflow's name: the run that left the wait has no such input, so the
+ * read maps nothing on every start. An error, as `archon pack bindings` refuses it. A
+ * `wake.workflow` that is not a stage of the pack is the entrypoint check's.
+ */
+function wakeInputIssues(entries: readonly WorkflowWithSource[]): Map<string, ValidationIssue[]> {
+  const issues = new Map<string, ValidationIssue[]>();
+  for (const workflows of packGroups(entries).values()) {
+    const stages = workflows.map(entry => entry.workflow);
+    for (const [id, binding] of Object.entries(nearestPackBindings(workflows) ?? {})) {
+      const found = packWakeInputProblems(binding, stages);
+      if (found === undefined) continue;
+      for (const problem of found.problems)
+        issues.set(found.waiting, [
+          ...(issues.get(found.waiting) ?? []),
+          {
+            level: 'error',
+            field: 'pack_bindings',
+            message: `binding '${id}' in ${PACK_DECLARATION_PATH}: ${problem}`,
+            hint: 'Declare the input in the waiting workflow, or map it from somewhere else; a wake start reads the inputs of the run that left the wait.',
+          },
+        ]);
+    }
+  }
+  return issues;
+}
+
+/** What a run leaves, named in the singular, for a stop that holds only without it. */
+const LEFT = { asks: 'ask', waits: 'wait' } as const;
+
+/**
+ * Each outcome of a step workflow that stops its item when only the bindings its pack
+ * declares start stages, by workflow name: a pack's stages read together with the pack's
+ * declarations, a workflow outside a pack on its own, which no declaration starts anything
+ * from. A warning: a deliberate stop is legal, and the attention queue lists the item when
+ * it happens.
+ */
+function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, ValidationIssue[]> {
+  const issues = new Map<string, ValidationIssue[]>();
+  for (const [key, workflows] of packGroups(entries)) {
+    const stages = workflows.map(entry => entry.workflow);
+    for (const { stage, outcome, unless } of declaredStops(
+      key,
+      stages,
+      nearestPackBindings(workflows)
+    ))
+      issues.set(stage, [
+        ...(issues.get(stage) ?? []),
+        {
+          level: 'warning',
+          field: 'stops',
+          message:
+            unless.length === 0
+              ? `outcome '${outcome}' starts no step on the item, leaves no ask or wait and ends nothing: a run that ends with it stops its item`
+              : `outcome '${outcome}' starts no step on the item and ends nothing: a run that ends with it and leaves no ${unless.map(part => LEFT[part]).join(' or ')} stops its item`,
+          hint: 'List it in returns.ends when it finishes the item, bind a step on it (a stage that observes its item does not move it on), or declare observes: true when the workflow is not a step of its item. A stop is listed in `archon workflow attention`.',
+        },
+      ]);
+  }
+  return issues;
+}
+
 /**
  * The plugin root's own manifest. Keys this Archon ignores are warnings: readers strip
  * them so a newer Archon can add a field, and the author still sees a typo. A declared
- * skill folder without a `SKILL.md` is an error, because install refuses it. Schema
- * failures are discovery load errors and are not repeated here.
+ * skill folder without a `SKILL.md` is an error, because install refuses it. So is a
+ * binding in `.pack/pack.yaml` that names a workflow the manifest does not list as an
+ * entrypoint: an installed copy dispatches only entrypoints, so `pack bindings` refuses it
+ * there, while a folder source sees every workflow and would accept it. Schema failures
+ * are discovery load errors and are not repeated here.
  */
 async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]> {
   let raw: unknown;
@@ -285,9 +373,46 @@ async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]>
       });
     }
   }
+  if (pack.success) issues.push(...(await bindingEntrypointIssues(cwd, pack.data.entrypoints)));
   return issues.length > 0
     ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
     : [];
+}
+
+/**
+ * Each workflow a pack's bindings name that its manifest does not list as an entrypoint,
+ * decided by `packWorkflowName`, the resolver `pack bindings` uses on an installed copy.
+ * A binding names its own pack's stage by the bare key; `pack bindings` adds the installed
+ * `owner/plugin:` prefix. A qualified name is refused, because the owner is set at install
+ * and a pack folder cannot say whether a prefix is its own.
+ */
+async function bindingEntrypointIssues(
+  cwd: string,
+  entrypoints: Readonly<Record<string, string>>
+): Promise<ValidationIssue[]> {
+  let declaration: PackDeclaration;
+  try {
+    declaration = await loadPackDeclaration(cwd, '.');
+  } catch (error) {
+    // An invalid declaration is already a load error on every workflow of the pack.
+    if (error instanceof PackSettingsError) return [];
+    throw error;
+  }
+  const listed = Object.keys(entrypoints);
+  return Object.entries(declaration.bindings ?? {}).flatMap(([id, binding]) =>
+    bindingWorkflowNames(binding)
+      .filter(name => packWorkflowName(listed, name) === undefined)
+      .map(
+        (name): ValidationIssue => ({
+          level: 'error',
+          field: 'manifest_entrypoints',
+          message: `binding '${id}' in ${PACK_DECLARATION_PATH} names workflow '${name}', which ${PLUGIN_MANIFEST_FILE} does not list as an entrypoint`,
+          hint: name.includes(':')
+            ? `Name a stage of this pack by its bare name, as the pack writes it; archon pack bindings adds the installed prefix. Bind one it lists: ${listed.join(', ')}.`
+            : `An installed copy refuses this binding at archon pack bindings. List '${name}' under entrypoints, or bind one it lists: ${listed.join(', ')}.`,
+        })
+      )
+  );
 }
 
 /**

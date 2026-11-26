@@ -124,7 +124,7 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'fire',
-      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>] [--item <key> | --no-item]',
+      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>] [--input <name>=<value>] [--item <key> | --no-item]',
       description: 'Record a configured start and drain its execution host',
       scopedFlags: [
         {
@@ -132,6 +132,10 @@ export const operatorHelp: HelpGroup = {
           description: 'Deduplicate this delivery within the configured source',
         },
         { spec: '--inputs <file>', description: 'Read event input values from a JSON object' },
+        {
+          spec: '--input <name>=<value>',
+          description: 'Set one event input as text; repeat per input. Not also in --inputs',
+        },
       ],
     },
     {

@@ -40,13 +40,23 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
   'CLAUDE_CODE_USE_VERTEX',
 ]);
 
+/** The target repo env files and key names stripCwdEnv() removed. Names only, never values. */
+export interface CwdEnvStrip {
+  cwd: string;
+  files: string[];
+  keys: string[];
+}
+
 /**
  * Strip every key named in CWD .env files, whatever its value or source
  * (detached children then restore DETACHED_INSTALL_CONTEXT_KEYS), and nested Claude Code session markers from process.env.
  * Keys in ~/.archon/.env (loaded afterward by each entry point) are unaffected.
  * Safe to call even when no CWD .env files exist.
+ *
+ * Returns what it stripped and prints nothing about it: loadArchonEnv logs it at debug,
+ * and `archon doctor` shows it.
  */
-export function stripCwdEnv(cwd: string = process.cwd()): void {
+export function stripCwdEnv(cwd: string = process.cwd()): CwdEnvStrip {
   const preserveDetachedInstallContext = process.argv
     .slice(2)
     .includes('--internal-detached-run-config');
@@ -54,9 +64,8 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     ? captureDetachedInstallContext()
     : undefined;
 
-  const { cwdKeys, strippedFiles } = collectCwdEnvKeys(cwd);
-
-  for (const key of cwdKeys) {
+  const { files, keys } = readCwdEnvKeys(cwd);
+  for (const key of keys) {
     Reflect.deleteProperty(process.env, key);
   }
 
@@ -67,16 +76,9 @@ export function stripCwdEnv(cwd: string = process.cwd()): void {
     restoreDetachedInstallContext(inheritedInstallContext);
   }
 
-  // Tell the operator what we just did — otherwise the delete loop is silent
-  // and users think their env file was loaded (see #1302).
-  if (cwdKeys.size > 0) {
-    process.stderr.write(
-      `[archon] stripped ${cwdKeys.size} keys from ${cwd} (${strippedFiles.join(', ')}) to prevent target repo env from leaking into Archon processes\n`
-    );
-  }
-
   stripNestedSessionMarkers();
   stripDebuggerEnv();
+  return { cwd, files, keys };
 }
 
 function stripNestedSessionMarkers(): void {
@@ -110,9 +112,14 @@ function stripDebuggerEnv(): void {
   }
 }
 
-function collectCwdEnvKeys(cwd: string): { cwdKeys: Set<string>; strippedFiles: string[] } {
-  const cwdKeys = new Set<string>();
-  const strippedFiles: string[] = [];
+/**
+ * The env files in `cwd` that name keys, and the sorted key names; never values. The
+ * single source for what the guard strips: stripCwdEnv() and loadArchonEnv's debug
+ * record read it.
+ */
+export function readCwdEnvKeys(cwd: string): { files: string[]; keys: string[] } {
+  const keys = new Set<string>();
+  const files: string[] = [];
   for (const filename of BUN_AUTO_LOADED_ENV_FILES) {
     const filepath = resolve(cwd, filename);
     // dotenv.config with processEnv:{} parses without writing to process.env.
@@ -132,8 +139,8 @@ function collectCwdEnvKeys(cwd: string): { cwdKeys: Set<string>; strippedFiles: 
     }
     const parsedKeys = Object.keys(result.parsed ?? {});
     if (parsedKeys.length === 0) continue;
-    strippedFiles.push(filename);
-    for (const key of parsedKeys) cwdKeys.add(key);
+    files.push(filename);
+    for (const key of parsedKeys) keys.add(key);
   }
-  return { cwdKeys, strippedFiles };
+  return { files, keys: [...keys].sort() };
 }

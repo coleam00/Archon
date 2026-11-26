@@ -82,6 +82,33 @@ it('keeps run source and isolation flags consistent with the parser', () => {
   }
 });
 
+describe('help spec spacing', () => {
+  it.each([
+    [26, 29],
+    [27, 30],
+    [28, 31],
+    [35, 38],
+  ])('separates a %i-character spec from its description', (length, descriptionColumn) => {
+    const spec = 'x'.repeat(length);
+    const rendered = formatSpecLine(spec, 'Description');
+    expect(rendered).toBe(`  ${spec} Description`);
+    expect(rendered.indexOf('Description')).toBe(descriptionColumn);
+  });
+
+  it('wraps the description after a 36-character spec', () => {
+    const spec = 'x'.repeat(36);
+    expect(formatSpecLine(spec, 'Description')).toBe(
+      `  ${spec}\n                             Description`
+    );
+  });
+
+  it('separates the real forge workitem.label.remove row from its description', () => {
+    expect(renderHelp('forge')).toContain(
+      '  forge workitem.label.remove Remove one label from an issue or pull request, keeping the rest'
+    );
+  });
+});
+
 describe('CLI help output', () => {
   const help = renderHelp();
 
@@ -439,7 +466,7 @@ Options:
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the target directory (the project add path, else the current directory), with or without git, as a folder project; workflow run runs in place
   --container                Run a folder project in container isolation
-  --input <name>=<value>     Supply a declared workflow input; repeat per input
+  --input <name>=<value>     Supply a declared workflow input; for 'trigger fire': set one event input as text; repeat per input
   --input-file <name>=<path> Supply a declared workflow input from a file's contents; repeat per input
   --model <name>=<spec>      Rebind small/medium/large or @alias for one run; repeat per binding
   --config <path>            Load a sparse YAML config layer for one fresh workflow run

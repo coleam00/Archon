@@ -12,6 +12,8 @@ import {
   type OperatorPauseRecord,
 } from '../schemas/operator-pause';
 import type { WorkflowRun } from '../schemas/workflow-run';
+import type { WorkflowRunStatus } from '../schemas/run-status';
+import type { WorkflowRunFailureOptions } from '../workflow-run-failure';
 import {
   SOURCE_RELEASE_METADATA_KEY,
   workflowWaitStepName,
@@ -86,6 +88,15 @@ export const EXECUTION_CLAIM_METADATA_KEY = 'execution_claim';
 export function executionClaim(metadata: Record<string, unknown>): string | null {
   const claim = metadata[EXECUTION_CLAIM_METADATA_KEY];
   return typeof claim === 'string' ? claim : null;
+}
+
+/** The statuses a failure under `expectedExecutionClaim` ends: `paused` only with `pausedUnderClaim`. */
+export function claimedFailureStatuses(
+  options?: Pick<WorkflowRunFailureOptions, 'expectedExecutionClaim' | 'pausedUnderClaim'>
+): WorkflowRunStatus[] {
+  return options?.pausedUnderClaim && options.expectedExecutionClaim !== undefined
+    ? ['running', 'paused']
+    : ['running'];
 }
 
 /**

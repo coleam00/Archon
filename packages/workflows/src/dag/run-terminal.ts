@@ -11,7 +11,7 @@ import type {
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
 import { SUBRUN_METADATA_KEYS, subrunSummaryMetadata } from '../schemas';
-import { keptAsksResult, stoppedItem } from './item-completion';
+import { itemCompletion, keptAsksResult, type ItemCompletion } from './item-completion';
 import type { RunExitReason } from '../schemas/run-terminal-reason';
 import { CHANGE_SIZE_METADATA_KEY, type ChangeSize } from '../schemas/change-size';
 import {
@@ -32,6 +32,7 @@ import {
   type SourceReceiptAcceptance,
 } from '../schemas/resource-start';
 import { keepHandedOff } from './handed-off-worktree';
+import { packWakeTakesCheckout } from '../pack-graph';
 import { resolveRunInputs } from './references';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
 import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
@@ -137,15 +138,16 @@ export async function finishRun(
   const { starts, asksCheckout, result } = handOffs;
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
+  const item = itemCompletion(ctx, returned, result);
   const written = await completeRun(
     ctx,
     nodeCounts,
     terminal,
     runTranscriptUsage,
-    completionResult(returned, starts),
+    completionResult(returned, starts, item),
     asksCheckout,
     result,
-    stoppedItem(ctx, returned, starts, result)
+    item !== undefined && 'stop' in item ? item.stop : undefined
   );
   await reportNoOutcome(ctx, outcome);
   // The receipts the write wrote, which include those it resolved for linked starts.
@@ -156,12 +158,14 @@ export async function finishRun(
 /** What the completing write records beside the status, or nothing when there is none. */
 function completionResult(
   returned: ReturnedResult,
-  starts: RunEndedStarts
+  starts: RunEndedStarts,
+  item: ItemCompletion | undefined
 ): Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3] {
   const result = {
     ...returned,
     ...(starts.receipts.length > 0 ? { startReceipts: starts.receipts } : {}),
     ...(starts.linked.length > 0 ? { linkedStarts: starts.linked } : {}),
+    ...(item !== undefined && 'end' in item ? { end: item.end } : {}),
   };
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -237,13 +241,13 @@ async function reportUnstartedStages(
 /**
  * What this end hands on, read before the write that ends the run so it commits with it:
  * the run's result, the starts its outcome causes, and the checkout its asks hand an
- * asks-settled binding with `checkout` (read now, so a start gets the commit this run
- * ended on). Undefined when the result or a trigger could not be read and the run was
- * failed naming why.
+ * asks-settled binding with `checkout`, or its waits a wake binding with `checkout` (read now,
+ * so a start gets the commit this run ended on). Undefined when the result or a trigger could
+ * not be read and the run was failed naming why.
  */
 async function readHandOffs(
   ctx: RunTerminalContext,
-  { outcome, asks }: ReturnedResult,
+  { outcome, asks, waits }: ReturnedResult,
   runTranscriptUsage: WorkflowUsage
 ): Promise<
   | {
@@ -264,7 +268,15 @@ async function readHandOffs(
       outcome === undefined || !deps.runEndedStarts
         ? { receipts: [], linked: [] }
         : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, outcome, result));
-    const asksCheckout = asks?.length ? await deps.asksCheckout?.(workflowRun) : undefined;
+    // Only for a wake its pack declares that takes the checkout for one of these waits.
+    const waitsHandOn = packWakeTakesCheckout(
+      workflow,
+      (waits ?? []).map(wait => wait.event)
+    );
+    const asksCheckout =
+      asks?.length || waitsHandOn
+        ? await deps.asksCheckout?.(workflowRun, { waits: waitsHandOn })
+        : undefined;
     return { starts, asksCheckout, result };
   } catch (error) {
     await failAtCompletion(
@@ -375,7 +387,7 @@ async function failOnNodeOutcome(
     // A first-node failure completes nothing, but it is still a node failure.
     noneCompleted && !anyFailed ? 'no_nodes_completed' : 'node_error',
     noneCompleted ? 'dag.no_nodes_completed_fail' : 'dag.node_failure_fail',
-    changeSize
+    { changeSize }
   );
 }
 
@@ -711,11 +723,9 @@ async function pauseForUsageLimit(ctx: RunTerminalContext): Promise<boolean> {
 }
 
 /**
- * The engine's terminal failure write. The live `workflow_failed` event is published only
- * when this call committed the failure: a run another writer already finished (a
- * cancellation during the failure notification, or a competing failure) keeps that
- * writer's outcome and announcement. A rejected write throws the typed marker, which the
- * outer executor catch rethrows without emitting.
+ * The engine's terminal failure write: it publishes `workflow_failed` only when this call
+ * committed the failure; a run another writer finished first keeps that writer's outcome.
+ * `ownClaim` fails only under the pass's own claim, also a row its own wait or gate paused.
  */
 export async function failRun(
   deps: WorkflowDeps,
@@ -724,7 +734,7 @@ export async function failRun(
   failMsg: string,
   exitReason: RunExitReason,
   site: string,
-  changeSize: ChangeSize | null = null
+  { changeSize, ownClaim }: { changeSize?: ChangeSize | null; ownClaim?: string | null } = {}
 ): Promise<void> {
   const emitter = getWorkflowEventEmitter();
   try {
@@ -732,6 +742,7 @@ export async function failRun(
       deps.store.failWorkflowRun(workflowRun.id, failMsg, {
         exitReason,
         ...(changeSize && { changeSize }),
+        ...(ownClaim !== undefined && { expectedExecutionClaim: ownClaim, pausedUnderClaim: true }),
       }),
       { workflowRunId: workflowRun.id, site }
     );

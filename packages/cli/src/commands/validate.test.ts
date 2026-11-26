@@ -5,6 +5,10 @@ import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import {
+  packEventBindingSchema,
+  packRunEndedBindingSchema,
+} from '@archon/workflows/schemas/pack-bindings';
 
 const mockDiscoverWorkflowsWithConfig = mock<typeof discoverWorkflowsWithConfig>(() =>
   Promise.resolve({ workflows: [], errors: [] })
@@ -223,6 +227,149 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
+  test('warns for each pack stage outcome that starts nothing, asks nothing and ends nothing', async () => {
+    const entry = makeTestWorkflowWithSource({
+      name: 'review',
+      nodes: [
+        {
+          id: 'decide',
+          bash: 'true',
+          output_format: {
+            type: 'object',
+            properties: {
+              outcome: { type: 'string', enum: ['close', 'not_ready', 'again', 'ready'] },
+            },
+            required: ['outcome'],
+          },
+        },
+      ],
+      returns: 'decide',
+      result: { outcome: 'outcome', ends: ['close'] },
+    });
+    entry.workflow.pack = {
+      key: 'example',
+      workflow: 'review',
+      source: 'project',
+      bindings: {
+        'build-after-review': packRunEndedBindingSchema.parse({
+          workflow: 'build',
+          resource: 'build',
+          overlap: 'queue',
+          run_ended: { workflow: 'review', outcome: 'ready' },
+        }),
+      },
+    };
+    // The stage the binding starts is in the pack, so the binding is usable.
+    const build = makeTestWorkflowWithSource({
+      name: 'build',
+      nodes: [{ id: 'run', bash: 'true' }],
+    });
+    build.workflow.pack = { key: 'example', workflow: 'build', source: 'project' };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [entry, build], errors: [] });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, 'review', true)).toBe(0);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0]));
+      // One for each quiet outcome; `close` ends the item and `ready` starts `build`.
+      expect(output.results[0].issues).toEqual(
+        ['not_ready', 'again'].map(outcome =>
+          expect.objectContaining({
+            level: 'warning',
+            field: 'stops',
+            message: expect.stringContaining(`outcome '${outcome}'`),
+          })
+        )
+      );
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test('refuses a wake binding that reads an input the waiting workflow does not declare', async () => {
+    // `host` waits and `land` is started; only `land` declares `land_on`, and the read is
+    // of the waiting run.
+    const host = makeTestWorkflowWithSource({
+      name: 'host',
+      inputs: { item: { required: true } },
+      nodes: [{ id: 'run', bash: 'true' }],
+    });
+    const land = makeTestWorkflowWithSource({
+      name: 'land',
+      inputs: { item: { required: true }, land_on: { required: true } },
+      nodes: [{ id: 'run', bash: 'true' }],
+    });
+    const bindings = {
+      'checks-done': packEventBindingSchema.parse({
+        workflow: 'land',
+        resource: 'land',
+        overlap: 'queue',
+        event: { kind: 'check.changed', actions: ['changed'] },
+        wake: { workflow: 'host', wait: 'checks', about: 'check.revision' },
+        inputs: { item: { input: 'item' }, land_on: { input: 'land_on' } },
+      }),
+    };
+    host.workflow.pack = { key: 'example', workflow: 'host', source: 'project', bindings };
+    land.workflow.pack = { key: 'example', workflow: 'land', source: 'project', bindings };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [host, land], errors: [] });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(1);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0])) as {
+        results: { workflowName: string; issues: { field: string }[] }[];
+      };
+      const reported = output.results.flatMap(result =>
+        result.issues
+          .filter(issue => issue.field === 'pack_bindings')
+          .map(issue => ({ workflow: result.workflowName, issue }))
+      );
+      expect(reported).toEqual([
+        {
+          workflow: 'host',
+          issue: expect.objectContaining({
+            level: 'error',
+            message:
+              "binding 'checks-done' in .pack/pack.yaml: input 'land_on' reads 'land_on', which 'host' does not declare",
+          }),
+        },
+      ]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test('warns for a quiet outcome of a workflow outside a pack, which nothing starts from', async () => {
+    const entry = makeTestWorkflowWithSource({
+      name: 'standalone',
+      nodes: [
+        {
+          id: 'decide',
+          bash: 'true',
+          output_format: {
+            type: 'object',
+            properties: { outcome: { type: 'string', enum: ['done', 'not_ready'] } },
+            required: ['outcome'],
+          },
+        },
+      ],
+      returns: 'decide',
+      result: { outcome: 'outcome', ends: ['done'] },
+    });
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [entry], errors: [] });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, 'standalone', true)).toBe(0);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0]));
+      expect(output.results[0].issues).toEqual([
+        expect.objectContaining({
+          field: 'stops',
+          message: expect.stringContaining("'not_ready'"),
+        }),
+      ]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   test('accepts valid or absent pack settings without requiring invocation inputs', async () => {
     discoverPackWorkflow();
     expect(await validateWorkflowsCommand(validationCwd)).toBe(0);
@@ -413,6 +560,88 @@ describe('validateWorkflowsCommand', () => {
       expect(JSON.parse(String(write.mock.calls[0]?.[0])).results).toEqual([]);
     } finally {
       write.mockRestore();
+    }
+  });
+
+  test('refuses a --workflow-source binding to a workflow its manifest does not list', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        makeTestWorkflowWithSource(
+          { name: 'plan', nodes: [{ id: 'run', bash: 'true' }] },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+    const source = await mkdtemp(join(tmpdir(), 'archon-cli-validate-pack-'));
+    const manifest = (dir: string, entrypoints: Record<string, string>) =>
+      writeFile(
+        join(dir, 'archon-plugin.json'),
+        JSON.stringify({
+          schemaVersion: 1,
+          kind: 'workflow-pack',
+          name: 'factory',
+          description: 'Factory workflows',
+          entrypoints,
+        })
+      );
+    // The project's own manifest lists both, so reading it instead of the source's passes.
+    await manifest(validationCwd, { plan: 'plan/plan.yaml', triage: 'triage/triage.yaml' });
+    await manifest(source, { plan: 'plan/plan.yaml' });
+    await mkdir(join(source, '.pack'));
+    await writeFile(
+      join(source, '.pack', 'pack.yaml'),
+      'bindings:\n  plan-after-triage:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'
+    );
+    const args = [undefined, true, process.env, validationCwd, source] as const;
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
+      const results = (output: unknown) =>
+        (JSON.parse(String(output)).results as validator.WorkflowValidationResult[]).filter(
+          r => r.workflowName === 'archon-plugin.json'
+        );
+      expect(results(write.mock.calls[0]?.[0])).toEqual([
+        {
+          workflowName: 'archon-plugin.json',
+          filename: 'archon-plugin.json',
+          valid: false,
+          issues: [
+            {
+              level: 'error',
+              field: 'manifest_entrypoints',
+              message:
+                "binding 'plan-after-triage' in .pack/pack.yaml names workflow 'triage', which archon-plugin.json does not list as an entrypoint",
+              hint: "An installed copy refuses this binding at archon pack bindings. List 'triage' under entrypoints, or bind one it lists: plan.",
+            },
+          ],
+        },
+      ]);
+
+      await manifest(source, { plan: 'plan/plan.yaml', triage: 'triage/triage.yaml' });
+      write.mockClear();
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(0);
+      expect(results(write.mock.calls[0]?.[0])).toEqual([]);
+
+      // A qualified name for the pack's own listed stage is refused: the bare name is portable.
+      await writeFile(
+        join(source, '.pack', 'pack.yaml'),
+        'bindings:\n  plan:\n    workflow: acme/factory:plan\n    resource: plan\n    overlap: queue\n'
+      );
+      write.mockClear();
+      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
+      expect(results(write.mock.calls[0]?.[0])[0]).toMatchObject({
+        issues: [
+          {
+            message:
+              "binding 'plan' in .pack/pack.yaml names workflow 'acme/factory:plan', which archon-plugin.json does not list as an entrypoint",
+            hint: 'Name a stage of this pack by its bare name, as the pack writes it; archon pack bindings adds the installed prefix. Bind one it lists: plan, triage.',
+          },
+        ],
+      });
+    } finally {
+      write.mockRestore();
+      await removeTempTree(source);
     }
   });
 

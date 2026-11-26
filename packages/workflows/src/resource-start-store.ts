@@ -1,4 +1,5 @@
 import { requestingRun } from './schemas/resource-start';
+import type { ItemStart } from './schemas/item-role';
 import { workflowNoticeDataSchema, WORKFLOW_NOTICE_LIMITS } from './workflow-notice';
 import { createLogger } from '@archon/paths';
 import {
@@ -659,10 +660,12 @@ export interface IResourceStartStore {
   listHeldStarts(): Promise<HeldStart[]>;
   /** The unprepared binding starts on item `itemId`. A store without items returns none. */
   listHeldItemStarts(itemId: string): Promise<HeldItemStart[]>;
+  /** Every start on item `itemId` with no run yet (`ItemStart`). Itemless stores: none. */
+  listItemStarts(itemId: string): Promise<ItemStart[]>;
   /** Every binding a process is preparing now. A store that records no preparer returns none. */
   listPreparingStarts(): Promise<PreparingStart[]>;
   /**
-   * The refused starts no run caused that are still their item's newest step: neither the
+   * The refused starts no existing run caused (a run whose stop would show them) that are still their item's newest step: neither the
    * same binding nor any run has started on the item since. A store without items has none.
    */
   listRefusedStarts(): Promise<RefusedStart[]>;
@@ -785,4 +788,28 @@ export interface IResourceStartStore {
     bindingId: string;
     ownerId: string;
   }): Promise<boolean>;
+  /**
+   * Replace the intent of a binding this owner is preparing, with the fields stored beside
+   * it (its revision, host, item key, start limit and event inputs); the recorded checkout
+   * hand-off is kept. False when the owner no longer prepares it. Preparation then reads
+   * the new intent, and so does admission.
+   */
+  replaceStartBindingIntent(input: {
+    receiptId: string;
+    bindingId: string;
+    ownerId: string;
+    intent: ResourceStartBindingIntent;
+  }): Promise<boolean>;
+  /**
+   * Take a queued request of this receipt's binding out of its queue and put the binding
+   * back to pending, in one write under admission, so it is prepared again. The request is
+   * kept as withdrawn, no longer one of the binding's requests. Returns the launch it held,
+   * whose captured source the caller releases, or null when the request is no longer queued
+   * (another process admitted or withdrew it) or its launch does not read.
+   */
+  returnQueuedStartToPreparation(input: {
+    requestId: string;
+    receiptId: string;
+    bindingId: string;
+  }): Promise<PreparedWorkflowLaunch | null>;
 }

@@ -325,13 +325,14 @@ export interface WorkflowDeps {
   runEndedStarts?: (ended: RunEndedFacts) => Promise<RunEndedStarts>;
   /**
    * Optional: the checkout a run that completes leaving asks hands an asks-settled binding
-   * with `checkout: "asking-run"`, read before the completing write, which records it on
-   * the run for the settling of its asks, and keeps the run's worktree for it. Undefined
-   * when no such binding matches the run.
+   * with `checkout: "asking-run"`, or leaving waits that a wake binding its pack declares
+   * with `checkout: "waiting-run"` follows (`waits`), read before the completing write,
+   * which records it on the run for the start that follows, and keeps the run's worktree
+   * for it. Undefined when the run leaves only asks and no such binding matches it.
    * It throws when a binding it must read is unreadable, and the run then fails naming
    * the reason, as for `runEndedStarts`.
    */
-  asksCheckout?: (run: WorkflowRun) => Promise<AsksCheckout | undefined>;
+  asksCheckout?: (run: WorkflowRun, left: { waits: boolean }) => Promise<AsksCheckout | undefined>;
   /**
    * Optional: refuse a run before it starts when a run-ended binding its end could fire
    * is broken (a missing stage, an undeclared outcome or input), and likewise an

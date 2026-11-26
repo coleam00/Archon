@@ -34,6 +34,7 @@ import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { itemEndSchema } from '@archon/workflows/schemas/item-end';
 import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
+import { RUN_ENDED_SOURCE_ACTOR } from '@archon/workflows/schemas/resource-start';
 import { captureWorkflowCommand } from '../test-support/command';
 import * as workflowScope from '../workflow-scope';
 import { recordRunMerge } from './forge-merge-record';
@@ -378,7 +379,11 @@ test.serial(
 );
 
 /** A run of `item-proof` on `key`: still running, or ended at once, stopping the item or failed. */
-async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Promise<string> {
+async function seedEnded(
+  key: string,
+  end: 'running' | 'stopped' | 'failed',
+  refusals: Parameters<typeof itemStoppedMetadata>[1] = {}
+): Promise<string> {
   let id = '';
   const result = await captureWorkflowCommand(archonHome, async host => {
     const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
@@ -397,13 +402,269 @@ async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Pr
       await host.deps.store.completeWorkflowRun(
         seeded.id,
         { duration_ms: 1 },
-        itemStoppedMetadata('Folded into another item.'),
+        itemStoppedMetadata('Folded into another item.', refusals),
         { outcome: { kind: 'enum', value: 'fold' } }
       );
   });
   expect(result.status, result.stderr).toBe(0);
   return id;
 }
+
+test.serial(
+  'a run whose outcome finishes its item ends it: the item read says the engine ended it and why',
+  async () => {
+    writeFileSync(
+      join(projectRoot, '.archon', 'workflows', 'finish.yaml'),
+      `name: finish
+description: Close an item.
+mutates_checkout: false
+returns: { node: decide, outcome: outcome, ends: [close], summary: why }
+nodes:
+  - id: decide
+    bash: |
+      echo '{"outcome": "close", "why": "Fixed upstream."}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [close, again] }
+        why: { type: string }
+      required: [outcome, why]
+`
+    );
+    const started = await invoke(host =>
+      workflowRunCommand(host, projectRoot, 'finish', 'go', {
+        noWorktree: true,
+        item: 'item-close',
+      })
+    );
+    expect(started.exitCode, started.stderr).toBe(0);
+
+    const reason = "Workflow 'finish' ended the item with outcome 'close': Fixed upstream.";
+    expect((await readItemJson('item-close')).ended).toMatchObject({
+      reason,
+      via: 'engine',
+      by: null,
+    });
+    const text = await invoke(host =>
+      workflowRunsCommand(host, projectRoot, { item: 'item-close' })
+    );
+    expect(text.stdout).toContain(`via engine: ${reason}`);
+    const attention = succeeded(
+      await invoke(host =>
+        workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+      )
+    ) as { items: { item?: { key: string } }[] };
+    expect(attention.items.map(item => item.item?.key)).not.toContain('item-close');
+  }
+);
+
+test.serial('a run of an observing workflow leaves a stopped item listed as stopped', async () => {
+  const decide = (name: string, observes: boolean) =>
+    `name: ${name}
+description: ${name}
+mutates_checkout: false
+${observes ? 'observes: true\n' : ''}returns: { node: decide, outcome: outcome }
+nodes:
+  - id: decide
+    bash: |
+      echo '{"outcome": "not_ready"}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [not_ready, ready] }
+      required: [outcome]
+`;
+  const workflows = join(projectRoot, '.archon', 'workflows');
+  writeFileSync(join(workflows, 'review.yaml'), decide('review', false));
+  writeFileSync(join(workflows, 'shadow.yaml'), decide('shadow', true));
+  const stopsOnItem = async () => {
+    const read = await invoke(host =>
+      workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+    );
+    const items = (JSON.parse(read.stdout) as { items: { kind: string; item?: { key: string } }[] })
+      .items;
+    return items.filter(item => item.kind === 'stopped' && item.item?.key === 'item-observed');
+  };
+  const runOn = async (workflow: string) => {
+    const result = await invoke(host =>
+      workflowRunCommand(host, projectRoot, workflow, 'go', {
+        noWorktree: true,
+        item: 'item-observed',
+      })
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+  };
+
+  // `not_ready` starts nothing and ends nothing, so the step stops its item.
+  await runOn('review');
+  expect(await stopsOnItem()).toHaveLength(1);
+  // The observing run on the item completes with the same quiet outcome; the stop stays.
+  await runOn('shadow');
+  expect(await stopsOnItem()).toMatchObject([{ stoppedIn: { workflow: 'review' } }]);
+});
+
+/** A binding start on `key` not yet prepared, as a fire or a run's end writes it. */
+async function unpreparedStart(
+  key: string,
+  launch: { cwd: string; workflowName: string },
+  sourceActor: { source: string; id: string } | null = null
+): Promise<void> {
+  const result = await captureWorkflowCommand(archonHome, async host => {
+    const receiptId = crypto.randomUUID();
+    await host.deps.store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: `start-${receiptId}`,
+        deliveryId: null,
+        contentDigest: receiptId,
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: sourceActor as never,
+        itemKey: key,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: launch.workflowName,
+          bindingRevision: null,
+          hostId: 'host',
+          runAsUserId: 'operator',
+          resource: 'pool',
+          overlap: 'queue',
+          launch: { ...launch, inputs: {}, isolation: { kind: 'in-place' } },
+        },
+      ],
+    });
+  });
+  expect(result.status, result.stderr).toBe(0);
+}
+
+test.serial(
+  'a start not yet prepared neither reopens an ended item nor refuses its end, as during a hold',
+  async () => {
+    const end = () =>
+      invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'Done by hand.'],
+          values: { item: 'item-held', as: 'triage-agent', json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      );
+    const stopped = await seedEnded('item-held', 'stopped');
+    succeeded(await end());
+    // What the install hold keeps waiting: a fire of an observing workflow onto the item.
+    await unpreparedStart('item-held', { cwd: projectRoot, workflowName: 'shadow' });
+
+    expect((await readItemJson('item-held')).ended).toMatchObject({ reason: 'Done by hand.' });
+    const attention = succeeded(
+      await invoke(host =>
+        workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+      )
+    ) as { items: { ref?: string }[] };
+    expect(attention.items.map(item => item.ref)).not.toContain(`stopped:${stopped}`);
+    succeeded(await end());
+  }
+);
+
+test.serial(
+  "a start not yet prepared that a run's end caused on its item holds that run's stop back",
+  async () => {
+    const stoppedRefs = async () =>
+      (
+        succeeded(
+          await invoke(host =>
+            workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+          )
+        ) as { items: { kind: string; ref: string }[] }
+      ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
+    const stopped = await seedEnded('item-next', 'stopped');
+    expect(await stoppedRefs()).toContain(`stopped:${stopped}`);
+    const endedBy = { source: RUN_ENDED_SOURCE_ACTOR, id: stopped };
+
+    // The same key launched from a checkout outside the item's project is another item.
+    const elsewhere = join(root, 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    await unpreparedStart('item-next', { cwd: elsewhere, workflowName: 'build' }, endedBy);
+    expect(await stoppedRefs()).toContain(`stopped:${stopped}`);
+
+    // In the item's project, the stage its end started has not been prepared: the stop waits.
+    await unpreparedStart('item-next', { cwd: projectRoot, workflowName: 'build' }, endedBy);
+    expect(await stoppedRefs()).not.toContain(`stopped:${stopped}`);
+  }
+);
+
+test.serial(
+  'an item that depends on an open item waits on it, and is listed as stopped once it ends',
+  async () => {
+    const stoppedRefs = async () =>
+      (
+        succeeded(
+          await invoke(host =>
+            workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+          )
+        ) as { items: { kind: string; ref: string }[] }
+      ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
+    const link = async (request: Parameters<typeof workflowLinkCommand>[2]) =>
+      succeeded(
+        await invoke(host => workflowLinkCommand(host, projectRoot, request, true, callerEnv))
+      );
+    const waiting = await seedEnded('item-waiting', 'stopped');
+    // A refused start needs someone whatever the item waits on.
+    const refused = await seedEnded('item-refused', 'stopped', {
+      refused: [
+        {
+          receiptId: 'receipt-1',
+          bindingId: 'build',
+          workflow: 'build',
+          reason: 'inputs_unmapped',
+          refusedAt: '2026-11-26T10:00:00Z',
+        },
+      ],
+    });
+    await link({ item: 'item-waiting', kind: 'depends_on', to: 'item-blocker' });
+    await link({ item: 'item-refused', kind: 'depends_on', to: 'item-blocker' });
+    // The blocker is a work order whose member stays open after the blocker ends.
+    await link({ item: 'item-member', kind: 'part_of', to: 'item-blocker' });
+
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([
+      { item: { key: 'item-blocker' }, state: 'open' },
+    ]);
+    expect(await stoppedRefs()).not.toContain(`stopped:${waiting}`);
+    expect(await stoppedRefs()).toContain(`stopped:${refused}`);
+
+    // The blocker is ended and nothing starts on the waiting item: it is stopped again.
+    succeeded(
+      await invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'Nothing more on the blocker.'],
+          values: { item: 'item-blocker', as: 'triage-agent', json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      )
+    );
+    expect((await readItemJson('item-blocker')).workOrder).toMatchObject({ state: 'open' });
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([{ state: 'ended' }]);
+    expect(await stoppedRefs()).toContain(`stopped:${waiting}`);
+  }
+);
 
 test.serial(
   'workflow end takes a stopped item out of attention, and the item read says who ended it and why',
@@ -1152,5 +1413,92 @@ test.serial(
     const recovered = await readItemJson('item-2');
     expect(recovered.merged).toEqual(byHand);
     expect(recovered.landing?.branch).toBe('release/1');
+  }
+);
+
+test.serial(
+  'a work order reads open while a member is open, done once every member merged or ended, and open again when one reopens',
+  async () => {
+    for (const member of ['item-1', 'item-2'])
+      succeeded(
+        await invoke(host =>
+          workflowLinkCommand(
+            host,
+            projectRoot,
+            { item: member, kind: 'part_of', to: 'order-1' },
+            true,
+            callerEnv
+          )
+        )
+      );
+    succeeded(
+      await invoke(host =>
+        workflowMergedCommand(
+          host,
+          projectRoot,
+          {
+            item: 'item-2',
+            change: 'https://github.com/acme/web/pull/2',
+            at: '2026-11-02T10:00:00Z',
+          },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const order = async () => {
+      const read = await readItemJson('order-1');
+      expect(read.runs).toEqual([]);
+      return {
+        state: read.workOrder?.state,
+        members: read.workOrder?.members.map(({ item, state }) => [item.key, state]),
+      };
+    };
+    expect(await order()).toEqual({
+      state: 'open',
+      members: [
+        ['item-1', 'open'],
+        ['item-2', 'merged'],
+      ],
+    });
+    // The text read names the state and the member that keeps it open.
+    const text = await invoke(host => workflowRunsCommand(host, projectRoot, { item: 'order-1' }));
+    expect(text.exitCode, text.stderr).toBe(0);
+    const line = text.stdout.split('\n').find(row => row.startsWith('Work order'));
+    expect(line).toContain('open');
+    expect(line).toContain('item-1');
+    expect(line).not.toContain('item-2');
+
+    // Ending the open member closes the order with no run on it.
+    const member = (await readItemJson('item-1')).item;
+    const ended = await captureWorkflowCommand(archonHome, async host => {
+      await host.deps.store.recordItemEnd({
+        itemId: member.id,
+        key: member.key,
+        reason: 'Folded into item-2.',
+        via: 'cli',
+        by: null,
+        fromRun: null,
+      });
+    });
+    expect(ended.status, ended.stderr).toBe(0);
+    expect((await order()).state).toBe('done');
+    // Reading it done wrote nothing on the order.
+    expect(
+      rows(
+        `SELECT 1 FROM remote_agent_item_ends e JOIN remote_agent_items i
+           ON i.id = e.item_id WHERE i.key = 'order-1'`
+      )
+    ).toEqual([]);
+
+    // A newer run on the ended member reopens it, and with it the order.
+    await seedRuns(['item-1']);
+    expect(await order()).toEqual({
+      state: 'open',
+      members: [
+        ['item-1', 'open'],
+        ['item-2', 'merged'],
+      ],
+    });
   }
 );

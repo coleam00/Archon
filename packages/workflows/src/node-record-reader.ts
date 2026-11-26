@@ -117,6 +117,24 @@ export function readableRequestEvidence(
 
 const recordUsageKeys = { tokens: ['tokens'], spend: ['spend', 'loopBaseline'] };
 
+/**
+ * The provider a usage-limit wait on `nodeId` waits for: the provider the node's latest
+ * `node_failed` record was bound to. A loop group or composed fan-out is bound to none, and
+ * no record says which descendant's limit it forwarded, so its wait names no provider
+ * rather than a guessed one.
+ */
+export function limitFailureProvider(
+  events: ReadonlyMap<
+    string,
+    readonly { step_name: string | null; data: Record<string, unknown> }[]
+  >,
+  runId: string,
+  nodeId: string
+): string | undefined {
+  const latest = (events.get(runId) ?? []).filter(event => event.step_name === nodeId).at(-1);
+  return serializedNodeDataSchema.shape.provider.safeParse(latest?.data.provider).data;
+}
+
 export function readNodeRecordData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
 }

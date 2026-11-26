@@ -1,6 +1,6 @@
 {
   "name": "@archon/workflows",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
@@ -13,7 +13,9 @@
     "./run-forge-access": "./src/run-forge-access.ts",
     "./run-paths": "./src/run-paths.ts",
     "./run-source": "./src/run-source.ts",
+    "./run-result": "./src/run-result.ts",
     "./resume-transition": "./src/resume-transition.ts",
+    "./unknown-outcome": "./src/unknown-outcome.ts",
     "./run-resume": "./src/run-resume.ts",
     "./stale-resume": "./src/stale-resume.ts",
     "./executor": "./src/executor.ts",

@@ -19,7 +19,11 @@
  * run-ended hand-off, which refuses a branch that moved off the recorded commit.
  */
 import { existsSync } from 'node:fs';
-import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import {
+  isAttentionDegraded,
+  type AttentionRead,
+} from '@archon/workflows/schemas/attention-degraded';
+import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
 import { chosenAskOption, type StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ASKS_SETTLED_SOURCE_ACTOR,
@@ -27,6 +31,7 @@ import {
   type AsksCheckout,
   type AsksSettledTrigger,
   type EndedCheckout,
+  type ResourceStartBindingIntent,
   type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -37,12 +42,16 @@ import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definit
 import {
   bindingProjectKey,
   bindingReceipt,
-  declaredInputNames,
   mappedInputs,
   readAsksSettledBindings,
+  rebuiltStart,
   type AsksSettledBinding,
+  type MappedSources,
+  type RebuildReads,
+  type RebuiltStart,
   type RunEndedStartsDependencies,
 } from './run-ended';
+import { declaredInputNames, undeclaredInputReads } from './declared-inputs';
 import {
   selectStartedWorkflow,
   startedWorkflowInputProblems,
@@ -110,28 +119,10 @@ export function createAsksSettledStarts(
     return (rows, run, itemAsks) => {
       const runId = rows[0]?.runId;
       if (runId === undefined) return [];
-      const settledAs = rows.some(row => row.closed?.as === 'answered') ? 'answered' : 'withdrawn';
-      const answers = rows.map(settledAnswer);
-      const onItem = itemAnswers(itemAsks);
-      const from =
-        run === null
-          ? {
-              gone: `run '${runId}', which left the asks, no longer exists`,
-              answers,
-              itemAnswers: onItem,
-            }
-          : {
-              inputs: readSubrunMetadata(run.metadata).inputs ?? {},
-              result: readAsksResult(run.metadata),
-              answers,
-              itemAnswers: onItem,
-            };
+      const settledAs = settlement(rows);
+      const from = settledSources(runId, rows, run, itemAsks);
       return candidates
-        .filter(({ asksSettled: { settled, option } }) =>
-          option === undefined
-            ? settled === 'any' || settled === settledAs
-            : choseOption(rows, option)
-        )
+        .filter(({ asksSettled }) => bindsSettlement(asksSettled, rows))
         .map(candidate =>
           bindingReceipt(
             candidate,
@@ -151,6 +142,86 @@ export function createAsksSettledStarts(
   };
 }
 
+/** How a settled set settled: answered when any ask of it was answered. */
+function settlement(rows: readonly StoredItemAsk[]): 'answered' | 'withdrawn' {
+  return rows.some(row => row.closed?.as === 'answered') ? 'answered' : 'withdrawn';
+}
+
+/**
+ * Whether an asks-settled binding starts on this settled set: a run of its workflow left
+ * it, and it settled as `settled` says, or with `option`, every answer chose that option.
+ * The matcher's rule, which the rebuild of a waiting start applies again.
+ */
+function bindsSettlement(
+  { workflowName, settled, option }: AsksSettledTrigger,
+  rows: readonly StoredItemAsk[]
+): boolean {
+  if (rows[0]?.workflowName !== workflowName) return false;
+  return option === undefined
+    ? settled === 'any' || settled === settlement(rows)
+    : choseOption(rows, option);
+}
+
+/** What an asks-settled binding maps from: the set, the item's answers, and the asking run while it exists. */
+function settledSources(
+  runId: string,
+  rows: readonly StoredItemAsk[],
+  run: AskingRunRow | null,
+  itemAsks: readonly AttentionRead<StoredItemAsk>[]
+): MappedSources {
+  const answers = rows.map(settledAnswer);
+  const itemAnswersRead = itemAnswers(itemAsks);
+  return run === null
+    ? {
+        gone: `run '${runId}', which left the asks, no longer exists`,
+        answers,
+        itemAnswers: itemAnswersRead,
+      }
+    : {
+        inputs: readSubrunMetadata(run.metadata).inputs ?? {},
+        result: readAsksResult(run.metadata),
+        answers,
+        itemAnswers: itemAnswersRead,
+      };
+}
+
+/**
+ * A waiting asks-settled start rebuilt from `file` and the set its receipt records: the
+ * asks the run left on the started item, which outlive the run, read in the file's
+ * project. Refused when that item is not there or the file no longer starts on the set.
+ */
+export async function rebuildAsksSettledStart(
+  file: AsksSettledBinding,
+  receipt: Pick<StartReceiptInspection, 'sourceActor' | 'itemKey'>,
+  stored: ResourceStartBindingIntent,
+  reads: RebuildReads
+): Promise<RebuiltStart> {
+  const runId = receipt.sourceActor?.id ?? '';
+  const project = await bindingProjectKey(file, reads);
+  const found =
+    project === null || receipt.itemKey === null
+      ? null
+      : await reads.store.getItemRuns(project, receipt.itemKey);
+  const itemAsks = found ? await reads.store.listItemAsks(found.item.id) : [];
+  const rows: StoredItemAsk[] = [];
+  for (const row of itemAsks) {
+    if (row.runId !== runId) continue;
+    // Thrown: this binary cannot read the set, so the start waits for one that can.
+    if (isAttentionDegraded(row)) throw new Error(`An ask run '${runId}' left cannot be read`);
+    rows.push(row);
+  }
+  if (!bindsSettlement(file.asksSettled, rows))
+    return {
+      refused: {
+        reason: 'launch_preparation_failed',
+        detail: `${file.file} no longer starts on the asks run '${runId}' left on item '${receipt.itemKey}'`,
+      },
+    };
+  const run = await reads.store.getWorkflowRun(runId);
+  const mapped = mappedInputs(file.asksSettled.inputs, settledSources(runId, rows, run, itemAsks));
+  return rebuiltStart(file, receipt, mapped, stored, reads.now);
+}
+
 /**
  * Whether a settled set chose `option`: at least one ask was answered, and every answered
  * ask chose that declared option id. Withdrawn asks are not counted; a mixed set, or an
@@ -163,24 +234,31 @@ function choseOption(rows: readonly StoredItemAsk[], option: string): boolean {
   return chosen.length > 0 && chosen.every(id => id === option);
 }
 
-/** The checkout the asking run recorded when it completed, or why a start cannot take one. */
-function recordedCheckout(
+/**
+ * The checkout the run that left the asks or the met wait (`left`) recorded when it
+ * completed, or why a start cannot take one.
+ */
+export function recordedCheckout(
   runId: string,
   run: AskingRunRow | null,
-  workflowName: string
+  workflowName: string,
+  left: 'asks' | 'wait' = 'asks'
 ): EndedCheckout {
   const again = `run '${workflowName}' again on the item`;
   if (run === null)
-    return { refused: `run '${runId}', which left the asks, no longer exists; ${again}` };
+    return { refused: `run '${runId}', which left the ${left}, no longer exists; ${again}` };
   const recorded = readAsksCheckout({ id: runId, metadata: run.metadata });
   if (recorded === undefined)
     return {
-      refused: `run '${runId}' recorded no checkout when it ended (the binding's checkout was added after it ended, or an older Archon ran it); ${again}`,
+      refused:
+        left === 'asks'
+          ? `run '${runId}' recorded no checkout when it ended (the binding's checkout was added after it ended, or an older Archon ran it); ${again}`
+          : `run '${runId}' recorded no checkout when it ended (its pack declares no wake binding with checkout: waiting-run for '${workflowName}', the binding was added after it ended, or an older Archon ran it); ${again}`,
     };
   if (!('handoff' in recorded)) return recorded;
-  // Branch recreation would hand on a checkout the asking run no longer has, so a removed
-  // worktree refuses here, where the reason lands on the receipt. Execution checks again
-  // (`assertAskingWorktree`), for a start that runs later.
+  // Branch recreation would hand on a checkout the run no longer has, so a removed
+  // worktree refuses here, where the reason lands on the receipt. Execution checks an
+  // asks-settled start again (`assertAskingWorktree`), for a start that runs later.
   const gone = askingWorktreeGone(runId, recorded);
   return gone === undefined ? { handoff: recorded.handoff } : { refused: `${gone}; ${again}` };
 }
@@ -196,17 +274,23 @@ export function askingWorktreeGone(
 }
 
 /**
- * At the completion of a run on an item that leaves asks: the checkout it left, when an
- * asks-settled binding with `checkout` matches it (its workflow, in the item's project),
- * else undefined. Read once however many bindings match.
+ * At the completion of a run on an item that leaves asks or waits: the checkout it left,
+ * recorded for the start that follows. For asks, only when an asks-settled binding with
+ * `checkout` matches it (its workflow, in the item's project), else undefined. For waits
+ * (`waits`), whenever the caller says a wake binding its pack declares takes the checkout:
+ * that binding is source plugin config, which this path does not read. Read once however
+ * many bindings match.
  */
 export function createAsksCheckout(
   dependencies: Omit<RunEndedStartsDependencies, 'now' | 'listItemAsks'> & {
     getRun: (id: string) => Promise<WorkflowRun | null>;
   }
-): (run: WorkflowRun) => Promise<AsksCheckout | undefined> {
-  return async run => {
+): (run: WorkflowRun, left: { waits: boolean }) => Promise<AsksCheckout | undefined> {
+  return async (run, { waits }) => {
     if (!run.item_id) return undefined;
+    const recorded = async (): Promise<AsksCheckout> =>
+      withWorktree(run, await dependencies.endedCheckout(run), dependencies.getRun);
+    if (waits) return recorded();
     const candidates = (await readAsksSettledBindings(dependencies.triggersDirectory())).filter(
       candidate =>
         candidate.asksSettled.workflowName === run.workflow_name &&
@@ -216,8 +300,7 @@ export function createAsksCheckout(
     const item = await dependencies.getItem(run.item_id);
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     for (const candidate of candidates)
-      if ((await bindingProjectKey(candidate, dependencies)) === item.projectKey)
-        return withWorktree(run, await dependencies.endedCheckout(run), dependencies.getRun);
+      if ((await bindingProjectKey(candidate, dependencies)) === item.projectKey) return recorded();
     return undefined;
   };
 }
@@ -304,15 +387,12 @@ function askingWorkflowProblems(
   if (!asking) return [`workflow '${asksSettled.workflowName}' is not in this project`];
   if (asking.result?.asks === undefined)
     return [`workflow '${asksSettled.workflowName}' declares no returns.asks`];
-  const declared = declaredInputNames(asking);
   return [
     ...undeclaredOptionProblems(asksSettled, asking),
-    ...Object.entries(asksSettled.inputs ?? {}).flatMap(([target, source]) =>
-      'input' in source && !declared.includes(source.input)
-        ? [
-            `input '${target}' reads '${source.input}', which '${asksSettled.workflowName}' does not declare`,
-          ]
-        : []
+    ...undeclaredInputReads(
+      asksSettled.inputs,
+      asksSettled.workflowName,
+      declaredInputNames(asking)
     ),
   ];
 }
