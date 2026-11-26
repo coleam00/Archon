@@ -15,7 +15,7 @@ import type { NodeConfig, ProviderWarning } from '../types';
 import { loadMcpConfig } from '../mcp/config';
 import { ClassifiedProviderError } from '../shared/failure';
 import { CLAUDE_SKILL_DISCOVERY } from './capabilities';
-import { buildClaudePluginSettings } from './plugins';
+import { buildClaudePluginSettings, type ClaudePluginInventory, type PluginScope } from './plugins';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -110,27 +110,22 @@ export interface SkillSearch {
  * Translate nodeConfig into Claude SDK-specific options.
  * Called inside sendQuery when nodeConfig is present. A non-empty nodeId marks
  * the workflow path; partial non-workflow configs keep ambient SDK behavior.
- * Returns structured warnings that the caller yields as `warning` events.
+ * Returns structured warnings that the caller yields as `warning` events, and,
+ * for a workflow node, the plugin scope the session's `system/init` must match.
  */
 export async function applyNodeConfig(
   options: Options,
   nodeConfig: NodeConfig,
   cwd: string,
   skillSearch: SkillSearch,
-  listInstalledPluginIds: () => Promise<string[]>
-): Promise<ProviderWarning[]> {
+  readPluginInventory: () => Promise<ClaudePluginInventory>
+): Promise<{ warnings: ProviderWarning[]; pluginScope: PluginScope | undefined }> {
   const warnings: ProviderWarning[] = [];
   const workflowNode = isWorkflowNode(nodeConfig);
+  let pluginScope: PluginScope | undefined;
   if (workflowNode) {
-    warnings.push(
-      ...(await applyWorkflowCapabilityScope(
-        options,
-        nodeConfig,
-        cwd,
-        skillSearch,
-        listInstalledPluginIds
-      ))
-    );
+    pluginScope = await applyWorkflowPluginScope(options, nodeConfig, readPluginInventory);
+    warnings.push(...applyWorkflowCapabilityScope(options, nodeConfig, cwd, skillSearch));
   }
 
   // `Skill` is re-added only on the workflow path, which is the only one that
@@ -162,30 +157,47 @@ export async function applyNodeConfig(
 
   if (nodeConfig.effort !== undefined) applyEffort(options, nodeConfig.effort);
   applyPassThroughOptions(options, nodeConfig);
-  return warnings;
+  return { warnings, pluginScope };
+}
+
+/**
+ * Turn off every installed plugin the workflow node does not name, and return
+ * the scope its session's loaded plugins are checked against.
+ */
+async function applyWorkflowPluginScope(
+  options: Options,
+  nodeConfig: NodeConfig,
+  readPluginInventory: () => Promise<ClaudePluginInventory>
+): Promise<PluginScope> {
+  const named = nodeConfig.plugins ?? [];
+  const inventory = await readPluginInventory();
+  options.settings = buildClaudePluginSettings(inventory.installed, named);
+  getLog().info(
+    {
+      nodeId: nodeConfig.nodeId,
+      installed: inventory.installed.length,
+      named,
+      managed: inventory.managed,
+    },
+    'claude.plugin_scope_applied'
+  );
+  return { named, managed: inventory.managed };
 }
 
 /**
  * Workflow nodes are declared-only capability boundaries. Keep normal
  * project/user settings (CLAUDE.md, hooks, permissions), but exclude ambient
- * skills, MCP and plugins unless the workflow names them explicitly.
+ * skills and MCP unless the workflow names them explicitly; plugins are scoped
+ * by {@link applyWorkflowPluginScope}.
  */
-async function applyWorkflowCapabilityScope(
+function applyWorkflowCapabilityScope(
   options: Options,
   nodeConfig: NodeConfig,
   cwd: string,
-  skillSearch: SkillSearch,
-  listInstalledPluginIds: () => Promise<string[]>
-): Promise<ProviderWarning[]> {
+  skillSearch: SkillSearch
+): ProviderWarning[] {
   options.skills = nodeConfig.skills ?? [];
   options.strictMcpConfig = true;
-  const namedPlugins = nodeConfig.plugins ?? [];
-  const installedPluginIds = await listInstalledPluginIds();
-  options.settings = buildClaudePluginSettings(installedPluginIds, namedPlugins);
-  getLog().info(
-    { nodeId: nodeConfig.nodeId, installed: installedPluginIds.length, named: namedPlugins },
-    'claude.plugin_scope_applied'
-  );
 
   if (!nodeConfig.skills || nodeConfig.skills.length === 0) return [];
   const roots = declaredSkillRoots(CLAUDE_SKILL_DISCOVERY, cwd, skillSearch);
