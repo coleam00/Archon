@@ -26,15 +26,13 @@ export {
 
 const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
 const preparedIsolationSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('in-place') }).strict(),
-  z
-    .object({
-      kind: z.literal('worktree'),
-      branch: z.string().min(1).optional(),
-      fromBranch: z.string().min(1).optional(),
-      baseOverride: z.string().min(1).optional(),
-    })
-    .strict(),
+  z.object({ kind: z.literal('in-place') }),
+  z.object({
+    kind: z.literal('worktree'),
+    branch: z.string().min(1).optional(),
+    fromBranch: z.string().min(1).optional(),
+    baseOverride: z.string().min(1).optional(),
+  }),
 ]);
 
 const preparedRunShape = {
@@ -48,21 +46,17 @@ const preparedRunShape = {
 };
 // Only what the run row cannot carry: the origin, inputs and sealed run configuration
 // already live on `run`.
-const preparedExecutionSchema = z
-  .object({
-    cwd: z.string().min(1),
-    conversationId: z.string().min(1),
-    isolation: preparedIsolationSchema,
-  })
-  .strict();
+const preparedExecutionSchema = z.object({
+  cwd: z.string().min(1),
+  conversationId: z.string().min(1),
+  isolation: preparedIsolationSchema,
+});
 
-const preparedWorkflowLaunchV2Schema = z
-  .object({
-    version: z.literal(2),
-    run: z.object({ ...preparedRunShape, origin: workflowRunOriginSchema.optional() }).strict(),
-    execution: preparedExecutionSchema,
-  })
-  .strict();
+const preparedWorkflowLaunchV2Schema = z.object({
+  version: z.literal(2),
+  run: z.object({ ...preparedRunShape, origin: workflowRunOriginSchema.optional() }),
+  execution: preparedExecutionSchema,
+});
 
 /**
  * Launches written before runs could omit provenance. A queued one stays readable, and
@@ -71,16 +65,13 @@ const preparedWorkflowLaunchV2Schema = z
 const preparedWorkflowLaunchV1Schema = z
   .object({
     version: z.literal(1),
-    run: z
-      .object({
-        ...preparedRunShape,
-        conversation_id: z.string().min(1),
-        user_id: z.string().min(1),
-      })
-      .strict(),
+    run: z.object({
+      ...preparedRunShape,
+      conversation_id: z.string().min(1),
+      user_id: z.string().min(1),
+    }),
     execution: preparedExecutionSchema,
   })
-  .strict()
   .transform(
     ({ run: { conversation_id, user_id, ...run }, execution }): PreparedWorkflowLaunch => ({
       version: 2,
@@ -117,9 +108,10 @@ export function readAdmissionCheckoutGuard(launch: PreparedWorkflowLaunch): bool
 
 /** Run metadata key naming the receipt binding that requested a resource start. */
 export const RESOURCE_START_METADATA_KEY = 'resource_start';
-export const resourceStartReceiptOriginSchema = z
-  .object({ receiptId: z.string().uuid(), bindingId: z.string().min(1) })
-  .strict();
+export const resourceStartReceiptOriginSchema = z.object({
+  receiptId: z.string().uuid(),
+  bindingId: z.string().min(1),
+});
 export type ResourceStartRunMetadata = z.infer<typeof resourceStartReceiptOriginSchema>;
 
 /** The receipt and binding that requested this run's start, from its `resource_start` metadata. */
@@ -315,7 +307,6 @@ export const sourceReceiptInputSchema = z
         id: z.string().min(1),
         display: z.string().min(1).optional(),
       })
-      .strict()
       .nullable(),
     /** The item this start is for. Every run the receipt starts belongs to it. */
     itemKey: itemKeySchema.optional(),
@@ -362,19 +353,17 @@ export function mappedItemKey(
  * `runId`. That is the ended run, or, when the ended run worked on a copy, the run the
  * copy was taken from, so a check's end hands on the build's branch and not its own.
  */
-export const checkoutHandoffSchema = z
-  .object({
-    runId: z.string().min(1),
-    branch: z.string().min(1),
-    commit: z.string().regex(/^[0-9a-f]{40,64}$/, 'Expected a full commit id'),
-  })
-  .strict();
+export const checkoutHandoffSchema = z.object({
+  runId: z.string().min(1),
+  branch: z.string().min(1),
+  commit: z.string().regex(/^[0-9a-f]{40,64}$/, 'Expected a full commit id'),
+});
 export type CheckoutHandoff = z.infer<typeof checkoutHandoffSchema>;
 
 /** The checkout a run left when it ended, read for a binding that takes it: the hand-off, or why there is none. */
 export const endedCheckoutSchema = z.union([
-  z.object({ handoff: checkoutHandoffSchema }).strict(),
-  z.object({ refused: z.string().min(1) }).strict(),
+  z.object({ handoff: checkoutHandoffSchema }),
+  z.object({ refused: z.string().min(1) }),
 ]);
 export type EndedCheckout = z.infer<typeof endedCheckoutSchema>;
 
@@ -384,9 +373,9 @@ export type EndedCheckout = z.infer<typeof endedCheckoutSchema>;
  * of its own cut at the hand-off's commit (a stage with `mutates_checkout: false`).
  */
 export const CHECKOUT_HANDOFF_METADATA_KEY = 'checkout_handoff';
-export const checkoutHandoffRunMetadataSchema = checkoutHandoffSchema
-  .extend({ lane: z.enum(['continue', 'copy']) })
-  .strict();
+export const checkoutHandoffRunMetadataSchema = checkoutHandoffSchema.extend({
+  lane: z.enum(['continue', 'copy']),
+});
 export type CheckoutHandoffRunMetadata = z.infer<typeof checkoutHandoffRunMetadataSchema>;
 
 /**
@@ -415,8 +404,8 @@ export function readCheckoutHandoff(run: {
 export const ASKS_CHECKOUT_METADATA_KEY = 'asks_checkout';
 
 export const asksCheckoutSchema = z.union([
-  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }).strict(),
-  z.object({ refused: z.string().min(1) }).strict(),
+  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }),
+  z.object({ refused: z.string().min(1) }),
 ]);
 export type AsksCheckout = z.infer<typeof asksCheckoutSchema>;
 

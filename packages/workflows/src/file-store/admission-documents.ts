@@ -73,7 +73,7 @@ export const bindingSchema = startBindingInspectionSchema.extend({
   requestIds: z.array(z.string()),
 });
 export const receiptFieldsSchema = sourceReceiptInputSchema.strip();
-export const receiptSchema = sourceReceiptInputSchema.extend({
+export const receiptSchema = receiptFieldsSchema.extend({
   outcome: sourceReceiptOutcomeSchema,
   reason: z.string().nullable(),
   bindings: z.array(bindingSchema),

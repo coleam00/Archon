@@ -459,6 +459,46 @@ Schema upgrades preserve shipped columns and older writers. Older binaries can
 open and write the upgraded database, but may display the compatibility anchor
 when reading an origin-free run.
 
+## Persisted JSON documents
+
+A JSON document stored in a column, a run's `metadata` key, or a file-store document is
+a persisted shape like a column, and more than one binary version may read it. Such a
+document is read so that a key the reader does not know is ignored, not refused. The
+engine-written records read this way include the prepared launch in
+`remote_agent_resource_start_requests.launch` (its `run`, `run.origin` and `execution`
+too), the run's `origin`, the `checkout_handoff`, `asks_checkout`, `resource_start`,
+`owned_worktree` and `tool_call_attention` keys of run `metadata`, a receipt's
+`source_actor`, and the file store's request and receipt documents. A record that is
+wrong, not merely newer, is still refused: a wrong type, a missing required field, or a
+`version` or discriminator value the reader does not know. In the SQL stores, a queued
+launch the reader cannot read holds its queue, is listed in the attention queue, and is
+withdrawn with `archon trigger withdraw <request-id>`.
+
+So an optional field can be added to such a record without breaking an older reader,
+which acts as if the field were absent. A field an older reader must not ignore goes
+another way:
+
+- into a column of its own, which the older binary does not read (the intent's
+  `event_input_names`, `checkout_from`, `item_key`, `start_limit` and `grants_limit`
+  columns), or
+- into a new `version` of the record, which the older binary refuses as unreadable. For
+  the prepared launch that means draining or withdrawing the queue before a downgrade.
+
+Binaries released before this rule still refuse unknown keys in the launch, the origin
+and the other records above. A new field in them is safe only once every binary that
+opens the database reads them this way.
+
+These records stay strict, each for the invariant it protects:
+
+| Record | Why it stays strict |
+| --- | --- |
+| `remote_agent_start_receipt_bindings.intent` | The same schema validates bindings an operator writes (trigger files, source and pack bindings), where a misspelled key must fail. Shipped binaries parse the column strictly, so a newer field goes into its own column (see `storableIntent` in `packages/core/src/db/start-receipt-writes.ts`). |
+| Trigger files (`~/.archon/triggers/*.json`) | Operator-written config: a misspelled `limit` must fail, not run without a limit. |
+| An answer and its answerer (`remote_agent_item_asks.answer`, the answer in `metadata.wait`, `wait_answered` event data) | The union's variants are told apart by their keys: without strictness `{ decisions, text }` would read as `{ text }`. |
+| The rest of `metadata.wait` | Its options and recommendation share their schema with workflow YAML, where a misspelled key must fail. |
+| `remote_agent_state_revisions.operation` and the file store's state revisions | The patch operations are the script API's input contract. A new operation is a new `op`, which an older reader cannot apply in any case. |
+| `metadata.run_config` and `metadata.ai_configuration` | An older binary that silently dropped a provider option would change what the run may do. |
+
 ## Store event feed
 
 Every workflow store exposes `getWorkflowEventHead()` and `readWorkflowEventsAfter(cursor, { limit, eventTypes? })`. The feed covers all runs in commit order. A page carries each event with its opaque cursor and a `next` cursor that also advances past rows excluded by the type filter. Pass cursors back unchanged; only the issuing store interprets them. A malformed cursor or one from a different store kind throws `WorkflowEventCursorError`.
