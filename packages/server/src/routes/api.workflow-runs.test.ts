@@ -276,6 +276,7 @@ describe('GET /api/workflows/runs', () => {
         ...MOCK_FAILED_RUN,
         id: `run-${index}`,
         item_id: null,
+        last_activity_at: NOW_DATE,
       }))
     );
     const { app } = makeApp();
