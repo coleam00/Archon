@@ -12,6 +12,7 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { createInMemoryWorkflowHostStore, createInMemoryWorkflowStore } from './workflow-store';
 import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
+import type { CheckedFireBinding } from '../triggers/fire-binding-check';
 import { triggerCommand } from '../commands/trigger';
 import { spyOnJsonStdout } from './workflow-harness-output';
 
@@ -49,13 +50,6 @@ function hostForTest(): WorkflowHost {
 // `a` is required, `b` is not declared.
 const WORKFLOW =
   'name: stage\ndescription: A stage\ninputs:\n  a: { required: true }\nnodes:\n  - id: one\n    bash: echo one\n';
-
-interface CheckedBinding {
-  file: string;
-  workflowName: string | null;
-  timer: string | null;
-  problems: string[];
-}
 
 export function triggerCheckFixtures() {
   const tempRoots = trackTempRoots();
@@ -134,7 +128,7 @@ export function triggerCheckFixtures() {
       return installed.path;
     };
     const check = async (): Promise<{
-      bindings: CheckedBinding[];
+      bindings: CheckedFireBinding[];
       observing?: Record<string, unknown>;
       error: unknown;
     }> => {
@@ -158,7 +152,7 @@ export function triggerCheckFixtures() {
         if (printed === '') throw error;
         return {
           ...(JSON.parse(printed) as {
-            bindings: CheckedBinding[];
+            bindings: CheckedFireBinding[];
             observing?: Record<string, unknown>;
           }),
           error,
