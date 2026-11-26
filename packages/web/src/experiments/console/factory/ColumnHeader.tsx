@@ -34,14 +34,20 @@ const CHIP_CLASS = 'rounded-full px-2 py-0.5 text-console-12';
 
 export function ColumnHeader({
   label,
+  labelHover = label,
   subtitle,
+  subtitleHover = subtitle,
   items,
   count = items.length,
   bar,
   chips = true,
 }: {
   label: string;
+  /** The label's hover title, where it names ids the label puts in words; else the label. */
+  labelHover?: string;
   subtitle: string;
+  /** The subtitle's hover title, where it names ids the subtitle puts in words; else the subtitle. */
+  subtitleHover?: string;
   items: readonly ItemRead[];
   /**
    * Null while it is read: a skeleton bar stands in (rule 6). `unknown` when the read failed,
@@ -68,13 +74,13 @@ export function ColumnHeader({
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 flex-col">
           <h3
-            title={label}
+            title={labelHover}
             className={`truncate text-console-15 font-semibold ${empty ? 'text-text-tertiary' : 'text-text-primary'}`}
           >
             {label}
           </h3>
           {empty ? null : (
-            <p title={subtitle} className="truncate text-console-12 text-text-tertiary">
+            <p title={subtitleHover} className="truncate text-console-12 text-text-tertiary">
               {subtitle}
             </p>
           )}

@@ -20,6 +20,7 @@ import { BoardToolbar, useBoardView, type BoardView } from '../factory/BoardTool
 import { ColumnHeader } from '../factory/ColumnHeader';
 import { TONES } from '../factory/tones';
 import { toneOfKind } from '../factory/lib/map-columns';
+import { stageLabel } from '../factory/lib/stage-words';
 import { groupsOf, type GroupKind } from '../factory/lib/view-groups';
 import { useFactoryCards } from '../factory/cards-context';
 import { FactoryCardsProvider, useForgeTitles } from '../factory/FactoryCards';
@@ -74,10 +75,15 @@ export function columnsOf(
   ].filter(column => column.stages.length > 0);
 }
 
-/** One column with its items. Every column of a row is the same width, an empty one too. */
+/**
+ * One column with its items. Every column of a row is the same width, an empty one too. Its
+ * header names it and its stages in words (`stageLabel`); the raw ids are the hover titles.
+ */
 function Column({
   name,
+  label,
   stages,
+  labelOf,
   items,
   projectId,
   stageOf,
@@ -85,11 +91,16 @@ function Column({
   lit = null,
   accent,
 }: {
+  /** The column's key: its group's name, or the workflow id of a stage no group holds. */
   name: string;
+  /** The column's heading: its group's name, or its lone stage's label. */
+  label: string;
   /** The column's colour, as the bar on its header and on each card (Visual standard, rule 2). */
   accent?: string;
-  /** The column's stages, by their names in the pack: its header's subtitle. */
+  /** The column's stages, by workflow id. */
   stages: readonly string[];
+  /** A stage's label, which the header's subtitle lists. */
+  labelOf: (workflow: string) => string;
   items: ItemRead[];
   projectId: string;
   lit?: ReadonlySet<string> | null;
@@ -110,7 +121,14 @@ function Column({
       data-empty={empty ? '' : undefined}
       className="flex flex-col md:min-h-0 md:w-0 md:min-w-44 md:flex-1"
     >
-      <ColumnHeader label={name} subtitle={stages.join(', ')} items={items} bar={accent} />
+      <ColumnHeader
+        label={label}
+        labelHover={label === name ? undefined : name}
+        subtitle={stages.map(labelOf).join(', ')}
+        subtitleHover={stages.join(', ')}
+        items={items}
+        bar={accent}
+      />
       {empty ? (
         <p className="mt-3 text-console-12 text-text-tertiary">Nothing here</p>
       ) : (
@@ -236,10 +254,9 @@ function DecisionStrip({
 /** The Table's rows for one pack: its columns' cards in board order, then decisions, then Merged. */
 function tableRows(
   board: PackBoardGroups,
-  columns: readonly StageGroup[],
+  names: readonly string[],
   columnOf: (read: ItemRead) => number
 ): { rows: TableRow[]; earlier: TableRow[] } {
-  const names = columns.map(column => column.name);
   const merged = (read: ItemRead): TableRow => ({
     read,
     column: 'Merged',
@@ -300,14 +317,20 @@ export function PackBoard({
   const stageOf = place ?? ((read: ItemRead): string | undefined => stageAt(read, graph?.stages));
   // The same groups the map draws: the view file's, else the pack document's.
   const packView = useFactoryCards()?.packs?.get(pack)?.view ?? null;
-  const columns = columnsOf(graph, groupsOf(packView, graph));
+  const groups = groupsOf(packView, graph);
+  const columns = columnsOf(graph, groups);
+  const grouped = new Set(groups.map(group => group.name));
+  const labelOf = (workflow: string): string => stageLabel(packView, workflow);
+  // A column a group heads takes the group's name; a stage no group holds, its own label.
+  const headingOf = (column: StageGroup): string =>
+    grouped.has(column.name) ? column.name : labelOf(column.name);
   const focus = useSearchParams()[0].get('group');
   const items = board.moving;
   // A pack with nothing on its board has nothing to show.
   if (counted && board.onBoard.length === 0) return <></>;
   const columnOf = (read: ItemRead): number =>
     columns.findIndex(column => column.stages.includes(stageOf(read) ?? ''));
-  const table = tableRows(board, columns, columnOf);
+  const table = tableRows(board, columns.map(headingOf), columnOf);
   return (
     <section data-pack={pack} className="mb-4 flex flex-col md:min-h-80 md:flex-1">
       <h2 className="text-sm font-medium text-text-primary">{pack}</h2>
@@ -342,7 +365,9 @@ export function PackBoard({
             <Column
               key={column.name}
               name={column.name}
+              label={headingOf(column)}
               stages={column.stages}
+              labelOf={labelOf}
               items={items.filter(read => column.stages.includes(stageOf(read) ?? ''))}
               projectId={projectId}
               stageOf={column.stages.length > 1 ? stageOf : undefined}

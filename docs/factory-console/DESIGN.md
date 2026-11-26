@@ -579,7 +579,8 @@ text. The factory's own surfaces that point at an ask follow the rules above:
 - A 3 px top bar in the column's colour (rule 5).
 - Label: `--text-console-15`, semibold.
 - Subtitle: `--text-console-12`, `--text-tertiary`, one line, truncated, naming the column's stages
-  ("order, triage"). The Merged column's subtitle is "last 7 days".
+  by their labels, as the map names them ("Order, Triage"; the ids only as its hover title).
+  The Merged column's subtitle is "last 7 days".
 - Count: `--text-console-22`, `tabular-nums`; a skeleton bar while it is not known (rule 6).
 - State chips: `--text-console-12`, `rounded-full`, `px-2 py-0.5`, the state's soft background
   with the state's colour as text ("running 2", "needs you 1"). Only a state with a count above 0

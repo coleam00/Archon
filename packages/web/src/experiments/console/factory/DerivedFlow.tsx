@@ -34,6 +34,7 @@ import { usePackGraph } from './map-structure';
 import { ReadFailure } from './ReadFailure';
 import { cardTone, TONES, type Tone } from './tones';
 import { groupsOf } from './lib/view-groups';
+import { stageWords } from './lib/stage-words';
 import { askedCount, askedOf, type AskRead } from './lib/item-asks';
 
 /**
@@ -90,12 +91,6 @@ interface FlowLive {
   numbers: BoardNumbers | undefined;
   /** The every-item read failed: the number tiles say so, and the Merged box shows no count. */
   failed: boolean;
-}
-
-/** A stage's name as a person reads it: `build-and-test` reads "Build and test". */
-export function stageWords(workflow: string): string {
-  const spaced = workflow.replace(/[_-]+/g, ' ').trim();
-  return spaced === '' ? workflow : spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 const CARD =

@@ -13,6 +13,7 @@ import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import type { Project } from '../primitives/project';
 import type { ItemAsk } from '../primitives/run';
 import type { FactoryView } from '../factory/api';
+import { shippedFile, shippedGraph } from '../factory/curated.test-fixtures';
 import type { ItemRead, PackGraph } from '../skills/items';
 import { invalidate, set } from '../store/cache';
 import { K } from '../store/keys';
@@ -461,6 +462,53 @@ test('stages a pack groups share a column, and each card there says its own stag
   expect(page.querySelector('[data-item="issue-2"]')?.textContent).toContain('plan');
 });
 
+/** A pack board drawn with the pack's view file, as the board's cards read it. */
+function renderWithView(packGraph: PackGraph, view: FactoryView | null, reads: ItemRead[]) {
+  set(K.packGraph('web', 'flow'), packGraph);
+  const packs = new Map([['flow', { stages: packGraph.stages, view }]]);
+  return render(
+    '/console/p/web/board',
+    <CardsContext.Provider
+      value={{ projectId: 'web', packs, packsError: false, itemAsks: NO_ITEM_ASKS }}
+    >
+      <PackBoard projectId="web" pack="flow" board={packBoard(reads, 'flow', new Date())} counted />
+    </CardsContext.Provider>
+  );
+}
+
+test("a column header names its stages in the view file's words, and an ungrouped stage's column by its label", () => {
+  // The shipped file, with `stage-host` taken out of every group so it heads a column alone.
+  const view: FactoryView = {
+    ...shippedFile,
+    groups: (shippedFile.groups ?? []).map(group => ({
+      ...group,
+      stages: group.stages.filter(stage => stage !== 'stage-host'),
+    })),
+  };
+  const page = renderWithView({ ...shippedGraph, pack: 'flow' }, view, [
+    item('issue-1', 'stage-build', 'running'),
+    item('issue-2', 'stage-host', 'running'),
+  ]);
+  const built = page.querySelector('[data-stage="Plan and build"] header p');
+  expect(built?.textContent).toBe('Plan, Build, Attend');
+  expect(built?.getAttribute('title')).toBe('plan, stage-build, attend');
+  const host = page.querySelector('[data-stage="stage-host"] h3');
+  expect(host?.textContent).toBe('CI and review');
+  expect(host?.getAttribute('title')).toBe('stage-host');
+});
+
+test("with no view file, a stage's column is headed by its id in words", () => {
+  const stages = graph.stages.map(stage =>
+    stage.workflow === 'build' ? { ...stage, workflow: 'stage-build' } : stage
+  );
+  const page = renderWithView({ ...graph, stages }, null, [
+    item('issue-1', 'stage-build', 'running'),
+  ]);
+  const column = page.querySelector('[data-stage="stage-build"]');
+  expect(column?.querySelector('h3')?.textContent).toBe('Stage build');
+  expect(column?.querySelector('header p')?.textContent).toBe('Stage build');
+});
+
 test('only a project with an item on a pack stage gets the board tab', () => {
   set(K.projects, [project('web', ['flow']), project('docs', [])]);
   const tabs = (id: string): (string | null)[] =>
@@ -503,8 +551,16 @@ function seedBoard(reads: ItemRead[]): void {
  * The board mounted in happy-dom, with its globals installed for this test only and `fetch`
  * answered by `answer`. `unmount` restores both.
  */
-async function mountBoard(answer: (url: string) => Promise<Response>) {
+async function mountBoard(
+  answer: (url: string) => Promise<Response>,
+  path = '/console/p/web/board'
+) {
   const dom = new Window({ url: 'http://localhost' });
+  // The columns brought into view (`?group=`), by their `data-stage`.
+  const scrolled: (string | null)[] = [];
+  dom.HTMLElement.prototype.scrollIntoView = function (this: Element): void {
+    scrolled.push(this.getAttribute('data-stage'));
+  };
   const globals = {
     window: dom,
     document: dom.document,
@@ -523,7 +579,7 @@ async function mountBoard(answer: (url: string) => Promise<Response>) {
   const root = createRoot(container as unknown as HTMLElement);
   await act(async () =>
     root.render(
-      <MemoryRouter initialEntries={['/console/p/web/board']}>
+      <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/console/p/:projectId/*" element={<BoardPage />} />
         </Routes>
@@ -534,6 +590,7 @@ async function mountBoard(answer: (url: string) => Promise<Response>) {
     dom,
     container,
     act,
+    scrolled,
     unmount: async (): Promise<void> => {
       await act(async () => root.unmount());
       await dom.happyDOM.close();
@@ -611,7 +668,7 @@ async function mountPlaced(reads: ItemRead[], retired: unknown[]) {
   set(K.packGraph('web', 'flow'), graph);
   set(K.packView('web', 'flow'), {
     path: null,
-    view: { retired } as unknown as FactoryView,
+    view: { retired, stages: {} } as unknown as FactoryView,
     problems: [],
   });
   const board = await mountBoard(nothingFetched);
@@ -641,6 +698,7 @@ test("a pack whose graph has no groups takes its board columns from the view fil
     path: null,
     view: {
       groups: [{ name: 'Make', blurb: 'x', stages: ['plan', 'build'], kind: 'build' }],
+      stages: {},
     } as unknown as FactoryView,
     problems: [],
   });
@@ -656,6 +714,28 @@ test("a pack whose graph has no groups takes its board columns from the view fil
       ['Make', 'issue-1'],
       ['check', 'issue-2'],
     ]);
+  } finally {
+    await board.unmount();
+  }
+});
+
+test("a map link's ?group= brings an ungrouped stage's column into view by its id, not its heading", async () => {
+  const stages = graph.stages.map(stage =>
+    stage.workflow === 'build' ? { ...stage, workflow: 'stage-build' } : stage
+  );
+  seedBoard([item('issue-1', 'stage-build', 'running')]);
+  set(K.packGraph('web', 'flow'), { ...graph, stages });
+  set(K.packView('web', 'flow'), {
+    path: null,
+    view: { stages: {} } as unknown as FactoryView,
+    problems: [],
+  });
+  const board = await mountBoard(nothingFetched, '/console/p/web/board?group=stage-build');
+  try {
+    const column = board.container.querySelector('[data-stage="stage-build"]');
+    // The heading is the stage's words, so only the id can find it.
+    expect(column?.querySelector('h3')?.textContent).toBe('Stage build');
+    expect(board.scrolled).toEqual(['stage-build']);
   } finally {
     await board.unmount();
   }

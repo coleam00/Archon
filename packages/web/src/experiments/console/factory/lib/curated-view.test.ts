@@ -105,6 +105,12 @@ describe('the slim file over the c1104737 graph', () => {
     const view = curatedView(file, shippedGraph);
     expect([view.landed.stage, view.columns.at(-1)?.stages]).toEqual(['close', ['close']]);
   });
+
+  test('a stage the file gives no words is named by its id in words, not the raw id', () => {
+    const { 'stage-host': _host, ...stages } = shippedFile.stages;
+    const view = curatedView({ ...shippedFile, stages }, shippedGraph);
+    expect(view.stages.find(entry => entry.id === 'stage-host')?.label).toBe('Stage host');
+  });
 });
 
 describe("the map's arrows over the c1104737 graph", () => {
