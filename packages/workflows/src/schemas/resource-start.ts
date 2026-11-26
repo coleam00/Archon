@@ -25,9 +25,19 @@ export {
 } from './resource-name';
 
 const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
+/**
+ * The launch keeps keys it does not know, so the in-place lane names the worktree lane's
+ * keys to refuse them: an in-place launch with a branch is wrong, not newer.
+ */
+const absent = z.never().optional();
 const preparedIsolationSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('in-place') }),
-  z.object({
+  z.looseObject({
+    kind: z.literal('in-place'),
+    branch: absent,
+    fromBranch: absent,
+    baseOverride: absent,
+  }),
+  z.looseObject({
     kind: z.literal('worktree'),
     branch: z.string().min(1).optional(),
     fromBranch: z.string().min(1).optional(),
@@ -46,15 +56,15 @@ const preparedRunShape = {
 };
 // Only what the run row cannot carry: the origin, inputs and sealed run configuration
 // already live on `run`.
-const preparedExecutionSchema = z.object({
+const preparedExecutionSchema = z.looseObject({
   cwd: z.string().min(1),
   conversationId: z.string().min(1),
   isolation: preparedIsolationSchema,
 });
 
-const preparedWorkflowLaunchV2Schema = z.object({
+const preparedWorkflowLaunchV2Schema = z.looseObject({
   version: z.literal(2),
-  run: z.object({ ...preparedRunShape, origin: workflowRunOriginSchema.optional() }),
+  run: z.looseObject({ ...preparedRunShape, origin: workflowRunOriginSchema.loose().optional() }),
   execution: preparedExecutionSchema,
 });
 
@@ -360,10 +370,13 @@ export const checkoutHandoffSchema = z.object({
 });
 export type CheckoutHandoff = z.infer<typeof checkoutHandoffSchema>;
 
-/** The checkout a run left when it ended, read for a binding that takes it: the hand-off, or why there is none. */
+/**
+ * The checkout a run left when it ended, read for a binding that takes it: the hand-off, or
+ * why there is none. The refusal is tried first, so a record carrying both is refused.
+ */
 export const endedCheckoutSchema = z.union([
-  z.object({ handoff: checkoutHandoffSchema }),
   z.object({ refused: z.string().min(1) }),
+  z.object({ handoff: checkoutHandoffSchema }),
 ]);
 export type EndedCheckout = z.infer<typeof endedCheckoutSchema>;
 
@@ -403,9 +416,10 @@ export function readCheckoutHandoff(run: {
  */
 export const ASKS_CHECKOUT_METADATA_KEY = 'asks_checkout';
 
+// The refusal is tried first, so a record carrying both a hand-off and a refusal is refused.
 export const asksCheckoutSchema = z.union([
-  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }),
   z.object({ refused: z.string().min(1) }),
+  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }),
 ]);
 export type AsksCheckout = z.infer<typeof asksCheckoutSchema>;
 

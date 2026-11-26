@@ -659,6 +659,14 @@ export function describeSqlStatusReadConformance(
       expect(await store.listUnreadableQueuedStarts()).toEqual([
         expect.objectContaining({ requestId: wrong.launch.run.id, behind: 0 }),
       ]);
+      // With the slot free again, the drain still does not admit what it cannot read.
+      await store.claimPendingWorkflowRun(queued.launch.run.id);
+      await store.completeWorkflowRun(queued.launch.run.id, { duration_ms: 1 });
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+      expect(await store.getWorkflowRun(wrong.launch.run.id)).toBeNull();
+      expect(await store.listUnreadableQueuedStarts()).toEqual([
+        expect.objectContaining({ requestId: wrong.launch.run.id }),
+      ]);
     } finally {
       await harness.close();
     }

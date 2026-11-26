@@ -1740,3 +1740,86 @@ test.each(['paused', 'failed'] as const)(
     });
   }
 );
+
+test('keys a newer binary added survive when the store writes a request, receipt or run back', async () => {
+  const { root, store } = await fixture();
+  const later = { later: 1 };
+  const doc = (kind: string, id: string) =>
+    join(root, 'resource', kind, `${createHash('sha256').update(id).digest('hex')}.json`);
+  const read = async (path: string) =>
+    JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  const edit = async (path: string, change: (row: Record<string, unknown>) => unknown) =>
+    writeFile(path, JSON.stringify(change(await read(path))));
+
+  const [holder, queued] = [intent(), intent()];
+  await store.admitResourceStart(holder);
+  await store.admitResourceStart(queued);
+  const request = doc('requests', queued.launch.run.id);
+  const { launch } = queued;
+  await edit(request, row => ({
+    ...row,
+    ...later,
+    launch: {
+      ...launch,
+      ...later,
+      run: { ...launch.run, ...later, origin: later },
+      execution: {
+        ...launch.execution,
+        ...later,
+        isolation: { ...launch.execution.isolation, ...later },
+      },
+    },
+  }));
+  await finishRun(root, holder.launch.run.id);
+  expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toMatchObject([
+    { status: 'admitted', runId: launch.run.id },
+  ]);
+  expect(await read(request)).toMatchObject({
+    status: 'admitted',
+    ...later,
+    launch: {
+      ...later,
+      run: { ...later, origin: later },
+      execution: { ...later, isolation: later },
+    },
+  });
+
+  const run = join(root, 'runs', launch.run.id, 'run.json');
+  await edit(run, row => ({ ...row, run: { ...(row.run as object), origin: later } }));
+  await store.claimPendingWorkflowRun(launch.run.id);
+  expect(await read(run)).toMatchObject({ run: { status: 'running', origin: later } });
+
+  const receiptId = randomUUID();
+  const sourceActor = { source: 'test', id: 'actor' };
+  await store.acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'source',
+      deliveryId: null,
+      contentDigest: 'digest',
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'binding',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: 'other',
+        overlap: 'queue',
+        launch: { cwd: '/test', workflowName: 'test', inputs: {}, isolation: { kind: 'in-place' } },
+      },
+    ],
+  });
+  const receipt = doc('receipts', receiptId);
+  await edit(receipt, row => ({ ...row, ...later, sourceActor: { ...sourceActor, ...later } }));
+  await store.claimStartBindingPreparation({ receiptId, bindingId: 'binding', ownerId: 'owner' });
+  expect(await read(receipt)).toMatchObject({
+    ...later,
+    sourceActor: later,
+    bindings: [{ status: 'preparing', ownerId: 'owner' }],
+  });
+});

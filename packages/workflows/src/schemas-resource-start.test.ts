@@ -195,6 +195,33 @@ describe('persisted records a newer binary may have written', () => {
       `invalid ${CHECKOUT_HANDOFF_METADATA_KEY}`
     );
   });
+
+  test('a record that mixes two variants is wrong, not newer', async () => {
+    const { readAsksCheckout } = await import('./schemas/resource-start');
+    const handoff = { runId: 'run', branch: 'main', commit: 'a'.repeat(40) };
+    expect(
+      readAsksCheckout({
+        id: 'run',
+        metadata: { asks_checkout: { handoff, worktree: '/w', refused: 'gone' } },
+      })
+    ).toEqual({ refused: 'gone' });
+    const launch = (isolation: object) => ({
+      version: 2,
+      run: {
+        id: crypto.randomUUID(),
+        workflow_name: 'w',
+        codebase_id: 'c',
+        user_message: '',
+        metadata: {},
+      },
+      execution: { cwd: '/project', conversationId: 'conversation', isolation },
+    });
+    expect(preparedWorkflowLaunchSchema.safeParse(launch({ kind: 'in-place' })).success).toBe(true);
+    expect(
+      preparedWorkflowLaunchSchema.safeParse(launch({ kind: 'in-place', branch: 'feature' }))
+        .success
+    ).toBe(false);
+  });
 });
 
 describe('item mapping', () => {
