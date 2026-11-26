@@ -379,14 +379,14 @@ async function addSourcePack(
     return refusal === undefined;
   });
   for (const [entry, path] of unloadedEntrypoints(naming)) {
-    // A load error of the file explains it: keyed by its bare filename (a parse error, which
-    // resume matches), or by the pack, its folder or the file under the pack's label.
-    const labelled = `${pack.name}/${path}`;
-    const explained = errors.some(
-      ({ filename }) =>
-        filename === basename(path) || labelled === filename || labelled.startsWith(`${filename}/`)
+    // A listed file that exists was read, and its own load error says why it did not load;
+    // that error is keyed by bare filename, which resume matches, so it cannot be told apart
+    // from another folder's file of that name. Only a missing file is reported here.
+    const present = await access(join(pack.dir, path)).then(
+      () => true,
+      () => false
     );
-    if (!explained)
+    if (!present)
       errors.push({
         filename: path,
         workflowName: entry,
@@ -394,10 +394,15 @@ async function addSourcePack(
         errorType: 'validation_error',
       });
   }
+  // Dispatch follows the listed file that survived, by path: an unlisted file that shares
+  // its authored name never stands in for a listed file that was refused.
+  const listed = files.filter(file =>
+    naming.entrypointByPath.has(`${file.folder}/${file.filename}`)
+  );
   context.sourcePack = {
     key: pack.name,
     bindings: loaded.pack?.bindings,
-    support: new Set([...names].filter(name => !entrypoints.has(name))),
+    entrypoints: new Set(listed.map(file => file.parsed.workflow.name)),
   };
   const packaged: DirLoadResult = { workflows: new Map(), errors: [] };
   mergePackFiles(packaged, new Set(), { files, errors });

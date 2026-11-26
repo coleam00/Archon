@@ -278,13 +278,32 @@ export async function packCopies(
   return { loaded, otherCopies };
 }
 
+/**
+ * `entries` less another scope's workflows under the source pack folder's key: a pack
+ * folder dispatches only its own (`WorkflowLoadResult.sourcePack`), while other packs merge
+ * their scopes by key.
+ */
+export function ownPackWorkflows(
+  entries: readonly WorkflowWithSource[],
+  sourcePack: WorkflowLoadResult['sourcePack']
+): WorkflowWithSource[] {
+  if (sourcePack === undefined) return [...entries];
+  const own = new Set(sourcePack.workflows);
+  return entries.filter(
+    ({ workflow, source }) =>
+      workflow.pack?.key !== sourcePack.key || (source === 'project' && own.has(workflow.name))
+  );
+}
+
 /** The pack's dispatchable workflows; none found throws `PackNotFoundError`. */
 export function packWorkflows(
   discovered: WorkflowLoadResult,
   packKey: string,
   from: string
 ): readonly WorkflowWithSource[] {
-  const workflows = discovered.workflows.filter(entry => entry.workflow.pack?.key === packKey);
+  const workflows = ownPackWorkflows(discovered.workflows, discovered.sourcePack).filter(
+    entry => entry.workflow.pack?.key === packKey
+  );
   if (workflows.length === 0) {
     // The same pack under another key: a project pack folder is keyed by its name, the
     // installed copy by `<owner>.<name>`, and an author often types the other one.

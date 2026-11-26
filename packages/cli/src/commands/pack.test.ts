@@ -745,6 +745,11 @@ describe('archon pack: a pack folder as the workflow source', () => {
       await packCommand('bindings', [key], options({ ...extra, only: 'listed' }));
     };
     await expectRefusals('fixture', { workflowSource: source });
+    // The graph shows the folder's own stages, as the bindings resolve against them.
+    await packCommand('graph', ['fixture'], options({ workflowSource: source }));
+    const printed = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(printed).toMatch(/^ {2}fixture-sweep /m);
+    expect(printed).not.toMatch(/^ {2}fixture-helper /m);
     await installCopy(source);
     await expectRefusals('acme.fixture', {});
     // Only the binding naming the entrypoint was written, once per copy.

@@ -22,6 +22,7 @@ import {
 import {
   declaredStops,
   nearestPackBindings,
+  ownPackWorkflows,
   packBindingRefusals,
 } from '@archon/workflows/pack-graph';
 import { writeStdout } from '../utils/stdout';
@@ -162,6 +163,13 @@ export async function validateWorkflowsCommand(
   // apply to them.
   filteredResults.push(...packs);
   filteredResults.push(...(await manifestResults(source ?? packDir ?? pluginRoot)));
+  // A plugin kept inside the pack folder (a provider plugin, say) has its own manifest too,
+  // named by its path from the pack.
+  const here = await canonicalizeProjectPath(pluginRoot);
+  if (source === undefined && packDir !== undefined && here !== packDir)
+    filteredResults.push(
+      ...(await manifestResults(here, join(relative(packDir, here), PLUGIN_MANIFEST_FILE)))
+    );
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -244,7 +252,7 @@ async function collectWorkflowResults(
     );
   }
 
-  const stops = stopIssues(workflowEntries);
+  const stops = stopIssues(ownPackWorkflows(workflowEntries, sourcePack));
   // A pack folder's support workflows are not dispatched, but its workflows compose them, so
   // they are checked as before. Installed support was never checked here.
   for (const { workflow, source, parseWarnings } of [...workflowEntries, ...supportEntries]) {
@@ -379,7 +387,10 @@ function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, Validat
  * skill folder without a `SKILL.md` is an error, because install refuses it. Schema
  * failures are discovery load errors and are not repeated here.
  */
-async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]> {
+async function manifestResults(
+  cwd: string,
+  label: string = PLUGIN_MANIFEST_FILE
+): Promise<WorkflowValidationResult[]> {
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(join(cwd, PLUGIN_MANIFEST_FILE), 'utf-8'));
@@ -413,9 +424,7 @@ async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]>
       });
     }
   }
-  return issues.length > 0
-    ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
-    : [];
+  return issues.length > 0 ? [makeWorkflowResult(label, issues, label)] : [];
 }
 
 /**

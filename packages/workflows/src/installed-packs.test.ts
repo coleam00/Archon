@@ -764,6 +764,15 @@ describe('a pack folder given as the source', () => {
       join(folder, 'launch', 'launch.yaml'),
       'name: launch\ndescription: d\nnodes:\n  - id: child\n    workflow: helper\n'
     );
+    // An unlisted file with the refused entrypoint's name does not stand in for it, and a
+    // malformed file named like the missing one, in another folder, does not hide it.
+    for (const [path, content] of [
+      ['old/old.yaml', 'name: launch\ndescription: d\nnodes:\n  - id: a\n    bash: echo old\n'],
+      ['broken/gone.yaml', 'name: [unclosed\n'],
+    ]) {
+      await mkdir(dirname(join(folder, path)), { recursive: true });
+      await writeFile(join(folder, path), content);
+    }
     const live = await discoverFrom(folder);
     expect(names(live.workflows)).not.toContain('launch');
     expect(names(live.workflows)).not.toContain('helper');

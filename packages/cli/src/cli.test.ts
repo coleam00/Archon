@@ -3278,6 +3278,19 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
   );
   mkdirSync(join(home, 'workflows', 'factory', 'outside'), { recursive: true });
   writeFileSync(join(home, 'workflows', 'factory', 'outside', 'outside.yaml'), flow('outside'));
+  // A provider plugin kept inside the pack has its own manifest checked as well.
+  mkdirSync(join(pack, 'plan', 'provider'), { recursive: true });
+  writeFileSync(
+    join(pack, 'plan', 'provider', 'archon-plugin.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: 'provider',
+      name: 'probe',
+      description: 'd',
+      executable: 'archon-provider-probe',
+      typo: true,
+    })
+  );
   // A pack none of whose workflow files exist still has its bindings checked.
   const empty = join(root, 'empty');
   packFolder(empty, 'empty', 'one', [], 'one');
@@ -3296,15 +3309,22 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
   const refusal = (workflow: string, key: string, id = 'sweep') =>
     `Binding '${id}' names workflow '${workflow}', which pack '${key}' does not provide.`;
   try {
-    const cases: [string, string[], string[]][] = [
+    // Each run's directory, its arguments, and messages it must and must not report.
+    const cases: [string, string[], string[], string[]?][] = [
       [pack, [], [refusal('helper', 'factory'), refusal('outside', 'factory', 'home')]],
       [pack, ['helper'], [refusal('helper', 'factory')]],
       [join(pack, 'plan'), [], [refusal('helper', 'factory')]],
       [pack, ['plan'], [refusal('helper', 'factory')]],
-      [project, ['--workflow-source', pack], [refusal('helper', 'factory')]],
+      [
+        join(pack, 'plan', 'provider'),
+        [],
+        [refusal('helper', 'factory'), "unknown key 'typo' is ignored"],
+      ],
+      // The explicit source wins over the pack the command runs in.
+      [kit, ['--workflow-source', pack], [refusal('helper', 'factory')], [refusal('two', 'kit')]],
       [kit, [], [refusal('two', 'kit')]],
       [kit, ['one'], [refusal('two', 'kit')]],
-      [join(kit, 'one'), [], [refusal('two', 'kit')]],
+      [join(kit, 'one', 'scripts'), [], [refusal('two', 'kit')]],
       [
         broken,
         [],
@@ -3314,7 +3334,8 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
         ],
       ],
     ];
-    for (const [cwd, name, expected] of cases) {
+    mkdirSync(join(kit, 'one', 'scripts'), { recursive: true });
+    for (const [cwd, name, expected, absent = []] of cases) {
       const result = cli(cwd, ['validate', 'workflows', ...name, '--json']);
       expect(result.status, `${cwd} ${name}: ${result.stdout}${result.stderr}`).toBe(1);
       const { results } = JSON.parse(result.stdout) as {
@@ -3322,6 +3343,7 @@ it('refuses a binding to an unlisted workflow wherever the pack is read', async 
       };
       const messages = results.flatMap(r => r.issues.map(i => i.message));
       for (const message of expected) expect(messages).toContain(message);
+      for (const message of absent) expect(messages).not.toContain(message);
     }
 
     // Also when the pack's only listed entrypoint is missing: its declaration is still read.

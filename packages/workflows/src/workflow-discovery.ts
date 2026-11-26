@@ -153,7 +153,7 @@ async function finishDiscovery(
   const ofSourcePack = ({ workflow, source }: WorkflowWithSource): boolean =>
     source === 'project' && sourcePack !== undefined && workflow.pack?.key === sourcePack.key;
   const isSourceSupport = (entry: WorkflowWithSource): boolean =>
-    ofSourcePack(entry) && sourcePack?.support.has(entry.workflow.name) === true;
+    ofSourcePack(entry) && sourcePack?.entrypoints.has(entry.workflow.name) !== true;
   const support = [...legacy.workflows.filter(isSourceSupport), ...installed.support];
   const workflows = [
     ...legacy.workflows.filter(entry => !isSourceSupport(entry)),

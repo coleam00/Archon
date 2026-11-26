@@ -18,12 +18,12 @@ export interface DiscoveryContext extends WorkflowParseContext {
   allErrors: WorkflowLoadError[];
   /**
    * The pack folder the project source is, when it is one: its key, its declared bindings,
-   * and its support workflows, which stay in the project scope so includes expand, then
-   * leave the dispatch catalog.
+   * and the names of its listed files that loaded. Its other workflows stay in the project
+   * scope so includes expand, then leave the dispatch catalog as support.
    */
   sourcePack?: {
     key: string;
     bindings: WorkflowPack['bindings'];
-    support: ReadonlySet<string>;
+    entrypoints: ReadonlySet<string>;
   };
 }
