@@ -2679,6 +2679,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2716,6 +2717,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2740,6 +2742,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
@@ -2938,6 +2941,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
       }>;
@@ -2973,6 +2977,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly report: {
         readonly type: 'degraded';
@@ -3444,6 +3449,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -3481,6 +3487,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -3505,6 +3512,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
@@ -3703,6 +3711,7 @@ declare module 'archon:script' {
             readonly id: string;
             readonly projectKey: string;
             readonly key: string;
+            readonly title?: string | null;
           };
           readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
         }>;
@@ -3738,6 +3747,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly report: {
           readonly type: 'degraded';
