@@ -104,6 +104,42 @@ describe('measureChangeSize', () => {
     });
   });
 
+  test('counts a submodule pointer when the repository ignores submodules', async () => {
+    const submodule = repo();
+    const { dir } = repo();
+    git(dir, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', submodule.dir, 'sub');
+    const withSubmodule = commit(dir);
+    git(dir, 'config', 'diff.ignoreSubmodules', 'all');
+
+    writeFileSync(join(dir, 'a.txt'), lines(4));
+    const ordinaryChange = commit(dir);
+    const ordinaryRun = itemRun('ordinary-1', withSubmodule);
+    expect(await measureChangeSize(store([ordinaryRun]), ordinaryRun, dir, ordinaryChange)).toEqual(
+      {
+        base: withSubmodule,
+        commit: ordinaryChange,
+        files: 1,
+        added: 4,
+        removed: 0,
+      }
+    );
+
+    writeFileSync(join(submodule.dir, 'next.txt'), 'next\n');
+    const submoduleHead = commit(submodule.dir);
+    git(join(dir, 'sub'), 'fetch', '-q', 'origin');
+    git(join(dir, 'sub'), 'checkout', '-q', submoduleHead);
+    const pointerChange = commit(dir);
+    const pointerRun = itemRun('pointer-1', ordinaryChange);
+
+    expect(await measureChangeSize(store([pointerRun]), pointerRun, dir, pointerChange)).toEqual({
+      base: ordinaryChange,
+      commit: pointerChange,
+      files: 1,
+      added: 1,
+      removed: 1,
+    });
+  });
+
   test('a run on a handed-on checkout measures from where the build it took was cut', async () => {
     const { dir, cutFrom } = repo();
     writeFileSync(join(dir, 'a.txt'), lines(40));

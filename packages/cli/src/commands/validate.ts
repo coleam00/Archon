@@ -13,6 +13,7 @@ import {
   type WorkflowLoadError,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
+import { declaredStops, nearestPackBindings } from '@archon/workflows/pack-graph';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
@@ -215,6 +216,7 @@ async function collectWorkflowResults(
     );
   }
 
+  const stops = stopIssues(workflowEntries);
   for (const { workflow, source, parseWarnings } of workflowEntries) {
     const issues = await validateWorkflowResources(
       workflow,
@@ -246,10 +248,52 @@ async function collectWorkflowResults(
       }
     }
 
+    issues.push(...(stops.get(workflow.name) ?? []));
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
   return results;
+}
+
+/** What a run leaves, named in the singular, for a stop that holds only without it. */
+const LEFT = { asks: 'ask', waits: 'wait' } as const;
+
+/**
+ * Each outcome of a step workflow that stops its item when only the bindings its pack
+ * declares start stages, by workflow name: a pack's stages read together with the pack's
+ * declarations, a workflow outside a pack on its own, which no declaration starts anything
+ * from. A warning: a deliberate stop is legal, and the attention queue lists the item when
+ * it happens.
+ */
+function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, ValidationIssue[]> {
+  const groups = new Map<string, WorkflowWithSource[]>();
+  for (const entry of entries) {
+    // A workflow outside a pack is a group of its own.
+    const key = entry.workflow.pack?.key ?? `\0${entry.workflow.name}`;
+    groups.set(key, [...(groups.get(key) ?? []), entry]);
+  }
+  const issues = new Map<string, ValidationIssue[]>();
+  for (const [key, workflows] of groups) {
+    const stages = workflows.map(entry => entry.workflow);
+    for (const { stage, outcome, unless } of declaredStops(
+      key,
+      stages,
+      nearestPackBindings(workflows)
+    ))
+      issues.set(stage, [
+        ...(issues.get(stage) ?? []),
+        {
+          level: 'warning',
+          field: 'stops',
+          message:
+            unless.length === 0
+              ? `outcome '${outcome}' starts no step on the item, leaves no ask or wait and ends nothing: a run that ends with it stops its item`
+              : `outcome '${outcome}' starts no step on the item and ends nothing: a run that ends with it and leaves no ${unless.map(part => LEFT[part]).join(' or ')} stops its item`,
+          hint: 'List it in returns.ends when it finishes the item, bind a step on it (a stage that observes its item does not move it on), or declare observes: true when the workflow is not a step of its item. A stop is listed in `archon workflow attention`.',
+        },
+      ]);
+  }
+  return issues;
 }
 
 /**

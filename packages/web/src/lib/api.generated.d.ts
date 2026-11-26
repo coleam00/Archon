@@ -5316,6 +5316,10 @@ export interface components {
             groupId: string;
             iteration: number;
           }[];
+          fanOutPath?: {
+            scope: string;
+            identity: string;
+          }[];
           checkoutStart?:
             | {
                 /** @enum {string} */
@@ -6222,6 +6226,7 @@ export interface components {
         };
       };
       returns?: string;
+      observes?: boolean;
       deprecated?: {
         message: string;
       };
@@ -6238,7 +6243,7 @@ export interface components {
           cost: string;
         }[];
         waits?: string;
-        final?: string[];
+        ends?: string[];
         summary?: string;
       };
     };
@@ -7065,6 +7070,10 @@ export interface components {
             loopPath: {
               groupId: string;
               iteration: number;
+            }[];
+            fanOutPath?: {
+              scope: string;
+              identity: string;
             }[];
             checkoutStart?:
               | {
@@ -9519,6 +9528,15 @@ export interface components {
           state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
         }[];
       } | null;
+      dependsOn: {
+        item: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        /** @enum {string} */
+        state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+      }[];
       degraded: (
         | {
             /** @enum {string} */
@@ -10471,6 +10489,15 @@ export interface components {
             state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
           }[];
         } | null;
+        dependsOn: {
+          item: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** @enum {string} */
+          state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+        }[];
         degraded: (
           | {
               /** @enum {string} */
@@ -10630,11 +10657,6 @@ export interface components {
             /** @enum {string} */
             kind: 'queued_start';
             requestId: string;
-          }
-        | {
-            /** @enum {string} */
-            kind: 'held_start';
-            receiptId: string;
           }
         | {
             /** @enum {string} */
@@ -12550,9 +12572,11 @@ export interface components {
           values: {
             value: string;
             startsNothing: boolean;
-            final: boolean;
+            ends: boolean;
+            stops: boolean;
           }[];
         } | null;
+        observes: boolean;
         asks: boolean;
         waits: boolean;
         nodes: {

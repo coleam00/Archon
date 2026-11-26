@@ -1,11 +1,12 @@
 import type { createProviderLimitDeadlineResolver } from '../executor-shared';
+import { nodeInvocationKey } from '../node-record-reader';
 import type { ContainerPauseBoundary } from './pause';
 import type { InteractionAdmission } from '../interaction-admission';
 import { newNodeInvocation, startNodeExecution } from '../node-execution';
 import { observeCheckout } from '../checkout-observation';
 import { buildAiNodeEnvironment } from '../exec-environment';
 import type { NodeExecutionResult } from '../node-record-serialization';
-import type { NodeExecutionRecord, NodeInvocation } from '../schemas/node-execution';
+import type { FanOutFrame, NodeExecutionRecord, NodeInvocation } from '../schemas/node-execution';
 import type { CheckoutObservation } from '../schemas/checkout-observation';
 import type { ReturnsCheckout } from '../run-result';
 import type { createRunToolCallAttention } from '../tool-call-attention';
@@ -264,6 +265,8 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   stepNamePrefix: string;
   /** Complete runtime loop_group lineage for typed body artifacts; empty at top level. */
   loopGroupPath: NodeArtifactLoopFrame[];
+  /** The composed fan-out instances this walk runs in, outermost first; empty outside one. */
+  fanOutPath: readonly FanOutFrame[];
   /**
    * One {@link LoopBodyScope} per enclosing loop_group iteration, outermost first; empty
    * outside a loop_group body. Every body node template resolves its `$LOOP_PREV.*` and
@@ -303,7 +306,7 @@ export function beginExecution(
     checkoutStart?: CheckoutObservation;
   } = {}
 ): NodeExecutionRecord {
-  let invocation = ctx.nodeInvocation ?? newNodeInvocation(ctx.loopGroupPath);
+  let invocation = ctx.nodeInvocation ?? newWalkInvocation(ctx);
   if (options.checkoutStart !== undefined && invocation.checkoutStart === undefined) {
     invocation = { ...invocation, checkoutStart: options.checkoutStart };
   }
@@ -317,6 +320,19 @@ export function beginExecution(
   });
   ctx.currentExecution = execution;
   return execution;
+}
+
+/** A new invocation of a node in this walk, naming the loop frames and instances it runs in. */
+function newWalkInvocation(
+  ctx: Pick<RunLayersContext, 'loopGroupPath' | 'fanOutPath'>
+): NodeInvocation {
+  return { ...newNodeInvocation(ctx.loopGroupPath), fanOutPath: [...ctx.fanOutPath] };
+}
+
+/** The invocation a node of this walk runs under: one a prior pass left unfinished, or new. */
+export function walkInvocation(ctx: RunLayersContext, nodeId: string): NodeInvocation {
+  const key = nodeInvocationKey(ctx.stepNamePrefix + nodeId, ctx.loopGroupPath);
+  return ctx.unfinishedInvocations?.get(key)?.invocation ?? newWalkInvocation(ctx);
 }
 
 /**

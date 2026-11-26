@@ -372,6 +372,7 @@ test('with --project, the item metrics a pack declares are reported over the win
     listSkippedItemStarts: async () => [],
     getInstallHold: async () => null,
     listHeldItemStarts: async () => [],
+    listItemStarts: async () => [],
     listItemLinks: async () => [],
   };
   const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-item-metrics-')));

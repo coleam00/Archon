@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -167,6 +168,7 @@ function createSetupRun(
         : {}),
       ...(resolvedInputs ? { [SUBRUN_METADATA_KEYS.inputs]: resolvedInputs } : {}),
       ...(declaredContinuation ? { [CONTINUATION_METADATA_KEY]: declaredContinuation.stamp } : {}),
+      ...observesItemMetadata(workflow),
     },
     ...(declaredContinuation ? { adopted_from_run_id: declaredContinuation.run.id } : {}),
   });

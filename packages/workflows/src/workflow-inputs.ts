@@ -186,11 +186,11 @@ export function parseInputAssignments(
   valueLabel: 'value' | 'path' = 'value'
 ): Record<string, string> {
   const parsed: Record<string, string> = {};
-  for (const assignment of assignments) {
+  for (const [index, assignment] of assignments.entries()) {
     const eq = assignment.indexOf('=');
     if (eq === -1) {
       throw new WorkflowInputContractError(
-        `Invalid input assignment '${assignment}': expected 'name=${valueLabel}'.`
+        `Invalid input assignment at position ${index + 1}: expected 'name=${valueLabel}'.`
       );
     }
     const name = assignment.slice(0, eq);

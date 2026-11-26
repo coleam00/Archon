@@ -1,3 +1,4 @@
+import type { ItemStart } from '@archon/workflows/schemas/item-role';
 import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
@@ -40,6 +41,8 @@ import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
 import * as installHold from '../db/install-hold';
+import { queuedItemStarts } from '../db/item-step';
+import { isOutcomeUnknownRun } from '@archon/workflows/unknown-outcome';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
 import { listMetricRecords } from '../db/workflow-metrics';
@@ -173,6 +176,57 @@ async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
 }
 
 /**
+ * Every start on item `itemId` that has no run yet (`ItemStart`): its queued requests, and
+ * its unprepared bindings, those naming its key whose checkout is in its project, matched as
+ * `listHeldItemStarts` matches them. The one reader of an item's starts for the end rule,
+ * `workflow end` and the stop rule.
+ */
+async function listItemStarts(itemId: string): Promise<ItemStart[]> {
+  const item = await itemsDb.getItem(itemId);
+  if (!item) return [];
+  const db = getDatabase();
+  const starts: ItemStart[] = await queuedItemStarts(db.query.bind(db), itemId);
+  for (const { cwd, ...start } of await installHold.listUnpreparedStarts(item.key)) {
+    if (cwd === null || (await launchProjectKeyOf(cwd)) !== item.projectKey) continue;
+    starts.push({ phase: 'unprepared', ...start, role: 'unprepared' });
+  }
+  return starts;
+}
+
+/**
+ * The runs that stopped their item (`itemStopsDb.listStoppedItemRuns`), less those a start
+ * they caused still holds back: a start on the run's own item, caused by its end, its settled
+ * asks or one of its nodes, that has no run yet and is not an observer (`ItemStart`). Once
+ * that start's run exists, the store's step rule decides. A run whose outcome is unknown is
+ * never held back: only resuming or abandoning it closes its entry.
+ */
+async function listStoppedItemRuns(): ReturnType<IWorkflowStore['listStoppedItemRuns']> {
+  const candidates = await itemStopsDb.listStoppedItemRuns();
+  const startsOn = new Map<string, Promise<ItemStart[]>>();
+  const stopped: Awaited<ReturnType<IWorkflowStore['listStoppedItemRuns']>> = [];
+  for (const run of candidates) {
+    if ('type' in run || run.item_id === null || isOutcomeUnknownRun(run)) {
+      stopped.push(run);
+      continue;
+    }
+    let read = startsOn.get(run.item_id);
+    if (read === undefined) {
+      read = listItemStarts(run.item_id);
+      startsOn.set(run.item_id, read);
+    }
+    const heldBack = (await read).some(
+      start =>
+        start.role !== 'observer' &&
+        start.cause !== null &&
+        start.cause.kind !== 'receipt' &&
+        start.cause.runId === run.id
+    );
+    if (!heldBack) stopped.push(run);
+  }
+  return stopped;
+}
+
+/**
  * The bindings a process is preparing, each placed in the project its checkout is registered
  * as and on its item when that exists. A checkout that no longer resolves has no project.
  */
@@ -203,7 +257,7 @@ async function bindingProject(cwd: string | null): Promise<Codebase | null> {
 
 /**
  * The refused starts no run caused, each placed in its project and on its item when those
- * resolve, less those whose item has had a run since: the item moved on.
+ * resolve, less those whose item has had a step since: the item moved on.
  */
 async function listRefusedStarts(): Promise<RefusedStart[]> {
   const starts: RefusedStart[] = [];
@@ -247,6 +301,7 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
+    listItemStarts,
     listPreparingStarts,
     listRefusedStarts,
     getRunLimit: installHold.getRunLimit,
@@ -301,7 +356,7 @@ export function createWorkflowStore(): IWorkflowStore {
       itemAsksDb.withdrawItemAsk(input, await asksSettledStarts(input.askId)),
     listOpenItemWaits: itemWaitsDb.listOpenItemWaits,
     withdrawItemWaits: itemWaitsDb.withdrawItemWaits,
-    listStoppedItemRuns: itemStopsDb.listStoppedItemRuns,
+    listStoppedItemRuns,
     listUnfinishedRuns,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,

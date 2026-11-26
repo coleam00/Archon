@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import type {
   HeldPreparation,
   RefusedPreparation,
@@ -222,6 +223,7 @@ function bindingRunMetadata(
     [RESOURCE_START_METADATA_KEY]: { ...origin },
     [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false,
     ...(handoff ? { [CHECKOUT_HANDOFF_METADATA_KEY]: { ...handoff } } : {}),
+    ...observesItemMetadata(workflow),
     ...authoredInputsMetadata(inputs),
     ...(preparedAi.runConfigMetadata
       ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }

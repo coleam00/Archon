@@ -617,6 +617,7 @@ export const mockHydrateResumableRun = mock<
   priorCompletedNodes: new Map(),
   priorFailedNodes: new Map(),
   resumeCause: run.status === 'paused' ? 'continue_after_wait' : 'retry_failed',
+  claimedByHand: true,
   priorUsage: { costUsd: 0 },
   priorNodeSessions: [],
 }));

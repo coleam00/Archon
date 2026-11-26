@@ -38,6 +38,7 @@ import { itemEndDegradedSchema, itemEndSchema } from './schemas/item-end';
 import { readHoldingItemEnd } from './item-end';
 import { readRunItemId } from './item-of-run';
 import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
+import { itemDependencySchema, readDependsOn } from './item-depends-on';
 import { readWorkOrder } from './work-order';
 import { workOrderMemberUnreadableSchema, workOrderSchema } from './schemas/work-order';
 import { recordSurfaceSchema } from './schemas/record-surface';
@@ -330,7 +331,7 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * after the end, or a start waits on it in `queued` or `held`. Null when the item was
  * never ended, the end no longer holds, or its row could not be read (`end_unreadable`, by
  * `endId`). `workOrder`: see `WorkOrder`; null when nothing is `part_of` the item, and a
- * member part that could not be read is `member_unreadable`. `waits` are what the item waits for outside Archon:
+ * member part that could not be read is `member_unreadable`. `dependsOn`: see `ItemDependency`. `waits` are what the item waits for outside Archon:
  * the open waits completed runs left on it (`returns.waits`), each with when it opened and
  * fell due, and `overdue` once that time has passed. An overdue set is also among
  * `questions`. `startLimits` are the start limits bindings counted on the item, each with
@@ -354,6 +355,7 @@ export const itemReadSchema = z.object({
   landing: resolvedItemLandingSchema.nullable(),
   ended: itemEndSchema.nullable(),
   workOrder: workOrderSchema.nullable(),
+  dependsOn: z.array(itemDependencySchema),
   degraded: z.array(
     z.discriminatedUnion('reason', [
       attentionDegradedSchema,
@@ -388,6 +390,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'readItemStartLimits'
       | 'getInstallHold'
       | 'listHeldItemStarts'
+      | 'listItemStarts'
       | 'getRunLimit'
     >;
   /** Observes an awaiting start's executor; without it, the start reads `unknown`. */
@@ -698,7 +701,7 @@ async function readEnd(source: ItemReadSource, itemId: string) {
   return { ended: end, degraded: [] };
 }
 
-/** The facts on the item itself: rulings, links, merge, landing, end, and its work order. */
+/** The facts on the item itself: rulings, links, merge, landing, end, work order, dependsOn. */
 async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
   const itemId = item.id;
   const rulingReads = await source.store.listItemRulings(itemId);
@@ -719,6 +722,7 @@ async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
     landing: landing.landing,
     ended: end.ended,
     workOrder: workOrder.workOrder,
+    dependsOn: await readDependsOn(source.store, itemId, linkReads),
     degraded: [
       ...unreadableRulings,
       ...unreadableMerge,

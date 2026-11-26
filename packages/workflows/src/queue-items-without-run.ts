@@ -4,10 +4,12 @@
  * (`returns.waits`, see `schemas/item-wait.ts`). A host joins them to the one reader through
  * `AttentionQueueSource.itemsWithoutRun`. A wait's deadline raises attention and wakes
  * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
- * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
- * `readItemStopped`), or a failed top-level run, is listed while it is the newest run on the
- * item, the item's end does not hold (`item-end.ts`) and no merge is recorded on it
- * (`getItemMerge`); it takes no answer.
+ * it, or it is withdrawn by its `wait:` ref. A completed step that stopped its item (see
+ * `readItemStopped`), or a failed top-level step, is listed while it is the newest step on
+ * the item (a run that observes it is no step), the item's end does not hold (`item-end.ts`) and no merge is recorded on it
+ * (`getItemMerge`); a completed quiet stop is also left out while the item depends on an open
+ * item (`item-depends-on.ts`). It takes no answer. Asks and waits on an item whose end holds
+ * are left out too: an item at rest asks nothing.
  */
 import { createLogger } from '@archon/paths';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
@@ -35,8 +37,10 @@ import {
   type StoppedQueueItem,
   type UnreadableStartQueueItem,
 } from './attention-queue';
+import { readDependsOn, waitsOn } from './item-depends-on';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
+import { readOwnClose } from './work-order';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
 import type { TerminalRecord } from './schemas/terminal-record';
@@ -57,6 +61,23 @@ export type AskItemStore = Pick<
   IWorkflowStore,
   'listOpenItemAsks' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
 >;
+
+/**
+ * Whether the end on item `itemId` holds, read once per item for one listing. An item at
+ * rest asks nothing: its open asks and waits stay recorded, and show again if a newer step
+ * opens it.
+ */
+function endHoldsOn(store: ItemEndStore): (itemId: string) => Promise<boolean> {
+  const read = new Map<string, Promise<boolean>>();
+  return itemId => {
+    let holds = read.get(itemId);
+    if (holds === undefined) {
+      holds = readHoldingItemEnd(store, itemId).then(end => end !== null && !('type' in end));
+      read.set(itemId, holds);
+    }
+    return holds;
+  };
+}
 
 /**
  * The queue item an ask is: a `select` question with the reserved `other` option, held by
@@ -107,12 +128,20 @@ export async function askQueueItem(
   };
 }
 
-/** The open asks as queue items, for `AttentionQueueSource.itemsWithoutRun`. */
-export async function openAskItems(store: AskItemStore): Promise<AttentionRead<AskQueueItem>[]> {
+/**
+ * The open asks as queue items, for `AttentionQueueSource.itemsWithoutRun`, but for those on
+ * an item whose end holds (`readHoldingItemEnd`).
+ */
+export async function openAskItems(
+  store: AskItemStore & ItemEndStore
+): Promise<AttentionRead<AskQueueItem>[]> {
   const codebases: CodebaseCache = new Map();
+  const ended = endHoldsOn(store);
   const items: AttentionRead<AskQueueItem>[] = [];
-  for (const ask of await store.listOpenItemAsks())
-    items.push(isAttentionDegraded(ask) ? ask : await askQueueItem(store, ask, codebases));
+  for (const ask of await store.listOpenItemAsks()) {
+    if (isAttentionDegraded(ask)) items.push(ask);
+    else if (!(await ended(ask.itemId))) items.push(await askQueueItem(store, ask, codebases));
+  }
   return items;
 }
 
@@ -169,17 +198,22 @@ export function waitSets(
 
 /**
  * The sets of open waits past their deadline at `now`, as queue items, for
- * `AttentionQueueSource.itemsWithoutRun`. A wait's deadline raises attention and wakes
- * nothing: the set stays open, and a later event still meets it.
+ * `AttentionQueueSource.itemsWithoutRun`, but for those on an item whose end holds. A wait's
+ * deadline raises attention and wakes nothing: the set stays open, and a later event still
+ * meets it.
  */
 export async function overdueWaitItems(
-  store: WaitItemStore,
+  store: WaitItemStore & ItemEndStore,
   now: Date = new Date()
 ): Promise<AttentionQueueItemWithoutRun[]> {
   const codebases: CodebaseCache = new Map();
+  const ended = endHoldsOn(store);
   const items: AttentionQueueItemWithoutRun[] = [];
   for (const set of waitSets(await store.listOpenItemWaits()))
-    if (set.some(wait => Date.parse(wait.deadlineAt) <= now.getTime()))
+    if (
+      set.some(wait => Date.parse(wait.deadlineAt) <= now.getTime()) &&
+      !(await ended(set[0].itemId))
+    )
       items.push(await waitQueueItem(store, set, codebases));
   return items;
 }
@@ -187,7 +221,12 @@ export async function overdueWaitItems(
 /** The store reads a stopped item's queue item needs. */
 export type StoppedItemStore = Pick<
   IWorkflowStore,
-  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase' | 'getItemMerge'
+  | 'listStoppedItemRuns'
+  | 'listEventsForRuns'
+  | 'getItem'
+  | 'getCodebase'
+  | 'getItemMerge'
+  | 'listItemLinks'
 > &
   ItemEndStore;
 
@@ -305,6 +344,7 @@ export async function stoppedItems(
     }
     // A run whose outcome is unknown stays until resumed or abandoned, even past an item end.
     if (!isOutcomeUnknownRun(run) && (await isItemDone(store, run.item_id))) continue;
+    if (await waitsOnOpenItem(store, run)) continue;
     const unknownNodes = isOutcomeUnknownRun(run)
       ? liveUnknownOutcomes(run, unknownEvents.get(run.id) ?? [])
       : [];
@@ -325,11 +365,19 @@ export async function stoppedItems(
  * unreadable end or merge row reads as not done, so it does not hide the stop.
  */
 async function isItemDone(store: StoppedItemStore, itemId: string | null): Promise<boolean> {
-  if (itemId === null) return false;
-  const end = await readHoldingItemEnd(store, itemId);
-  if (end !== null && !('type' in end)) return true;
-  const merge = await store.getItemMerge(itemId);
-  return merge !== null && !('type' in merge);
+  return itemId !== null && (await readOwnClose(store, itemId)) !== null;
+}
+
+/**
+ * Whether `run` is a completed, quiet stop of an item that waits on an open item. A stop
+ * that names a refused start or a limit needs someone whatever the item waits on.
+ */
+async function waitsOnOpenItem(store: StoppedItemStore, run: WorkflowRun): Promise<boolean> {
+  if (run.status !== 'completed' || run.item_id === null) return false;
+  const stopped = readItemStopped(run.metadata);
+  if (stopped?.limit !== undefined || stopped?.refused !== undefined) return false;
+  const links = await store.listItemLinks(run.item_id);
+  return waitsOn(await readDependsOn(store, run.item_id, links)).length > 0;
 }
 
 /** The store reads a lost preparation's queue item needs. */

@@ -23,6 +23,7 @@ export const FRESH_RUN_FORBIDDEN_OPTIONS = [
   'priorCompletedNodes',
   'priorFailedNodes',
   'resumeCause',
+  'claimedByHand',
   'priorUsage',
   'priorNodeSessions',
 ] as const satisfies readonly (keyof ExecuteWorkflowOptions)[];
