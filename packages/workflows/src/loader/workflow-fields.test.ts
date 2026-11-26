@@ -329,6 +329,7 @@ describe('workflow-level field parity (#2457)', () => {
     },
     // `returns` must name a real top-level node id — the fixture's single node is `only`.
     returns: { yaml: 'returns: only', present: w => w.returns === 'only' },
+    observes: { yaml: 'observes: true', present: w => w.observes === true },
     deprecated: {
       yaml: 'deprecated:\n  message: Switch instead.',
       present: w => w.deprecated?.message === 'Switch instead.',

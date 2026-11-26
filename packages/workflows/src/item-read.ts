@@ -387,6 +387,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'readItemStartLimits'
       | 'getInstallHold'
       | 'listHeldItemStarts'
+      | 'listItemStarts'
       | 'getRunLimit'
     >;
   /** Observes an awaiting start's executor; without it, the start reads `unknown`. */

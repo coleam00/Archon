@@ -243,9 +243,9 @@ export interface IWorkflowStore
     input: { rulingId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
   /**
-   * The newest end on an item while no run on it is live or started or resumed since, and
-   * no start is queued on it (`schemas/item-end.ts`), or null. Held trigger starts are left
-   * to `readHoldingItemEnd`. An unreadable row is reported, not thrown.
+   * The newest end on an item while no step on it is live or started or resumed since, or
+   * null. Runs only: readers call `readHoldingItemEnd`, which adds `listItemStarts`. An
+   * unreadable row is reported, not thrown.
    */
   getHoldingItemEnd(
     itemId: string
@@ -369,8 +369,8 @@ export interface IWorkflowStore
    */
   withdrawItemWaits(runId: string): Promise<ItemWaitsWithdrawResult>;
   /**
-   * Runs that stopped their item (`readItemStopped`, or a failed top-level run) while its last
-   * run, and every run that failed with stop reason `outcome_unknown` until resumed or abandoned.
+   * Steps (not `observes: true` runs) that stopped their item while its last step, and every
+   * run that failed with stop reason `outcome_unknown` until resumed or abandoned.
    */
   listStoppedItemRuns(): Promise<AttentionRead<WorkflowRun>[]>;
   /** Top-level `pending`, `running` or `paused` runs, oldest first; see `OwnerObserver`. */
@@ -624,6 +624,9 @@ export interface IWorkflowStore
    *
    * `result.waits` is the same for `returns.waits`: the open waits of that workflow on the
    * run's item close as `replaced` and these open, in the same transaction.
+   *
+   * `result.end` is the end its outcome records on the item (`returns.ends`), likewise, `via:
+   * engine` from this run and its returns `node`; refused for a run with no item.
    */
   completeWorkflowRun(
     id: string,
@@ -635,6 +638,7 @@ export interface IWorkflowStore
       linkedStarts?: readonly LinkedRunEndedStart[];
       asks?: readonly ItemAsk[];
       waits?: readonly ItemWait[];
+      end?: { readonly reason: string; readonly node: string };
     }
   ): Promise<{ startReceipts: SourceReceiptAcceptance[] }>;
   /**

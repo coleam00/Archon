@@ -17,6 +17,7 @@ import { INSTALL_HOLD_ID, lockAdmission, readInstallHold } from './resource-slot
 import { readRunLimitWaiting } from './run-room';
 import { parseStoredJson, storedWorkflowName } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
+import { storedStartCause } from './item-step';
 import { parseProcessOwner, type ProcessOwner } from '@archon/paths/process-owner';
 import { loadRunLimit } from '../config/concurrency-config';
 
@@ -143,6 +144,49 @@ function storedPreparer(stored: unknown): ProcessOwner | null {
     // Unreadable is unknown, never gone: the start is listed nowhere as lost.
     return null;
   }
+}
+
+/**
+ * The bindings on item key `itemKey` that have not been prepared yet: waiting, being prepared,
+ * or retrying after a preparation that failed, under the install hold or not. Each carries its
+ * checkout, which `store-adapter` resolves to the item's project, and its cause. Its role is
+ * `unprepared` (`item-step.ts`): nothing records one before preparation.
+ */
+export async function listUnpreparedStarts(itemKey: string): Promise<
+  {
+    receiptId: string;
+    bindingId: string;
+    cwd: string | null;
+    cause: ReturnType<typeof storedStartCause>;
+  }[]
+> {
+  const rows = await getDatabase().query<{
+    receipt_id: string;
+    binding_id: string;
+    intent: unknown;
+    source_instance_id: string;
+    source_actor: unknown;
+  }>(
+    `SELECT CAST(b.receipt_id AS TEXT) AS receipt_id, b.binding_id, b.intent,
+            r.source_instance_id, r.source_actor
+       FROM remote_agent_start_receipt_bindings b
+       JOIN remote_agent_start_receipts r ON r.id = b.receipt_id
+      WHERE r.outcome = 'matched'
+        AND b.preparation_status IN ('pending', 'preparing', 'failed')
+        AND COALESCE(b.item_key, r.item_key) = $1
+      ORDER BY b.created_at, b.binding_id`,
+    [itemKey]
+  );
+  return rows.rows.map(row => ({
+    receiptId: row.receipt_id,
+    bindingId: row.binding_id,
+    cwd: heldIntent(row.intent)?.cwd ?? null,
+    cause: storedStartCause({
+      id: row.receipt_id,
+      sourceInstanceId: row.source_instance_id,
+      sourceActor: row.source_actor,
+    }),
+  }));
 }
 
 export async function listHeldStarts(): Promise<HeldStart[]> {
