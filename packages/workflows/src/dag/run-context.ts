@@ -1,4 +1,5 @@
 import type { createProviderLimitDeadlineResolver } from '../executor-shared';
+import { nodeInvocationKey } from '../node-record-reader';
 import type { ContainerPauseBoundary } from './pause';
 import type { InteractionAdmission } from '../interaction-admission';
 import { newNodeInvocation, startNodeExecution } from '../node-execution';
@@ -322,10 +323,16 @@ export function beginExecution(
 }
 
 /** A new invocation of a node in this walk, naming the loop frames and instances it runs in. */
-export function newWalkInvocation(
+function newWalkInvocation(
   ctx: Pick<RunLayersContext, 'loopGroupPath' | 'fanOutPath'>
 ): NodeInvocation {
   return { ...newNodeInvocation(ctx.loopGroupPath), fanOutPath: [...ctx.fanOutPath] };
+}
+
+/** The invocation a node of this walk runs under: one a prior pass left unfinished, or new. */
+export function walkInvocation(ctx: RunLayersContext, nodeId: string): NodeInvocation {
+  const key = nodeInvocationKey(ctx.stepNamePrefix + nodeId, ctx.loopGroupPath);
+  return ctx.unfinishedInvocations?.get(key)?.invocation ?? newWalkInvocation(ctx);
 }
 
 /**

@@ -8,7 +8,6 @@ import { ParentStatusReadError } from '../parent-status-read';
 import { isWorkflowExecutionInterruption } from '../execution-interruption';
 import { peerAdmissions } from '../interaction-admission';
 import { findFanOutChildRuns } from './nodes/workflow/fan-out-children';
-import { nodeInvocationKey } from '../node-record-reader';
 import { finishNodeExecution, describeExecutionNode } from '../node-execution';
 import { NodeEventWriteError, recordNodeState } from '../node-event-write';
 import type { DagNode, SessionCursor, SkipCause } from '../schemas';
@@ -33,10 +32,10 @@ import type { OperatorPauseBoundary } from './operator-pause-boundary';
 import { reachedUnknownOutcome } from './unknown-outcome';
 import {
   beginExecution,
-  newWalkInvocation,
   ownsBodySessionCursor,
   type LayerNodeResult,
   type RunLayersContext,
+  walkInvocation,
 } from './run-context';
 import { resolveRunInputs } from './references';
 import { formatPersistedNodeOutput, persistedExecutionOutput } from './node-output';
@@ -144,10 +143,7 @@ async function runLayerPhase(
   const nodeThunks = layer.map(
     (node, index): (() => Promise<LayerNodeResult>) =>
       async (): Promise<LayerNodeResult> => {
-        const invocation =
-          ctx.unfinishedInvocations?.get(
-            nodeInvocationKey(ctx.stepNamePrefix + node.id, ctx.loopGroupPath)
-          )?.invocation ?? newWalkInvocation(ctx);
+        const invocation = walkInvocation(ctx, node.id);
         const nodeCtx: RunLayersContext = {
           ...ctx,
           currentExecution: undefined,
