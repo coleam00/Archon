@@ -1,6 +1,7 @@
 import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, modelCallUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import { sumFanOutTokens, sumReportedCost } from './dag/usage';
+import type { DagResumeEvent } from './dag-resume-snapshot';
 import {
   readDeferredNodeUsageEvent,
   readNodeRecordEvent,
@@ -25,11 +26,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return (cachedLog ??= createLogger('workflow.dag-usage-fold'));
 }
 
-export interface DagUsageRow {
-  step_name: string;
-  event_type: string;
-  data?: string | Record<string, unknown>;
-}
+export type DagUsageRow = DagResumeEvent & { step_name: string };
 
 export interface DagUsageMeasurement {
   tokens:
@@ -60,7 +57,6 @@ export interface DagUsageFold {
   readonly observations: DagUsageObservation[];
   readonly reportedChildUsage: NonNullable<DagResumeSnapshot['reportedChildUsage']>;
   readonly childUsagePaths: Map<string, Set<string>>;
-  readonly opaqueChildUsagePaths: Map<string, Set<string>>;
   readonly unattributedChildUsagePaths: Set<string>;
   readonly latestNodeKindByPath: Map<string, NodeDescriptor['kind']>;
 }
@@ -72,7 +68,6 @@ export function newDagUsageFold(runId: string): DagUsageFold {
     observations: [],
     reportedChildUsage: new Map(),
     childUsagePaths: new Map(),
-    opaqueChildUsagePaths: new Map(),
     unattributedChildUsagePaths: new Set(),
     latestNodeKindByPath: new Map(),
   };
@@ -133,7 +128,6 @@ function recordedNodeKind(type: string | undefined): NodeDescriptor['kind'] | un
 }
 
 function recordChildUsagePath(fold: DagUsageFold, childRunId: string, path: string): void {
-  fold.opaqueChildUsagePaths.delete(childRunId);
   const paths = fold.childUsagePaths.get(childRunId) ?? new Set<string>();
   paths.add(path);
   fold.childUsagePaths.set(childRunId, paths);
@@ -162,14 +156,7 @@ export function foldDagUsageRecord(
   foldNodeUsage(fold, row, record, evidence);
 }
 
-export function foldDagUsage(
-  rows: readonly {
-    step_name?: string | null;
-    event_type: string;
-    data?: string | Record<string, unknown>;
-  }[],
-  runId: string
-): DagUsageFold {
+export function foldDagUsage(rows: readonly DagResumeEvent[], runId: string): DagUsageFold {
   const fold = newDagUsageFold(runId);
   for (const row of rows) {
     if (!row.step_name) continue;
@@ -287,7 +274,7 @@ function addUsage(
   rawUsage: ReadNodeRecordEvent['rawUsage'],
   execution?: Pick<NodeExecutionMetadata, 'spend'>,
   evidence?: DagUsageObservation
-): void {
+): UsageContribution | undefined {
   const contribution = readUsage(fold, stepName, rawUsage, execution, evidence);
   if (
     contribution.costPartial ||
@@ -296,6 +283,7 @@ function addUsage(
     contribution.costUsd !== undefined
   ) {
     fold.usageContributions.push(contribution);
+    return contribution;
   }
 }
 
@@ -389,10 +377,6 @@ function replaceInstanceSegment(
   stepName: string
 ): readonly UsageContribution[] {
   const prefix = `${stepName}__`;
-  for (const [childRunId, paths] of fold.childUsagePaths) {
-    const replaced = [...paths].filter(path => path.startsWith(prefix));
-    if (replaced.length > 0) fold.opaqueChildUsagePaths.set(childRunId, new Set(replaced));
-  }
   const covered = fold.usageContributions.filter(contribution =>
     contribution.stepName.startsWith(prefix)
   );
@@ -428,21 +412,11 @@ function foldNodeUsage(
       }
       fold.usageContributions.push(contribution);
     } else {
-      addNodeUsage(fold, record, evidence, coveredContributions);
+      const contribution = addUsage(fold, record.path, record.rawUsage, metadata, evidence);
+      if (contribution !== undefined && coveredContributions !== undefined) {
+        contribution.coveredContributions = coveredContributions;
+      }
     }
-  }
-}
-
-function addNodeUsage(
-  fold: DagUsageFold,
-  record: ReadNodeRecordEvent,
-  evidence: DagUsageObservation,
-  coveredContributions: readonly UsageContribution[] | undefined
-): void {
-  const before = fold.usageContributions.length;
-  addUsage(fold, record.path, record.rawUsage, record.metadata, evidence);
-  if (coveredContributions !== undefined && fold.usageContributions.length > before) {
-    fold.usageContributions[before].coveredContributions = coveredContributions;
   }
 }
 
