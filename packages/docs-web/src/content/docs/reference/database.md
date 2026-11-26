@@ -321,7 +321,6 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_start_receipts`** - Source delivery receipts
   - Records source instance, delivery ID, content digest, timestamps, and matching outcome
   - Nullable `item_key` is the key the start named (`trigger fire --item`, or inherited from the firing run), recorded before the item's project is known
-  - `priority` is 1 when the fire asked for its item to have priority (`trigger fire --priority`), 0 otherwise. Preparation writes the item's `remote_agent_item_priorities` row when it resolves the item, in the transaction that admits the start; a replayed delivery is not prepared again, so it changes nothing
   - Deduplicates deliveries by `(source_instance_id, delivery_id)` when the source supplies a delivery ID; `delivery_id` is nullable, and the unique constraint does not deduplicate receipts without one
 
 - **`remote_agent_items`** - The durable thing runs are about

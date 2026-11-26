@@ -6,6 +6,8 @@ import type {
 } from '@archon/workflows/schemas/resource-start';
 import { getDatabase } from './connection';
 import { resolveWakes } from './item-waits';
+import { giveItemPriority } from './item-priorities';
+import { ensureItemInProject } from './items';
 import type { TransactionQuery as Query } from './resource-slots';
 
 /**
@@ -24,13 +26,46 @@ export async function acceptStartReceipt(
   for (const binding of input.bindings)
     if (binding.wake !== undefined)
       projectKeys.set(binding.bindingId, await projectKeyOf(binding.launch.cwd));
-  return getDatabase().withTransaction(query =>
-    insertStartReceipt(
+  const priority = await priorityTargets(input, projectKeyOf);
+  return getDatabase().withTransaction(async query => {
+    const accepted = await insertStartReceipt(
       query,
       input,
       projectKeys.size === 0 ? undefined : claimed => resolveWakes(query, claimed, projectKeys)
-    )
-  );
+    );
+    // Only the acceptance that claims the delivery gives priority; a replay changes nothing.
+    if (!accepted.replay)
+      for (const target of priority)
+        await giveItemPriority(
+          query,
+          await ensureItemInProject(query, target.projectKey, target.key)
+        );
+    return accepted;
+  });
+}
+
+/**
+ * The items a receipt asking for priority (`trigger fire --priority`) gives it to: its item
+ * in each of its starts' projects. Priority is a fact on the item, written once here, so no
+ * start carries it to apply later. Every project must already be registered.
+ */
+async function priorityTargets(
+  input: SourceReceiptAcceptance,
+  projectKeyOf: (cwd: string) => Promise<string | null>
+): Promise<{ projectKey: string; key: string }[]> {
+  const key = input.receipt.itemKey;
+  if (!input.receipt.priority) return [];
+  if (key === undefined) throw new Error('A receipt that asks for priority must name its item.');
+  const projects = new Set<string>();
+  for (const binding of input.bindings) {
+    const projectKey = await projectKeyOf(binding.launch.cwd);
+    if (projectKey === null)
+      throw new Error(
+        `Cannot give item '${key}' priority: '${binding.launch.cwd}' is not a registered project.`
+      );
+    projects.add(projectKey);
+  }
+  return [...projects].map(projectKey => ({ projectKey, key }));
 }
 
 /**
@@ -47,8 +82,8 @@ export async function insertStartReceipt(
 ): Promise<{ receiptId: string; replay: boolean }> {
   const inserted = await query(
     `INSERT INTO remote_agent_start_receipts
-     (id, source_instance_id, delivery_id, content_digest, received_at, occurred_at, source_actor, outcome, reason, item_key, priority)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     (id, source_instance_id, delivery_id, content_digest, received_at, occurred_at, source_actor, outcome, reason, item_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
      ON CONFLICT DO NOTHING`,
     [
       input.receipt.id,
@@ -61,7 +96,6 @@ export async function insertStartReceipt(
       input.outcome,
       input.reason ?? null,
       input.receipt.itemKey ?? null,
-      input.receipt.priority ? 1 : 0,
     ]
   );
   if (inserted.rowCount === 0) {

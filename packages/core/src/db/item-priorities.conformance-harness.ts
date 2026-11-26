@@ -4,7 +4,11 @@
  * `makeSqlConformanceHarness` has routed the store to that backend's database.
  */
 import { expect, test } from 'bun:test';
+import { mkdtemp, realpath } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import { removeTempTree } from '@archon/paths/test-utils';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import {
   CONFORMANCE_CODEBASE_ID,
@@ -19,8 +23,8 @@ const byCli = { via: 'cli', by: null, fromRun: null } as const;
 
 type Harness = WorkflowStoreHarness & { db: IDatabase };
 
-async function itemId(store: IWorkflowStore, key: string): Promise<string> {
-  const found = await store.getItemRuns(projectKey, key);
+async function itemId(store: IWorkflowStore, key: string, project = projectKey): Promise<string> {
+  const found = await store.getItemRuns(project, key);
   if (!found) throw new Error(`no item ${key}`);
   return found.item.id;
 }
@@ -41,10 +45,14 @@ async function fireOn(
     resource: string;
     capacity: number;
     item: string;
+    /** The start's checkout; acceptance resolves its project to give priority. */
+    cwd?: string;
     deliveryId?: string;
     priority?: true;
+    /** Accept only, as a fire under the install hold leaves its binding pending. */
+    prepare?: false;
   }
-): Promise<{ replay: boolean; id: string; status: string | undefined }> {
+): Promise<{ replay: boolean; id: string; status: string | undefined; receiptId: string }> {
   const receiptId = crypto.randomUUID();
   const accepted = await store.acceptStartReceipt({
     receipt: {
@@ -69,7 +77,7 @@ async function fireOn(
         capacity: start.capacity,
         overlap: 'queue',
         launch: {
-          cwd: '/conformance',
+          cwd: start.cwd ?? '/conformance',
           workflowName: 'conformance',
           inputs: {},
           isolation: { kind: 'in-place' },
@@ -78,11 +86,40 @@ async function fireOn(
     ],
   });
   const prepared = launch();
-  if (accepted.replay) return { replay: true, id: prepared.run.id, status: undefined };
+  if (accepted.replay || start.prepare === false)
+    return { replay: accepted.replay, id: prepared.run.id, status: undefined, receiptId };
+  return { replay: false, ...(await prepare(store, receiptId, prepared)), receiptId };
+}
+
+/** Prepare a receipt's binding as a host's drain does. */
+async function prepare(
+  store: IWorkflowStore,
+  receiptId: string,
+  prepared: ReturnType<Launch>
+): Promise<{ id: string; status: string | undefined }> {
   const identity = { receiptId, bindingId: 'stage', ownerId: 'owner' };
   expect(await store.claimStartBindingPreparation(identity)).toBe(true);
   const result = await store.completeStartBindingPreparation({ ...identity, launch: prepared });
-  return { replay: false, id: prepared.run.id, status: result?.status };
+  return { id: prepared.run.id, status: result?.status };
+}
+
+/**
+ * A project registered at a real directory, which acceptance resolves a fire's checkout to,
+ * and the launch fixtures of starts prepared in it.
+ */
+async function checkoutProject(db: IDatabase) {
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), 'archon-priority-')));
+  const codebaseId = crypto.randomUUID();
+  await db.query(
+    "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, 'priority', $2)",
+    [codebaseId, cwd]
+  );
+  return {
+    cwd,
+    projectKey: projectKeyForCodebase({ name: 'priority', default_cwd: cwd }, cwd),
+    launch: resourceStartFixtures(codebaseId, CONFORMANCE_CONVERSATION_ID).launch,
+    remove: () => removeTempTree(cwd),
+  };
 }
 
 export function describeItemPriorityConformance(makeHarness: () => Promise<Harness>): void {
@@ -192,19 +229,16 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
     }
   });
 
-  test('a fire that asks for priority gives its item priority once, at preparation, and a replay never again', async () => {
+  test('a fire that asks for priority gives its item priority once, at acceptance, and a replay never again', async () => {
     const harness = await makeHarness();
+    const site = await checkoutProject(harness.db);
     try {
       const { store, db } = harness;
-      const { launch } = resourceStartFixtures(
-        CONFORMANCE_CODEBASE_ID,
-        CONFORMANCE_CONVERSATION_ID
-      );
-      const holder = await fireOn(store, launch, { resource: 'ship', capacity: 1, item: 'h' });
-      const ordinary = await fireOn(store, launch, { resource: 'ship', capacity: 1, item: 'o' });
-      const urgent = await fireOn(store, launch, {
-        resource: 'ship',
-        capacity: 1,
+      const at = { resource: 'ship', capacity: 1, cwd: site.cwd };
+      const holder = await fireOn(store, site.launch, { ...at, item: 'h' });
+      const ordinary = await fireOn(store, site.launch, { ...at, item: 'o' });
+      const urgent = await fireOn(store, site.launch, {
+        ...at,
         item: 'urgent',
         deliveryId: 'urgent-1',
         priority: true,
@@ -214,22 +248,21 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
         'queued',
         'queued',
       ]);
-      const urgentId = await itemId(store, 'urgent');
+      const urgentId = await itemId(store, 'urgent', site.projectKey);
       expect(await store.getItemPriority(urgentId)).toEqual({ own: true, inheritedFrom: [] });
       expect((await store.listQueuedItemStarts(urgentId))[0]?.ahead).toBe(0);
 
       // A retry of the same delivery, even naming another item, leaves priority as it is.
-      await store.clearItemPriority({ projectKey, key: 'urgent' });
-      const retried = await fireOn(store, launch, {
-        resource: 'ship',
-        capacity: 1,
+      await store.clearItemPriority({ projectKey: site.projectKey, key: 'urgent' });
+      const retried = await fireOn(store, site.launch, {
+        ...at,
         item: 'other',
         deliveryId: 'urgent-1',
         priority: true,
       });
       expect(retried.replay).toBe(true);
       expect(await store.getItemPriority(urgentId)).toBeNull();
-      expect(await store.getItemRuns(projectKey, 'other')).toBeNull();
+      expect(await store.getItemRuns(site.projectKey, 'other')).toBeNull();
       await db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
         holder.id,
       ]);
@@ -240,6 +273,37 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
       ).toEqual([ordinary.id]);
     } finally {
       await harness.close();
+      await site.remove();
+    }
+  });
+
+  test('a priority cleared after a fire was accepted stays cleared when the fire is prepared', async () => {
+    const harness = await makeHarness();
+    const site = await checkoutProject(harness.db);
+    try {
+      const { store } = harness;
+      await store.setInstallHold({ setBy: 'operator' });
+      const held = await fireOn(store, site.launch, {
+        resource: 'held',
+        capacity: 1,
+        cwd: site.cwd,
+        item: 'held-item',
+        priority: true,
+        prepare: false,
+      });
+      const heldId = await itemId(store, 'held-item', site.projectKey);
+      expect(await store.getItemPriority(heldId)).toEqual({ own: true, inheritedFrom: [] });
+      expect(
+        await store.clearItemPriority({ projectKey: site.projectKey, key: 'held-item' })
+      ).toEqual({
+        priority: null,
+      });
+      await store.liftInstallHold();
+      expect((await prepare(store, held.receiptId, site.launch())).status).toBe('admitted');
+      expect(await store.getItemPriority(heldId)).toBeNull();
+    } finally {
+      await harness.close();
+      await site.remove();
     }
   });
 }

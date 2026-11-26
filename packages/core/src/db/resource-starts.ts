@@ -58,7 +58,6 @@ import {
 } from './resource-slots';
 import { drainAdmits, runLimitBlocker } from './run-room';
 import {
-  giveItemPriority,
   isQueuedAhead,
   PRIORITY_ITEMS_CTE,
   queuedAheadSql,
@@ -761,24 +760,20 @@ export async function completeStartBindingPreparation(
 /**
  * The item the binding mapped, else the one its receipt named, in the project preparation
  * resolved. It is written with the start request, so a start that waits for capacity
- * already has its item. A receipt that asks for priority gives that item priority here,
- * where the item is first known, in the transaction that admits the start; a replayed
- * delivery is never prepared again, so it changes nothing.
+ * already has its item.
  */
 async function namedItem(
   query: Query,
   input: PreparedBindingInput,
   bindingItemKey: string | null
 ): Promise<{ id: string; key: string } | null> {
-  const receipt = await query<{ item_key: string | null; priority: number | string }>(
-    'SELECT item_key, priority FROM remote_agent_start_receipts WHERE id = $1',
+  const receipt = await query<{ item_key: string | null }>(
+    'SELECT item_key FROM remote_agent_start_receipts WHERE id = $1',
     [input.receiptId]
   );
   const key = bindingItemKey ?? receipt.rows[0]?.item_key;
   if (!key) return null;
-  const id = await ensureItem(query, input.launch.run.codebase_id, key);
-  if (Number(receipt.rows[0]?.priority) === 1) await giveItemPriority(query, id);
-  return { id, key };
+  return { id: await ensureItem(query, input.launch.run.codebase_id, key), key };
 }
 
 export { failStartBindingPreparation } from './refused-preparation';

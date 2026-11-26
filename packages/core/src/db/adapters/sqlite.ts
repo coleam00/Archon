@@ -751,7 +751,6 @@ export class SqliteAdapter implements IDatabase {
         reason TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         item_key TEXT,
-        priority INTEGER NOT NULL DEFAULT 0,
         UNIQUE(source_instance_id, delivery_id)
       );
 

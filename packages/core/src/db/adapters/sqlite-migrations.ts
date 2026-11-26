@@ -504,14 +504,8 @@ function addStartLimitColumns(db: Database): void {
 
 // A receipt records the key a start named; its start request and the run point at the item.
 function addItemColumns(db: Database): void {
-  const receipts = columnNames(db, 'remote_agent_start_receipts');
-  if (!receipts.has('item_key')) {
+  if (!columnNames(db, 'remote_agent_start_receipts').has('item_key')) {
     db.run('ALTER TABLE remote_agent_start_receipts ADD COLUMN item_key TEXT');
-  }
-  if (!receipts.has('priority')) {
-    db.run(
-      'ALTER TABLE remote_agent_start_receipts ADD COLUMN priority INTEGER NOT NULL DEFAULT 0'
-    );
   }
   if (!columnNames(db, 'remote_agent_resource_start_requests').has('item_id')) {
     db.run(
