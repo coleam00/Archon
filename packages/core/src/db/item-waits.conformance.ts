@@ -262,6 +262,10 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
           },
         ],
       });
+      // A wake that maps event fields only keeps them, and takes no checkout.
+      const [started] = (await harness.store.getStartReceipt(id))?.bindings ?? [];
+      expect(started?.intent?.eventInputs?.revision).toBe(HEAD);
+      expect(started?.intent?.checkoutFrom).toBeUndefined();
       // The set closed whole: its other wait is no longer open either.
       expect(await harness.store.listOpenItemWaits()).toEqual([]);
 

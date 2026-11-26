@@ -251,7 +251,10 @@ export function recordedCheckout(
   const recorded = readAsksCheckout({ id: runId, metadata: run.metadata });
   if (recorded === undefined)
     return {
-      refused: `run '${runId}' recorded no checkout when it ended (the binding's checkout was added after it ended, or an older Archon ran it); ${again}`,
+      refused:
+        left === 'asks'
+          ? `run '${runId}' recorded no checkout when it ended (the binding's checkout was added after it ended, or an older Archon ran it); ${again}`
+          : `run '${runId}' recorded no checkout when it ended (its pack declares no wake binding with checkout: waiting-run for '${workflowName}', the binding was added after it ended, or an older Archon ran it); ${again}`,
     };
   if (!('handoff' in recorded)) return recorded;
   // Branch recreation would hand on a checkout the run no longer has, so a removed
@@ -274,9 +277,9 @@ export function askingWorktreeGone(
 /**
  * At the completion of a run on an item that leaves asks or waits: the checkout it left,
  * recorded for the start that follows. For asks, only when an asks-settled binding with
- * `checkout` matches it (its workflow, in the item's project), else undefined. For waits,
- * always: a wake binding is source plugin config, which this path cannot read, so whether
- * one will take the checkout is not known until an event meets the wait. Read once however
+ * `checkout` matches it (its workflow, in the item's project), else undefined. For waits
+ * (`waits`), whenever the caller says a wake binding its pack declares takes the checkout:
+ * that binding is source plugin config, which this path does not read. Read once however
  * many bindings match.
  */
 export function createAsksCheckout(

@@ -2717,8 +2717,9 @@ What the engine does with them:
 A stage that has to wait for something outside Archon (a change's checks finishing, a review
 arriving, a deploy) ends instead of sleeping, and says what its item now waits for.
 `returns: { node: host, waits: waits }` names the property of the returns node's output that
-holds the waits. The run completes and holds no agent session, checkout or capacity slot while
-the item waits. A source plugin's event binding with `wake` starts the next stage on the item
+holds the waits. The run completes and releases its agent session, capacity slot and claim on
+the checkout while the item waits; its worktree is kept only for a wake binding of its pack that
+takes its checkout (`wake.checkout: waiting-run`). A source plugin's event binding with `wake` starts the next stage on the item
 when the event arrives: see [start a stage when what an item waits for
 happens](/guides/workflow-triggers/#start-a-stage-when-what-an-item-waits-for-happens).
 
@@ -2734,7 +2735,7 @@ out of `output_format`. An empty list means the item waits for nothing. A wait h
 
 The property's description, which the model reads with the schema, reads:
 
-> What the item now waits for outside Archon, such as checks finishing or a review arriving on a change. What happens after: this run ends and holds nothing. Each wait opens on the item the run is for. When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item. An event about any other value (an older commit, say) starts nothing. The waits are alternatives: the first one met closes them all. When the set is still open past the time of any of them, the item is listed for an operator as overdue, naming what it waits for. A later completed run of this workflow on the same item replaces the waits still open. Leave the list empty when the item waits for nothing.
+> What the item now waits for outside Archon, such as checks finishing or a review arriving on a change. What happens after: this run ends, and nothing of it keeps running. Each wait opens on the item the run is for. When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item. An event about any other value (an older commit, say) starts nothing. The waits are alternatives: the first one met closes them all. When the set is still open past the time of any of them, the item is listed for an operator as overdue, naming what it waits for. A later completed run of this workflow on the same item replaces the waits still open. Leave the list empty when the item waits for nothing.
 
 The workflow fails to load, naming `returns.waits`, for the same reasons as `returns.asks`:
 no returns node, a returns node with no object `output_format` the engine enforces, a
@@ -3222,9 +3223,10 @@ An event binding with `wake:` starts its workflow on the item of an open
 `wake.workflow`, a workflow of this pack, left, whose `about` is exactly the value of the event
 field `wake.about`. `{ wait: true }` passes the met wait. `{ input: <name> }` reads an input of
 the run that left the met wait, which `wake.workflow` must declare, and `{ item: answers }` the
-item's answers; `{ result }` is not available, because a waiting run's result is not kept.
-`wake.checkout: waiting-run` starts the stage in the checkout that run recorded when it
-completed, and takes no `isolation`. When the event names its subject (a
+item's answers. There is no `{ result }` mapping: a wake start does not read the waiting run's
+returned value. `wake.checkout: waiting-run` starts the stage in the checkout that run recorded
+when it completed, and takes no `isolation`; a run records it only when its own pack declares
+such a binding on it. When the event names its subject (a
 review, a pull request or issue event), the binding also maps `item:`, and only a wait on that
 item matches; the GitHub source plugin refuses the binding without it. A check names no single
 subject and maps no `item:`. See

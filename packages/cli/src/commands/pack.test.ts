@@ -336,10 +336,12 @@ describe('archon pack bindings', () => {
   });
 
   it("writes a wake binding that carries the waiting run's inputs, the item's answers and its checkout", async () => {
+    // `fixture-plan` waits; `fixture-build` is started, and declares `mode`, which the
+    // waiting `fixture-plan` does not.
     const WAKE = `bindings:
   checks-done:
-    workflow: fixture-plan
-    resource: plan
+    workflow: fixture-build
+    resource: build
     overlap: queue
     event:
       kind: check.changed
@@ -347,10 +349,11 @@ describe('archon pack bindings', () => {
     wake: { workflow: fixture-plan, wait: checks, about: check.revision, checkout: waiting-run }
     inputs:
       issue: { input: issue }
-      answers: { item: answers }
+      plan: { item: answers }
 `;
+    const github = () => options({ repo: 'github.com/acme/widgets' });
     await writePack(WAKE);
-    await packCommand('bindings', ['fixture'], options({ repo: 'github.com/acme/widgets' }));
+    await packCommand('bindings', ['fixture'], github());
     const [binding] = githubWebhookSourceConfigSchema.parse({
       version: 1,
       webhookSecretEnv: 'WEBHOOK_SECRET',
@@ -361,19 +364,23 @@ describe('archon pack bindings', () => {
       workflow: 'fixture-plan',
       wait: 'checks',
       about: { field: 'check.revision' },
-      inputs: { issue: { input: 'issue' }, answers: { item: 'answers' } },
+      inputs: { issue: { input: 'issue' }, plan: { item: 'answers' } },
       checkout: 'waiting-run',
     });
     expect(binding?.inputMapping).toEqual({});
 
-    // The waiting run has only the inputs its workflow declares.
-    await writePack(WAKE.replace('{ input: issue }', '{ input: ticket }'));
-    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
-      "Binding 'checks-done': input 'issue' reads 'ticket', which 'fixture-plan' does not declare"
+    // The read is of the waiting run, so the started workflow's declaration does not count.
+    await writePack(WAKE.replace('issue: { input: issue }', 'mode: { input: mode }'));
+    await expect(
+      packCommand('bindings', ['fixture'], { ...github(), force: true })
+    ).rejects.toThrow(
+      "Binding 'checks-done': input 'mode' reads 'mode', which 'fixture-plan' does not declare"
     );
     // A waiting run's result is not kept for the start a wake makes.
     await writePack(WAKE.replace('{ input: issue }', '{ result: /plan }'));
-    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
+    await expect(
+      packCommand('bindings', ['fixture'], { ...github(), force: true })
+    ).rejects.toThrow(
       "input 'issue' reads a result, but a wake start reads the waiting run's inputs, not its result"
     );
   });

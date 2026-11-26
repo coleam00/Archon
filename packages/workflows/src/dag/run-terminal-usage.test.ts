@@ -45,6 +45,7 @@ import type { DagNode, AgentNode, NodeOutput, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 import type { RunEndedFacts, WorkflowDeps } from '../deps';
 import type { LinkedRunEndedStart, SourceReceiptAcceptance } from '../schemas/resource-start';
+import { packEventBindingSchema } from '../schemas/pack-bindings';
 
 /**
  * #2469 — a run's spend has to survive its outcome. Usage used to be written only in
@@ -1968,39 +1969,60 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
 
   it('completes with the waits the run leaves, and fails naming the field when two name one event', async () => {
     const waits = [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 30 }];
-    mockStructuredResult({ summary: 'done', waits });
-    const store = createMockStore();
     const handoff = { runId: 'waits-run', branch: 'archon/host', commit: 'b'.repeat(40) };
-    const read: unknown[] = [];
-    await executeDagWorkflow(
-      dagOptions({
-        // A wake binding may take the checkout once a wait is met, so it is recorded.
-        deps: {
-          ...createMockDeps(store),
-          asksCheckout: async (_run, left) => {
-            read.push(left);
-            return { handoff, worktree: '/worktrees/host' };
+    /** Complete a run of `waits` whose pack declares one wake binding on it. */
+    const leaveWaits = async (wake: Record<string, unknown>) => {
+      mockStructuredResult({ summary: 'done', waits });
+      const store = createMockStore();
+      const read: unknown[] = [];
+      await executeDagWorkflow(
+        dagOptions({
+          deps: {
+            ...createMockDeps(store),
+            asksCheckout: async (_run, left) => {
+              read.push(left);
+              return { handoff, worktree: '/worktrees/host' };
+            },
           },
-        },
-        conversationId: 'conv-waits',
-        cwd: testDir,
-        workflow: {
-          name: 'waits',
-          nodes: [resultNode],
-          returns: 'decide',
-          result: { waits: 'waits' },
-        },
-        workflowRun: makeWorkflowRun('waits-run'),
-      })
-    );
-    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
-    expect(read).toEqual([{ waits: true }]);
-    expect(
-      (store.completeWorkflowRun.mock.calls[0]?.[2] as Record<string, unknown>).asks_checkout
-    ).toEqual({
-      handoff,
-      worktree: '/worktrees/host',
-    });
+          conversationId: 'conv-waits',
+          cwd: testDir,
+          workflow: {
+            name: 'waits',
+            nodes: [resultNode],
+            returns: 'decide',
+            result: { waits: 'waits' },
+            pack: {
+              key: 'factory',
+              workflow: 'waits',
+              source: 'project',
+              bindings: {
+                'checks-done': packEventBindingSchema.parse({
+                  workflow: 'waits',
+                  resource: 'host',
+                  overlap: 'queue',
+                  event: { kind: 'check.changed' },
+                  wake: { workflow: 'waits', wait: 'checks', about: 'check.revision', ...wake },
+                }),
+              },
+            },
+          },
+          workflowRun: makeWorkflowRun('waits-run'),
+        })
+      );
+      const metadata = store.completeWorkflowRun.mock.calls[0]?.[2] as
+        | Record<string, unknown>
+        | undefined;
+      return { store, read, recorded: metadata?.asks_checkout };
+    };
+    // A wake that takes the checkout: it is read now and recorded for the start.
+    const taken = await leaveWaits({ checkout: 'waiting-run' });
+    expect(taken.store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
+    expect(taken.read).toEqual([{ waits: true }]);
+    expect(taken.recorded).toEqual({ handoff, worktree: '/worktrees/host' });
+    // A wake that carries event fields only: nothing is read, so the worktree is released.
+    const eventOnly = await leaveWaits({});
+    expect(eventOnly.read).toEqual([]);
+    expect(eventOnly.recorded).toBeUndefined();
 
     // The schema cannot hold "each event once"; the engine's check does.
     mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });

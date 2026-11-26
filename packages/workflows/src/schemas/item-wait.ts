@@ -1,7 +1,8 @@
 /**
  * A wait: something outside Archon a completed run says its item now waits for, opened on
  * the run's item when the run completes (`returns: { node, waits: <property> }`). The run
- * holds nothing while its item waits. A source plugin's event binding with `wake` names
+ * holds no session or slot while its item waits, and keeps its worktree only for a wake its
+ * pack declares that takes its checkout. A source plugin's event binding with `wake` names
  * the waiting workflow, the wait and the value its event carries; when that event is
  * accepted, the engine closes the set as met and starts the binding's stage on the item in
  * the same transaction. Nothing fires at the deadline: an open wait past it is listed in
@@ -16,7 +17,7 @@ import { z } from 'zod';
 /** What the waits property is for, read by the model as the property's description. */
 export const ITEM_WAITS_DESCRIPTION = [
   'What the item now waits for outside Archon, such as checks finishing or a review arriving on a change.',
-  'What happens after: this run ends and holds nothing. Each wait opens on the item the run is for.',
+  'What happens after: this run ends, and nothing of it keeps running. Each wait opens on the item the run is for.',
   'When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item.',
   'An event about any other value (an older commit, say) starts nothing.',
   'The waits are alternatives: the first one met closes them all.',
