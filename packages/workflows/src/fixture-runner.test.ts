@@ -181,7 +181,7 @@ describe('parseFixtureFile', () => {
 
   it('keeps literal arrays and wrapper objects separate from iteration metadata', () => {
     const parsed = parseFixtureFile(
-      'fixture:\n  iteration-stubs:\n    verdict: [null, false, 7, [one, two], {done: true}]\nresults: [one, two]\nwrapper: {iterations: [one, two]}',
+      'fixture:\n  iteration-stubs:\n    verdict: [null, false, 7, [one, two], {done: true}]\nresults: [one, two]\nwrapper: {iterations: [one, two]}\niteration-stubs: literal-output',
       'sequence.stubs.yaml'
     );
     expect(parsed.iterationStubs).toEqual({
@@ -190,6 +190,7 @@ describe('parseFixtureFile', () => {
     expect(parsed.stubs).toEqual({
       results: ['one', 'two'],
       wrapper: { iterations: ['one', 'two'] },
+      'iteration-stubs': 'literal-output',
     });
   });
 
@@ -329,7 +330,8 @@ describe('runFixtures', () => {
               loop_group: {
                 max_iterations: 3,
                 on_exhausted: onExhausted,
-                until_bash: 'touch probe-only; done=$verdict.output.done; test "$done" = true',
+                until_bash:
+                  'mkdir -p $DOCS_DIR; touch $DOCS_DIR/probe-only; test ! -f $DOCS_DIR/operator || exit 7; done=$verdict.output.done; test "$done" = true',
                 nodes: [
                   {
                     id: 'verdict',
@@ -363,13 +365,13 @@ describe('runFixtures', () => {
         ],
         { cwd }
       );
+      mkdirSync(join(cwd, 'docs'));
+      writeFileSync(join(cwd, 'docs', 'operator'), 'uncommitted caller data');
       const report = await runFixtures({ cwd, workflows: workflowsOnDisk(cwd, ['rounds-wf']) });
       expect(report.failed).toBe(0);
       expect(report.passed).toBe(1);
       expect(report.results[0]?.outcome).toBe(mode === 'failed' ? 'failed' : 'completed');
-      expect(existsSync(join(cwd, 'probe-only'))).toBe(false);
-      if (mode === 'failed')
-        expect(report.results[0]?.nodeFailures?.[0]?.reason).toContain('max iterations (3)');
+      expect(existsSync(join(cwd, 'docs', 'probe-only'))).toBe(false);
     }
   );
   const passingBody = ['fixture:', '  expect: completed', 'node-a: "stub output"', ''].join('\n');
@@ -1725,6 +1727,44 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     cpSync(template, cwd, { recursive: true });
     return cwd;
   }
+
+  it('fails an executable fixture that reads a tolerated missing verdict', async () => {
+    const { cwd } = writeTempProject({
+      cwd: callerFrom(trackedOnlyRepo),
+      body: 'exec-code: true\n',
+      workflowYaml: Bun.YAML.stringify({
+        name: 'test-wf',
+        description: 'Require a real review verdict',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 2,
+              on_exhausted: 'complete',
+              until_bash: 'done=$verdict.output.done; test "$done" = true',
+              nodes: [
+                {
+                  id: 'verdict',
+                  prompt: 'review',
+                  trigger_rule: 'all_done',
+                  output_format: {
+                    type: 'object',
+                    properties: { done: { type: 'boolean', default: true } },
+                    required: ['done'],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    const report = await runFixtures({ cwd, workflows: workflowsOnDisk(cwd, ['test-wf']) });
+    expect(report.failed).toBe(1);
+    expect(report.passed).toBe(0);
+    expect(report.results[0]?.outcome).toBe('failed');
+    expect(report.results[0]?.nodeFailures?.map(node => node.nodeId)).toEqual(['rounds']);
+  });
 
   it('checks authored expectations against an executed return script', async () => {
     const { cwd } = writeTempProject({

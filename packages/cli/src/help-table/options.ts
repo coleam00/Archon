@@ -129,15 +129,15 @@ export const orderedFlags: FlagHelp[] = [
     spec: '--default-stubs',
     description:
       'Fill missing reached AI, bash, and script nodes with validated placeholders during --dry-run.\n' +
-      'With --exec-code, unstubbed bash/script nodes execute locally instead. Explicit stubs win.\n' +
+      'With --exec-code, unstubbed bash/script nodes execute locally instead. Explicit stubs suppress bodies, not probes.\n' +
       'Reached child workflows need authored stubs unless fan-out items resolve to [].',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
     spec: '--exec-code',
     description:
-      'Execute trusted unstubbed bash/script nodes locally during --dry-run, even with --default-stubs.\n' +
-      'Explicit stubs win; default is no code execution.',
+      'Execute trusted unstubbed bash/script bodies and loop until_bash probes locally during --dry-run, even with --default-stubs.\n' +
+      'Explicit stubs suppress bodies, not probes; default is no code execution.',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {

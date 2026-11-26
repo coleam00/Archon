@@ -13,6 +13,7 @@ import {
 import {
   TOLERATED_STUB_REASON,
   bindingShellContext,
+  hasAuthoredStub,
   loadDryRunCommand,
   nodeType,
   recordFailed,
@@ -154,6 +155,7 @@ function hydrateStub(
     // any earlier would report a gap that never blocked it while that gap is
     // exactly what blocked it, and `checkFixture` would filter the blocker away.
     const hydrated = completedOutput(node, stub === undefined ? generatedStubFor(node) : stub);
+    if (!hasAuthoredStub(node, ctx)) ctx.generatedOutputs.add(hydrated);
     if (tolerated) ctx.toleratedMissingStubs.add(node.id);
     outputs.set(node.id, hydrated);
     ctx.trace.push({

@@ -31,6 +31,7 @@ import { runWithNodeScratch, runWithPackDir } from '../workflow-variables';
 import { getNodeScratchDir } from '@archon/paths/archon-paths';
 import { randomUUID } from 'node:crypto';
 import { releaseNodeScratch } from '../run-scratch';
+import { writeNodeArtifact } from '../artifacts-index';
 
 /** Whether the node runs at all; a node the trigger rule or its `when:` turns away is recorded here. */
 function isReached(
@@ -223,23 +224,41 @@ async function simulateLayerNode(
 ): Promise<void> {
   const execution = await simulatedExecution(node, ctx);
   await simulateNode(node, outputs, ctx, iteration, execution);
-  const result = outputs.get(node.id);
-  if (result !== undefined) recordNodeOutcome(node, result, ctx);
+  let result = outputs.get(node.id);
+  try {
+    await publishTypedOutput(node, result, ctx);
+  } catch (error) {
+    recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
+    result = outputs.get(node.id);
+  }
+  if (ctx.execCode && result !== undefined) recordNodeOutcome(node, result, ctx);
   if (result?.state === 'failed') ctx.interactionAdmission?.failed(node.id);
-  // The real run's rule (`writeTypedArtifacts`): a completed node that declares a type.
-  if (result?.state === 'completed' && node.output_type) {
-    ctx.typedOutputs.push({
-      nodeId: node.id,
-      outputType: node.output_type,
-      ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: [...ctx.loopGroupPath] } : {}),
-      producedAt: new Date().toISOString(),
-      source: `the simulated output of node '${node.id}'`,
-      text: result.output,
-    });
-  }
   if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
-    outputs.set(node.id, { ...result, execution });
+    const observed = { ...result, execution };
+    if (ctx.generatedOutputs.has(result)) ctx.generatedOutputs.add(observed);
+    outputs.set(node.id, observed);
   }
+}
+
+async function publishTypedOutput(
+  node: DagNode,
+  result: NodeOutput | undefined,
+  ctx: DryRunContext
+): Promise<void> {
+  if (result?.state !== 'completed' || !node.output_type) return;
+  const recorded = {
+    nodeId: node.id,
+    outputType: node.output_type,
+    ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: [...ctx.loopGroupPath] } : {}),
+    producedAt: new Date().toISOString(),
+    source: `the simulated output of node '${node.id}'`,
+    text: result.output,
+  };
+  if (ctx.execCode && !ctx.generatedOutputs.has(result)) {
+    const { source: _source, text, ...artifact } = recorded;
+    await writeNodeArtifact(ctx.artifactsDir, { ...artifact, runId: 'dry-run' }, text);
+  }
+  ctx.typedOutputs.push(recorded);
 }
 
 function recordNodeOutcome(node: DagNode, result: NodeOutput, ctx: DryRunContext): void {
@@ -250,6 +269,7 @@ function recordNodeOutcome(node: DagNode, result: NodeOutput, ctx: DryRunContext
     ...(result.state === 'failed' ? { error: result.error } : {}),
     ...(result.state === 'skipped' ? { cause: result.cause } : {}),
     ...(result.state === 'completed' &&
+    !ctx.generatedOutputs.has(result) &&
     node.output_format !== undefined &&
     'structuredOutput' in result
       ? { output: result.structuredOutput }

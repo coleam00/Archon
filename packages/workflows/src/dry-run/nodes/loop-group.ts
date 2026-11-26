@@ -48,7 +48,7 @@ export async function simulateLoopGroup(
   const outerLoopBodyScopes = ctx.loopBodyScopes;
   const outerLoopGroupPath = ctx.loopGroupPath;
   let loopPrevOutputs: Map<string, NodeOutput> | undefined;
-  let lastOutput = '';
+  let lastOutput: NodeOutput = { state: 'completed', output: '' };
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
     // A dry run never resumes, so `$LOOP_USER_INPUT` is '' on every iteration, as it is
     // in a real run outside an interactive resume.
@@ -71,7 +71,10 @@ export async function simulateLoopGroup(
       ctx.loopGroupPath = outerLoopGroupPath;
     }
     loopPrevOutputs = bodyOutputs;
-    const iterationOutput = loopGroupIterationOutput(bodyNodes, bodyOutputs)?.output ?? '';
+    const iterationResult: NodeOutput = loopGroupIterationOutput(bodyNodes, bodyOutputs) ?? {
+      state: 'completed',
+      output: '',
+    };
     const failed = bodyNodes.some(body => bodyOutputs.get(body.id)?.state === 'failed');
     if (failed) {
       recordFailed(
@@ -98,24 +101,23 @@ export async function simulateLoopGroup(
       return;
     }
     const previousOutput = lastOutput;
-    lastOutput = stripCompletionTags(iterationOutput, node.loop_group.until);
+    lastOutput = groupOutput(iterationResult, node.loop_group.until, ctx);
     const groupCompletion = await evaluateLoopCompletion(
       node,
-      { output: iterationOutput },
+      iterationResult,
       bodyOutputs,
       ctx,
       previousOutput,
       [...outerLoopBodyScopes, iterScope]
     );
     if (groupCompletion.kind !== 'incomplete') {
-      const output = stripCompletionTags(iterationOutput, node.loop_group.until);
-      outputs.set(node.id, { state: 'completed', output });
+      outputs.set(node.id, lastOutput);
       ctx.trace.push({
         nodeId: node.id,
         nodeType: 'loop_group',
         state: 'completed',
         reason: completionReason(groupCompletion, node.loop_group, current),
-        output,
+        output: lastOutput.output,
         ...(iteration ? { iteration } : {}),
         ...withResolution(node, ctx),
       });
@@ -125,22 +127,35 @@ export async function simulateLoopGroup(
   endExhaustedGroup(node, outputs, ctx, lastOutput, iteration);
 }
 
+function groupOutput(
+  output: NodeOutput,
+  signal: string | undefined,
+  ctx: DryRunContext
+): NodeOutput {
+  const result: NodeOutput = {
+    state: 'completed',
+    output: stripCompletionTags(output.output, signal),
+  };
+  if (ctx.generatedOutputs.has(output)) ctx.generatedOutputs.add(result);
+  return result;
+}
+
 /** A group that ran out of iterations unmet: it fails, or completes under `on_exhausted: complete`. */
 function endExhaustedGroup(
   node: LoopGroupNode,
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
-  lastOutput: string,
+  lastOutput: NodeOutput,
   iteration: number | undefined
 ): void {
   if (node.loop_group.on_exhausted === 'complete') {
-    outputs.set(node.id, { state: 'completed', output: lastOutput });
+    outputs.set(node.id, lastOutput);
     ctx.trace.push({
       nodeId: node.id,
       nodeType: 'loop_group',
       state: 'completed',
       reason: `reached max iterations (${String(node.loop_group.max_iterations)}) ${describeUnmetCompletion(node.loop_group)}; completed with the last output (on_exhausted: complete)`,
-      output: lastOutput,
+      output: lastOutput.output,
       ...(iteration ? { iteration } : {}),
       ...withResolution(node, ctx),
     });

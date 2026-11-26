@@ -16,7 +16,7 @@ export type SimulatedCompletion =
 export function loopIterationCompletes(
   control: LoopChannels,
   hydrated: { output: string; structuredOutput?: unknown },
-  bash: 'assumed' | 'complete' | 'incomplete' = 'assumed'
+  bash: 'assumed' | 'incomplete' = 'assumed'
 ): SimulatedCompletion {
   let fieldComplete = false;
   let signalComplete = false;
@@ -47,7 +47,6 @@ export function loopIterationCompletes(
   }
   if (fieldComplete) return { kind: 'field' };
   if (signalComplete) return { kind: 'signal' };
-  if (control.until_bash !== undefined && bash === 'complete') return { kind: 'bash' };
   if (assumed) return { kind: 'assumed' };
   return { kind: 'incomplete' };
 }

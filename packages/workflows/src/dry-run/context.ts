@@ -101,11 +101,13 @@ export interface DryRunContext
   /** The enclosing loop_group iterations, outermost first, as a real run records them. */
   loopGroupPath: readonly NodeArtifactLoopFrame[];
   /**
-   * Every typed output the simulation has produced, in order. Executed completion
-   * probes materialize these records into disposable invocation observations.
+   * Every typed output the simulation has produced, in order, for typed bindings.
+   * With execution enabled, authored and executed outputs are also published once.
    */
   typedOutputs: RecordedTypedOutput[];
   nodeOutcomes: NodeOutcome[];
+  /** Placeholders remain visible in previews but cannot decide executed completion. */
+  generatedOutputs: WeakSet<NodeOutput>;
   /**
    * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
@@ -173,7 +175,7 @@ export function resolveText(
     loopBodyScopes?: readonly LoopBodyScope[];
   }
 ): string {
-  const docsDir = join(ctx.cwd, 'docs');
+  const docsDir = join(ctx.execCode && surface !== 'prompt' ? ctx.execWorkspace : ctx.cwd, 'docs');
   return substituteWorkflowVariables(
     text,
     'dry-run',
@@ -217,7 +219,7 @@ export function bindingShellContext(
     artifactsDir: ctx.artifactsDir,
     stateDir: ctx.stateDir,
     baseBranch: 'dry-run-base',
-    docsDir: join(ctx.cwd, 'docs'),
+    docsDir: join(ctx.execCode ? ctx.execWorkspace : ctx.cwd, 'docs'),
     nodeOutputs: outputs,
     loopBodyScopes: ctx.loopBodyScopes,
   };

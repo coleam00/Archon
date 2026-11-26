@@ -557,7 +557,7 @@ Place the [two-entry fixture](/reference/cli/#workflow-test) beside this workflo
 
 False or omitted `exec-code` never runs probes and retains the first-iteration assumption. Enabled probes short-circuit when an output field or legacy signal already completes the loop. A short sequence repeats its last value; a never-true condition fails at `max_iterations`, or completes with the last output when `on_exhausted: complete` is declared. Body/probe failures never become exhaustion success. Static stubs still repeat verbatim, and an ordinary array remains one output.
 
-Fixture probes and unstubbed executable bodies run in a scratch checkout; they are trusted host code, not sandboxed code. The [CLI reference](/reference/cli/#workflow-test) covers local indexing, nesting, schema validation, strict probe references and observation files.
+Fixture probes and unstubbed executable bodies run in a scratch checkout, including reads and writes through `$DOCS_DIR`; they are trusted host code, not sandboxed code. Enabled probes require authored or executed verdicts and refuse generated placeholders, including tolerated missing stubs. A deadline remains fatal even when a shell cleanup handler exits successfully. The [CLI reference](/reference/cli/#workflow-test) covers local indexing, nesting, schema validation, strict probe references and observation files.
 
 Combine LLM work with a deterministic completion check:
 

@@ -289,10 +289,10 @@ Options:
   --stubs-init <path>        Write a dry-run stub scaffold and exit; omits child workflows.
                              Reached child workflows need authored stubs unless fan-out items resolve to [].
   --default-stubs            Fill missing reached AI, bash, and script nodes with validated placeholders during --dry-run.
-                             With --exec-code, unstubbed bash/script nodes execute locally instead. Explicit stubs win.
+                             With --exec-code, unstubbed bash/script nodes execute locally instead. Explicit stubs suppress bodies, not probes.
                              Reached child workflows need authored stubs unless fan-out items resolve to [].
-  --exec-code                Execute trusted unstubbed bash/script nodes locally during --dry-run, even with --default-stubs.
-                             Explicit stubs win; default is no code execution.
+  --exec-code                Execute trusted unstubbed bash/script bodies and loop until_bash probes locally during --dry-run, even with --default-stubs.
+                             Explicit stubs suppress bodies, not probes; default is no code execution.
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
   --providers <ids>          Add comma-separated maintained providers, skipping the setup provider question
   --spawn                    Open setup wizard in a new terminal window (for setup command)

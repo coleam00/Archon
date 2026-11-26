@@ -56,8 +56,8 @@ describe('dry-run loops', () => {
           loop: { prompt: 'review $LOOP_PREV_OUTPUT', max_iterations: 4, until_field: 'done' },
           output_format: {
             type: 'object',
-            properties: { done: { type: 'boolean' } },
-            required: ['done'],
+            properties: { done: { type: 'boolean' }, note: { type: 'string' } },
+            required: ['done', 'note'],
           },
         },
       ],
@@ -65,16 +65,26 @@ describe('dry-run loops', () => {
     const result = await dryRunWorkflow({
       workflow,
       iterationStubs: {
-        review: [{ done: false }, { done: false }, { done: true }, 'unreachable-invalid'],
+        review: [
+          { done: false, note: 'first' },
+          { done: false, note: 'second' },
+          { done: true, note: 'accepted' },
+          'unreachable-invalid',
+        ],
       },
     });
     expect(result.outcome).toBe('completed');
-    expect(result.trace[0]?.resolvedText).toBe('review {"done":false}');
-    expect(result.trace[0]?.output).toBe('{"done":true}');
+    expect(result.trace[0]?.resolvedText).toBe('review {"done":false,"note":"second"}');
+    expect(result.trace[0]?.output).toBe('{"done":true,"note":"accepted"}');
     expect(result.unusedStubs).toEqual([]);
     const failed = await dryRunWorkflow({
       workflow,
-      iterationStubs: { review: [{ done: false }, { done: 'wrong' }] },
+      iterationStubs: {
+        review: [
+          { done: false, note: 'first' },
+          { done: true, note: 7 },
+        ],
+      },
     });
     expect(failed.outcome).toBe('failed');
   });
@@ -155,6 +165,32 @@ describe('dry-run loops', () => {
     expect(
       result.trace.filter(entry => entry.nodeId === 'work').map(entry => entry.output)
     ).toEqual(['first', 'INNER_DONE', 'first', 'INNER_DONE']);
+  });
+
+  test('a single-node loop restarts its own sequence within every outer round', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'nested-single-loop',
+        nodes: [
+          {
+            id: 'outer',
+            loop_group: {
+              until: 'OUTER_DONE',
+              max_iterations: 2,
+              nodes: [
+                { id: 'inner', loop: { prompt: 'review', until: 'INNER_DONE', max_iterations: 2 } },
+                { id: 'finish', prompt: 'finish', depends_on: ['inner'] },
+              ],
+            },
+          },
+        ],
+      }),
+      iterationStubs: { inner: ['first', 'INNER_DONE'], finish: ['continue', 'OUTER_DONE'] },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'inner').map(entry => entry.output)
+    ).toEqual(['INNER_DONE', 'INNER_DONE']);
   });
 
   test('programmatic declarations reject overlap and empty sequences', async () => {

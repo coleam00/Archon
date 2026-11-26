@@ -1,15 +1,17 @@
-import { execFileAsync, resolveBashPath } from '@archon/git';
+import { resolveBashPath } from '@archon/git';
 import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 import { bashInvocation } from '../bash-invocation';
-import type { LoopBodyScope } from '../dag/loop-scope';
-import { inputEnvVars } from '../dag/references';
+import { loopPrevRefToken, type LoopBodyScope } from '../dag/loop-scope';
+import { inputEnvVars, nodeOutputRefToken } from '../dag/references';
+import { substituteTemplate, templateToken, type TemplateToken } from '../output-ref';
 import { formatHostSpawnFailure, formatSubprocessFailure } from '../executor-shared';
 import type { LoopNode, LoopGroupNode, NodeOutput } from '../schemas';
 import {
   hostSpawnFailure,
+  execOwnedProcessGroup,
   isSubprocessTimeout,
   redactSubprocessError,
   type RawSubprocessRejection,
@@ -21,10 +23,10 @@ import { prepareCodeExecution } from './nodes/exec';
 
 export async function evaluateLoopCompletion(
   node: LoopNode | LoopGroupNode,
-  hydrated: { output: string; structuredOutput?: unknown },
+  hydrated: NodeOutput,
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
-  previous = '',
+  previous?: NodeOutput,
   loopBodyScopes: readonly LoopBodyScope[] = ctx.loopBodyScopes
 ): Promise<SimulatedCompletion> {
   const control = node.kind === 'loop' ? node.loop : node.loop_group;
@@ -33,6 +35,15 @@ export async function evaluateLoopCompletion(
     hydrated,
     ctx.execCode ? 'incomplete' : 'assumed'
   );
+  if (
+    ctx.execCode &&
+    control.until_bash !== undefined &&
+    ctx.generatedOutputs.has(hydrated) &&
+    (completion.kind === 'field' || completion.kind === 'signal')
+  )
+    throw new Error(
+      `Node '${node.id}' completion requires an authored or executed output, not a generated placeholder`
+    );
   if (completion.kind !== 'incomplete' || !ctx.execCode || control.until_bash === undefined)
     return completion;
   const label = `Node '${node.id}' ${node.kind === 'loop' ? 'loop' : 'loop_group'}.until_bash`;
@@ -43,15 +54,17 @@ export async function evaluateLoopCompletion(
     ctx.protectedCredentialValues
   );
   try {
+    assertProbeOutputs(control.until_bash, outputs, loopBodyScopes, previous, ctx);
+    const previousText = previous?.output ?? '';
     const listings = await writeDryRunInvocationListings(ctx);
     const { env, credentialValues: preparedCredentials } = await prepareCodeExecution(
       ctx,
       inputEnvVars(node, { ...bindingShellContext(ctx, outputs), loopBodyScopes }, ctx.inputs),
       undefined,
-      { ...listings, loopPrevOutput: previous }
+      { ...listings, loopPrevOutput: previousText }
     );
     credentialValues = preparedCredentials;
-    const code = resolveText(control.until_bash, ctx, outputs, 'shell', previous, ctx.inputs, {
+    const code = resolveText(control.until_bash, ctx, outputs, 'shell', previousText, ctx.inputs, {
       listings,
       requiredContext: {
         consumerId: node.id,
@@ -77,6 +90,47 @@ export async function evaluateLoopCompletion(
   }
 }
 
+function assertProbeOutputs(
+  code: string,
+  outputs: Map<string, NodeOutput>,
+  scopes: readonly LoopBodyScope[],
+  previous: NodeOutput | undefined,
+  ctx: DryRunContext
+): void {
+  const requireAuthored = (output: NodeOutput | undefined): void => {
+    if (output !== undefined && ctx.generatedOutputs.has(output))
+      throw new Error(
+        'Completion probes require an authored stub or executed output, not a generated placeholder'
+      );
+  };
+  const guarded = (
+    token: TemplateToken,
+    sources: Map<string, NodeOutput> | undefined
+  ): TemplateToken => ({
+    pattern: token.pattern,
+    resolve: match => {
+      const resolved = token.resolve(match);
+      if (resolved !== undefined) requireAuthored(sources?.get(match[1]));
+      return resolved;
+    },
+  });
+  substituteTemplate(code, [
+    ...scopes.map(scope => guarded(loopPrevRefToken(scope, false), scope.loopPrevOutputs)),
+    guarded(nodeOutputRefToken(outputs, false), outputs),
+    templateToken(String.raw`\$(?:LOOP_PREV_OUTPUT\b|\{LOOP_PREV_OUTPUT\})`, () => {
+      requireAuthored(previous);
+      return '';
+    }),
+    templateToken(
+      String.raw`\$(?:(?:TYPED_ARTIFACTS_FILE|NODE_OUTCOMES_FILE)\b|\{(?:TYPED_ARTIFACTS_FILE|NODE_OUTCOMES_FILE)\})`,
+      () => {
+        for (const output of outputs.values()) requireAuthored(output);
+        return '';
+      }
+    ),
+  ]);
+}
+
 async function executeProbe(
   command: string,
   invocation: ReturnType<typeof bashInvocation>,
@@ -87,7 +141,13 @@ async function executeProbe(
   credentialValues: readonly string[]
 ): Promise<SimulatedCompletion> {
   try {
-    await execFileAsync(command, invocation.args, { input: invocation.input, cwd, env, timeout });
+    await execOwnedProcessGroup(command, invocation.args, {
+      input: invocation.input,
+      cwd,
+      env,
+      timeout,
+      node: { recorder: undefined, endTreeOnTimeout: true },
+    });
     return { kind: 'bash' };
   } catch (error) {
     const failure = redactSubprocessError(error as RawSubprocessRejection, credentialValues);

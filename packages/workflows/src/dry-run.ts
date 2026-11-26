@@ -192,6 +192,7 @@ function createDryRunContext(
     loopGroupPath: [],
     typedOutputs: [],
     nodeOutcomes: [],
+    generatedOutputs: new WeakSet(),
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),
     logDir: join(tempRoot, 'logs'),

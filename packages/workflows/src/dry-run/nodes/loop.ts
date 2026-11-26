@@ -3,6 +3,7 @@ import { describeUnmetCompletion } from '../../executor-shared';
 import type { LoopNode, NodeOutput } from '../../schemas';
 import {
   TOLERATED_STUB_REASON,
+  hasAuthoredStub,
   loadDryRunCommand,
   recordFailed,
   resolveText,
@@ -87,9 +88,10 @@ export async function simulateLoop(
         ? missingLoopOutput(node, outputs, ctx, resolvedText, iteration)
         : completedOutput(node, stub);
     if (hydrated === undefined) return;
+    if (!hasAuthoredStub(node, ctx)) ctx.generatedOutputs.add(hydrated);
     tolerated = stub === undefined;
+    const completion = await evaluateLoopCompletion(node, hydrated, outputs, ctx, last);
     last = hydrated;
-    const completion = await evaluateLoopCompletion(node, hydrated, outputs, ctx, previous);
     previous = hydrated.output;
     if (completion.kind !== 'incomplete') {
       recordLoopCompletion(
