@@ -71,6 +71,7 @@ export function wakeReceipt(
     wait?: string;
     item?: string;
     subject?: ItemWaitSubject;
+    observedItem?: string;
   } = {}
 ): SourceReceiptAcceptance {
   const binding: ResourceStartBindingIntent = {
@@ -93,6 +94,7 @@ export function wakeReceipt(
       wait: options.wait ?? 'checks',
       about,
       ...(options.subject === undefined ? {} : { subject: options.subject }),
+      ...(options.observedItem === undefined ? {} : { observedItemKey: options.observedItem }),
       input: 'waited',
     },
   };
@@ -266,10 +268,10 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
             {
               sourceInstanceId: 'github',
               module: modulePath,
-              // As the plugin makes it: one binding, on the wait's item.
+              // As the plugin makes it: one binding, for the wait's item.
               config: wakeReceipt(HEAD, {
                 deliveryId: 'observe:check:77:completed:success:next-stage:pr-7',
-                item: 'pr-7',
+                observedItem: 'pr-7',
               }),
               observe: { everySeconds: 15 },
             },
@@ -439,6 +441,8 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         [HEAD, { kind: 'pr', number: 35 }],
         [HEAD, { kind: 'issue', number: 34 }],
         [OLD, pr34],
+        // An event that names no subject, as a check does.
+        [HEAD, undefined],
       ] as const) {
         const other = await accept(wakeReceipt(about, { wait: 'review', subject }), project);
         expect((await readReceipt(harness, other)).outcome).toBe('unmatched');
@@ -463,9 +467,8 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
       await completeWithWaits(harness, [{ ...review, subject: { kind: 'pr', number: 42 } }], {
         item: 'pr-41',
       });
-      // issue-12 names no subject, though pr-34 is part of it.
-      await completeWithWaits(harness, [{ ...review, subject: null }], { item: 'issue-12' });
       const project = await projectKey(harness);
+      // issue-12 names no subject, though pr-34 was part of it when its run completed.
       await harness.store.recordItemLink({
         projectKey: project,
         fromKey: 'pr-34',
@@ -475,6 +478,7 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         by: null,
         fromRun: null,
       });
+      await completeWithWaits(harness, [{ ...review, subject: null }], { item: 'issue-12' });
       expect(
         (await harness.store.listOpenItemWaits()).map(wait => wait.subject?.number ?? null).sort()
       ).toEqual([42, null]);
@@ -490,6 +494,104 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
         expect((await readReceipt(harness, id)).outcome).toBe('unmatched');
       expect(await harness.store.listOpenItemWaits()).toHaveLength(2);
     } finally {
+      await harness.close();
+    }
+  });
+
+  test('a review observed for one item does not wake another item the binding maps it to', async () => {
+    const harness = await makeHarness();
+    const root = await mkdtemp(join(tmpdir(), 'archon-observed-mapped-'));
+    try {
+      const remote = 'https://github.com/acme/widgets.git';
+      await harness.db.query(
+        'UPDATE remote_agent_codebases SET repository_url = $1 WHERE id = $2',
+        [remote, CONFORMANCE_CODEBASE_ID]
+      );
+      const review = { event: 'review', about: HEAD, subject: null, within_minutes: 60 };
+      await completeWithWaits(harness, [review], { item: 'pr-34' });
+      const project = await projectKey(harness);
+      // A source that, like the GitHub plugin, makes one delivery per observed review and
+      // waiting item, for a binding that maps the review to `pr-34`.
+      const modulePath = join(root, 'source.ts');
+      const configPath = join(root, 'sources.json');
+      await writeFile(
+        modulePath,
+        `export default ({ config }) => ({
+  receive: async () => ({ status: 'rejected', reason: 'unauthenticated' }),
+  observe: async ({ waits, forge }) => {
+    const acceptances = [];
+    for (const wait of waits) {
+      await forge.prReviews({ remote: wait.remote, number: 34 });
+      acceptances.push({
+        ...config,
+        receipt: { ...config.receipt, id: crypto.randomUUID(), deliveryId: config.receipt.deliveryId + wait.itemKey },
+        bindings: config.bindings.map(binding => ({ ...binding, wake: { ...binding.wake, observedItemKey: wait.itemKey } })),
+      });
+    }
+    return { acceptances, unserved: [], failed: [] };
+  },
+});\n`
+      );
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          version: 1,
+          sources: [
+            {
+              sourceInstanceId: 'github',
+              module: modulePath,
+              config: wakeReceipt(HEAD, {
+                deliveryId: 'observe:review:300:submitted:next-stage:',
+                wait: 'review',
+                item: 'pr-34',
+                subject: { kind: 'pr', number: 34 },
+              }),
+              observe: { everySeconds: 15 },
+            },
+          ],
+        })
+      );
+      const sources = await loadWebhookSourcePlugins(configPath, {
+        acceptReceipt: input => acceptStartReceiptFor(input, project),
+        isKnownUser: async () => true,
+        hasDeliveryReceipt: (source, delivery) =>
+          harness.store.hasStartReceiptForDelivery(source, delivery),
+        getReceipt: id => harness.store.getStartReceipt(id),
+      });
+      const unexpected = async (): Promise<never> => {
+        throw new Error('Only reviews are read for a review wait');
+      };
+      const observer = createItemWaitObserver({
+        sources,
+        store: harness.store,
+        forge: {
+          commitChecks: unexpected,
+          prReviews: async () => ({}) as never,
+          issuesWithLabel: unexpected,
+          labelAdded: unexpected,
+          issuesOpened: unexpected,
+        },
+      });
+      const [first] = (await observer?.pass(new Date('2026-01-01T00:00:00Z'))) ?? [];
+      expect(await readReceipt(harness, first?.receipts[0] ?? '')).toMatchObject({
+        outcome: 'matched',
+        bindings: [{ itemKey: 'pr-34' }],
+      });
+
+      // pr-34 waits again at the same commit, and issue-12 waits for a review of pull
+      // request 34 there too. The same review observed again starts nothing on either.
+      await completeWithWaits(harness, [review], { item: 'pr-34' });
+      await completeWithWaits(harness, [{ ...review, subject: { kind: 'pr', number: 34 } }], {
+        item: 'issue-12',
+      });
+      const [second] = (await observer?.pass(new Date('2026-01-01T00:01:00Z'))) ?? [];
+      // pr-34's is a replay of the first delivery; issue-12's is new and is recorded unmatched.
+      expect(second?.receipts).toHaveLength(1);
+      for (const id of second?.receipts ?? [])
+        expect((await readReceipt(harness, id)).outcome).toBe('unmatched');
+      expect(await harness.store.listOpenItemWaits()).toHaveLength(2);
+    } finally {
+      await removeTempTree(root);
       await harness.close();
     }
   });
@@ -533,11 +635,13 @@ export function describeSqlItemWaitConformance(makeHarness: () => Promise<Harnes
             {
               sourceInstanceId: 'github',
               module: modulePath,
-              // As the plugin makes it for a binding that maps no item: the subject, no item.
+              // As the plugin makes it for a binding that maps no item: the subject, and the
+              // item the observation is for.
               config: wakeReceipt(HEAD, {
                 deliveryId: 'observe:review:300:submitted:next-stage:issue-12',
                 wait: 'review',
                 subject: pr34,
+                observedItem: 'issue-12',
               }),
               observe: { everySeconds: 15 },
             },

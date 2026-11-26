@@ -176,14 +176,43 @@ export async function withdrawItemWaits(runId: string): Promise<ItemWaitsWithdra
 type Evaluated = NonNullable<SourceReceiptAcceptance['evaluatedBindings']>[number];
 
 /**
+ * What else a wake's wait must match besides `about`, as SQL clauses whose parameters number
+ * from `$5`, and the words that name it. Its subject is the event's: a wait that names one is
+ * met only by an event about it, and an event that names none (a check) meets only a wait that
+ * names none. Only through the binding's mapped item may a subject-naming event meet a wait
+ * that names none, as before subjects. The wait is on the mapped item, and on the item an
+ * observation was for; when the two differ, nothing matches.
+ */
+function waitScope(
+  wake: NonNullable<ResourceStartBindingIntent['wake']>,
+  itemKey: string | undefined
+): { sql: string; params: (string | number)[]; named: string } {
+  const { subject, observedItemKey } = wake;
+  const params: (string | number)[] = [];
+  const param = (value: string | number): string => `$${String(params.push(value) + 4)}`;
+  const clauses: string[] = [];
+  if (subject === undefined) clauses.push('w.subject_kind IS NULL');
+  else {
+    const same = `w.subject_kind = ${param(subject.kind)} AND w.subject_number = ${param(subject.number)}`;
+    clauses.push(itemKey === undefined ? same : `(w.subject_kind IS NULL OR (${same}))`);
+  }
+  const items = [itemKey, observedItemKey].filter(key => key !== undefined);
+  for (const key of items) clauses.push(`i.key = ${param(key)}`);
+  const forSubject = subject === undefined ? '' : ` for ${subject.kind} ${String(subject.number)}`;
+  return {
+    sql: clauses.map(clause => ` AND ${clause}`).join(''),
+    params,
+    named: `wait '${wake.wait}' about '${wake.about}' from '${wake.workflowName}'${items.map(key => ` on item '${key}'`).join('')}${forSubject}`,
+  };
+}
+
+/**
  * The binding a wake makes once resolved against the open waits, or why it starts nothing.
  * A match is an open wait of the binding's workflow and name whose `about` is exactly the
- * event's, on an item of the binding's project. When the binding maps the event to an item,
- * the wait is on that item; when the event names its subject, a wait that names one names
- * the same, and without a mapped item only such a wait matches, on whichever item it is. A wait about any other value (the commit the
- * change has moved past), or on another subject at the same commit, is not one. The match
- * closes its whole set as met, guarded on the set still being open, so of two deliveries for
- * one wait only the first starts.
+ * event's, on an item of the binding's project, within `waitScope`. A wait about any other
+ * value (the commit the change has moved past), or on another subject at the same commit, is
+ * not one. The match closes its whole set as met, guarded on the set still being open, so of
+ * two deliveries for one wait only the first starts.
  */
 async function resolveWake(
   query: TransactionQuery,
@@ -200,21 +229,8 @@ async function resolveWake(
       reason,
     },
   });
-  // What else the wait must match besides `about`: the binding's mapped item, and the
-  // event's subject. A wait that names a subject is met only by an event about it. With a
-  // mapped item, a wait that names none is found by its item alone, as before subjects.
-  const { subject } = wake;
-  const params: (string | number)[] = [];
-  const param = (value: string | number): string => `$${String(params.push(value) + 4)}`;
-  const clauses: string[] = [];
-  if (subject !== undefined) {
-    const same = `w.subject_kind = ${param(subject.kind)} AND w.subject_number = ${param(subject.number)}`;
-    clauses.push(binding.itemKey === undefined ? same : `(w.subject_kind IS NULL OR (${same}))`);
-  }
-  if (binding.itemKey !== undefined) clauses.push(`i.key = ${param(binding.itemKey)}`);
-  const onItem = binding.itemKey === undefined ? '' : ` on item '${binding.itemKey}'`;
-  const forSubject = subject === undefined ? '' : ` for ${subject.kind} ${String(subject.number)}`;
-  const named = `wait '${wake.wait}' about '${wake.about}' from '${wake.workflowName}'${onItem}${forSubject}`;
+  const scope = waitScope(wake, binding.itemKey);
+  const { named } = scope;
   if (projectKey === null)
     return notStarted(
       'rejected',
@@ -225,9 +241,9 @@ async function resolveWake(
     `SELECT w.*, i.key AS item_key FROM remote_agent_item_waits w
      JOIN remote_agent_items i ON i.id = w.item_id
      WHERE i.project_key = $1 AND w.workflow_name = $2 AND w.event = $3 AND w.about = $4
-       AND w.closed_as IS NULL${clauses.map(clause => ` AND ${clause}`).join('')}
+       AND w.closed_as IS NULL${scope.sql}
      ORDER BY w.created_at, w.run_id${lock}`,
-    [projectKey, wake.workflowName, wake.wait, wake.about, ...params]
+    [projectKey, wake.workflowName, wake.wait, wake.about, ...scope.params]
   );
   const items = [...new Set(found.rows.map(row => row.item_key))];
   const row = found.rows[0];

@@ -346,12 +346,15 @@ function waitAcceptances(
         sourceActor: null,
       },
       outcome: 'matched',
-      // Matched as its webhook's would be, by the mapped item or the event's subject; only an
-      // event that names neither (a check) goes to the wait's item, which the observation knows.
+      // Matched as its webhook's would be, and only against the wait on the item this
+      // observation is for, which stays apart from any item the binding maps.
       bindings: [
-        evaluated.start.itemKey !== undefined || evaluated.start.wake?.subject !== undefined
-          ? evaluated.start
-          : { ...evaluated.start, itemKey: wait.itemKey },
+        {
+          ...evaluated.start,
+          ...(evaluated.start.wake && {
+            wake: { ...evaluated.start.wake, observedItemKey: wait.itemKey },
+          }),
+        },
       ],
     });
   }

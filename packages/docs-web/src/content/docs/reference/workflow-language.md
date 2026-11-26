@@ -2770,7 +2770,8 @@ What the engine does with them:
   its subject, a binding that maps `item` matches only a wait on that item, and of those only
   one whose `subject` is the event's or names none. A binding that maps no item matches only
   an open wait whose `subject` is the event's, together with `about`, and starts on the wait's
-  own item. That is how an item keyed by its issue waits for a review on its pull request.
+  own item. That is how an item keyed by its issue waits for a review on its pull request. An
+  event that names no subject, such as a check, meets only a wait that names none.
 - **The deadline raises attention and wakes nothing.** An open set past the deadline of any of
   its waits is listed in the attention queue as an `overdue_wait` item with ref `wait:<run-id>`,
   naming each wait's event and `about` and when it opened. It stays open: a late event still
@@ -3233,7 +3234,8 @@ An event binding with `wake:` starts its workflow on the item of an open
 field `wake.about`. `{ wait: true }` passes the met wait. When the event names its subject (a
 review, a pull request or issue event) and the binding maps `item:`, only a wait on that item
 matches, and a wait that names a subject only for an event about it. Without `item:`, only a
-wait whose `subject` is the event's matches, on whichever item it is. A check names no single subject and maps no `item:`. See
+wait whose `subject` is the event's matches, on whichever item it is. A check names no single
+subject and maps no `item:`; it meets only a wait whose `subject` is `null`. See
 [start a stage when what an item waits for happens](/guides/workflow-triggers/#start-a-stage-when-what-an-item-waits-for-happens).
 
 A stage that needs both a clock and a hand-off declares two bindings with the

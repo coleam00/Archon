@@ -10,7 +10,10 @@ import {
 import { removeTempTree } from '@archon/paths/test-utils';
 import createGitHubWebhookSource from './source-plugin';
 import { githubWebhookSourceConfigSchema } from './source-config';
-import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
+import type {
+  ResourceStartBindingIntent,
+  SourceReceiptAcceptance,
+} from '@archon/workflows/schemas/resource-start';
 import type { ObservedItemWait } from '@archon/workflows/webhook-source-plugin';
 import type { z } from '@hono/zod-openapi';
 
@@ -464,6 +467,11 @@ describe('GitHub source plugin', () => {
 });
 
 describe('GitHub source plugin observing open waits', () => {
+  /** A webhook's start as the observation of the wait on `item` makes it. */
+  const observedFor = (start: ResourceStartBindingIntent, item: string) => ({
+    ...start,
+    ...(start.wake && { wake: { ...start.wake, observedItemKey: item } }),
+  });
   const revision = 'opaque-revision-id';
   const remote = 'https://github.com/owner/repo.git';
   const wait: ObservedItemWait = {
@@ -605,7 +613,8 @@ describe('GitHub source plugin observing open waits', () => {
     await github.receiveWebhook(payload, sign(payload), 'delivery-77', 'check_run');
     const [delivered] = recorded.calls[0]?.bindings ?? [];
     if (!delivered) throw new Error('The webhook delivery started the binding');
-    expect(observed.acceptances[0]?.bindings).toEqual([{ ...delivered, itemKey: 'pr-7' }]);
+    // The observation is for the wait's item, apart from any item the binding maps.
+    expect(observed.acceptances[0]?.bindings).toEqual([observedFor(delivered, 'pr-7')]);
     expect(observed.acceptances[0]?.receipt.deliveryId).toBe(
       `observe:check:github.com/owner/repo@${revision}:check:77:completed:success:checks-done:pr-7`
     );
@@ -665,7 +674,9 @@ describe('GitHub source plugin observing open waits', () => {
       },
     });
     await github.receiveWebhook(payload, sign(payload), 'delivery-300', 'pull_request_review');
-    expect(observed.acceptances[0]?.bindings).toEqual(recorded.calls[0]?.bindings ?? []);
+    const [delivered] = recorded.calls[0]?.bindings ?? [];
+    if (!delivered) throw new Error('The webhook delivery started the binding');
+    expect(observed.acceptances[0]?.bindings).toEqual([observedFor(delivered, 'pr-7')]);
     expect(observed.acceptances[0]?.receipt.deliveryId).toBe(
       'observe:review:github.com/owner/repo#7:300:submitted:reviewed:pr-7'
     );
@@ -727,7 +738,8 @@ describe('GitHub source plugin observing open waits', () => {
     const [delivered] = recorded.calls[0]?.bindings ?? [];
     expect(delivered?.itemKey).toBeUndefined();
     expect(delivered?.wake?.subject).toEqual({ kind: 'pr', number: 34 });
-    expect(observed.acceptances[0]?.bindings).toEqual(recorded.calls[0]?.bindings ?? []);
+    if (!delivered) throw new Error('The webhook delivery started the binding');
+    expect(observed.acceptances[0]?.bindings).toEqual([observedFor(delivered, 'issue-12')]);
   });
 
   test('an observed review keeps the item the binding maps, as its webhook would', async () => {
@@ -771,7 +783,7 @@ describe('GitHub source plugin observing open waits', () => {
         reason: 'commit not found',
       },
     ]);
-    expect(observed.acceptances.map(a => a.bindings[0]?.itemKey)).toEqual(['pr-7']);
+    expect(observed.acceptances.map(a => a.bindings[0]?.wake?.observedItemKey)).toEqual(['pr-7']);
   });
 
   test('a re-run at the same commit is a new delivery', async () => {
