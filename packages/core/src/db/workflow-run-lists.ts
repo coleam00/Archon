@@ -400,7 +400,17 @@ export async function findOpenWorkRuns(
        ${limitClause}`,
       values
     );
-    return result.rows.map(normalizeWorkflowRun);
+    const runs: WorkflowRun[] = [];
+    for (const row of result.rows) {
+      try {
+        runs.push(normalizeWorkflowRun(row));
+      } catch {
+        // This inbox returns readable runs only. Omit unreadable candidates; parser errors
+        // can quote private stored contents, so log only the run id and failure reason.
+        getLog().error({ workflowRunId: row.id }, 'open_work_run_normalization_failed');
+      }
+    }
+    return runs;
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_open_work_list_failed');

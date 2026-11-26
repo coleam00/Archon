@@ -342,10 +342,16 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 
 For `/signal`, send `{ "event": "checks.complete", "occurrence": "<metadata.wait.pauseId>", "payload": { "conclusion": "success" } }`. The occurrence identifies the exact wait, including when deadlines repeat. The legacy `resumeAt` selector remains accepted and is required when `occurrence` is omitted; it cannot distinguish two occurrences with the same event and deadline. If both selectors are supplied, both must match. Waits persisted without a `pauseId` can still be signaled using `resumeAt`.
 
-`GET /api/workflows/runs` rejects the entire list if any row it reads has an unsupported
-persisted status. It returns HTTP 500 (`Failed to list workflow runs`), with no partial list;
+Without `open=true`, `GET /api/workflows/runs` rejects the entire list if any row it reads has
+an unsupported persisted status. It returns HTTP 500 (`Failed to list workflow runs`), with no partial list;
 it never silently drops the offending row. Server logs record `WorkflowStatusReadError` with
 the offending run ID and exact stored value; the HTTP error does not include those details.
+
+With `open=true`, unreadable failed candidates are excluded and server logs record
+`open_work_run_normalization_failed` with `workflowRunId`. An unreadable ancestor leaves its
+affected failed runs eligible; server logs record `open_work_ancestry_unreadable` with
+`workflowRunId` and `ancestorRunId`. These diagnostics omit stored contents and parser errors.
+Database query failures still return HTTP 500.
 
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
 lifecycle. `outcome` is the workflow-authored verdict (`"succeeded"`, `"failed"`, or `null`) and

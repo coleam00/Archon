@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import { readRunItemId } from './item-of-run';
 import { heldRunOf } from './attention-queue';
 import type { ResourceStartRequestInspection } from './resource-start-store';
 import type { ItemMerge } from './schemas/item-merge';
@@ -41,6 +42,25 @@ function run(id: string, fields: Partial<WorkflowRun> = {}): WorkflowRun {
     ...fields,
   };
 }
+
+test('root item resolution rejects a distinct-run cycle before a repeated read', async () => {
+  const first = run('cycle-first', { parent_run_id: 'cycle-second', item_id: null });
+  const second = run('cycle-second', { parent_run_id: first.id, item_id: null });
+  const visited = new Set([first.id]);
+  const repeatedRead = new Error('Repeated ancestry read');
+  const result = readRunItemId(
+    {
+      getWorkflowRun: async id => {
+        if (visited.has(id)) throw repeatedRead;
+        visited.add(id);
+        return id === second.id ? second : first;
+      },
+    },
+    first
+  );
+  await expect(result).rejects.toBeInstanceOf(Error);
+  await expect(result).rejects.not.toBe(repeatedRead);
+});
 
 function asking(id: string, since: string, fields: Partial<WorkflowRun>): WorkflowRun {
   return run(id, {
