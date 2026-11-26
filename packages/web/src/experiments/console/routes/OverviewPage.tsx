@@ -17,7 +17,8 @@ import ReactMarkdown from 'react-markdown';
 import { Link, useParams } from 'react-router';
 import { useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
-import { FactoryNumbers } from '../factory/FactoryNumbers';
+import { AsksUnread } from '../factory/AsksUnread';
+import { FactoryNumbers, type NeedYou } from '../factory/FactoryNumbers';
 import { askReadOf, type AskRead } from '../factory/lib/item-asks';
 import { packBoard, placeFor } from '../factory/lib/board-numbers';
 import { PackMap, usePackView } from '../factory/PackMap';
@@ -69,11 +70,14 @@ export function PackOverview({
   /** Every item of the project, as the board reads them; undefined while they are read. */
   items: ItemRead[] | undefined;
   itemsError: Error | undefined;
-  /** The project's open asks; undefined until the attention list answers. */
-  needYou: number | undefined;
+  /** The project's open asks, as the need-you tile shows them. */
+  needYou: NeedYou;
   /** The project's asks, which the map counts per stage (`PackMap`). */
   asks: AskRead;
-  /** The Needs you line, drawn under the tiles and above the map (DESIGN.md, Overview page). */
+  /**
+   * The Needs you line, drawn under the tiles and above the map (DESIGN.md, Overview page), or
+   * in its place the page's one word that the asks could not be read.
+   */
   children?: ReactNode;
 }): ReactElement {
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
@@ -123,10 +127,11 @@ export function OverviewPage(): ReactElement {
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
   const packs = project?.itemPacks ?? [];
-  const { data: attention, error: attentionError } = useEntity<skill.RunsAttention>(
-    K.runsAttention,
-    skill.listRunsNeedingAttention
-  );
+  const {
+    data: attention,
+    error: attentionError,
+    refetch: refetchAttention,
+  } = useEntity<skill.RunsAttention>(K.runsAttention, skill.listRunsNeedingAttention);
   const itemAsks = useItemAsks(attention, projectId);
   // The board's every-item read, under its key: opening one page after the other reads once,
   // and the items on a stage are its open ones.
@@ -134,8 +139,8 @@ export function OverviewPage(): ReactElement {
   const open = { data: every.data?.filter(isMoving), error: every.error };
   // The tile counts asks, the Needs you tab's number, including asks on items at no stage; the
   // map counts items with asks per stage (`PackMap`), so the two can differ on purpose.
-  const needYou = attention === undefined ? undefined : itemAsks.asks.length;
   const asks = askReadOf(attention, attentionError, itemAsks);
+  const needYou: NeedYou = typeof asks === 'string' ? asks : asks.asks.length;
   return (
     <section className="flex h-full min-h-0 flex-col">
       <header className="flex flex-col gap-3 border-b border-border px-4 py-4 md:px-6">
@@ -164,8 +169,16 @@ export function OverviewPage(): ReactElement {
             needYou={needYou}
             asks={asks}
           >
-            {/* The count is the project's, so it is drawn once, under the first pack's tiles. */}
-            {index === 0 ? <NeedsYouLine projectId={projectId} count={needYou} /> : null}
+            {/* The count is the project's, so it is drawn once, under the first pack's tiles,
+                and so is the word that it could not be read. */}
+            {index !== 0 ? null : asks === 'failed' && attentionError !== undefined ? (
+              <AsksUnread error={attentionError} retry={refetchAttention} />
+            ) : (
+              <NeedsYouLine
+                projectId={projectId}
+                count={typeof needYou === 'number' ? needYou : undefined}
+              />
+            )}
           </PackOverview>
         ))}
       </div>

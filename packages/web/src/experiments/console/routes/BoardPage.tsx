@@ -16,6 +16,7 @@ import { useParams, useSearchParams } from 'react-router';
 import { useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { BoardTable } from '../factory/BoardTable';
+import { AsksUnread } from '../factory/AsksUnread';
 import { BoardToolbar, useBoardView, type BoardView } from '../factory/BoardToolbar';
 import { ColumnHeader } from '../factory/ColumnHeader';
 import { TONES } from '../factory/tones';
@@ -516,10 +517,11 @@ export function BoardPage(): ReactElement {
   const { projectId = '' } = useParams<{ projectId: string }>();
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
-  const { data: attention, error: attentionError } = useEntity<skill.RunsAttention>(
-    K.runsAttention,
-    skill.listRunsNeedingAttention
-  );
+  const {
+    data: attention,
+    error: attentionError,
+    refetch: refetchAttention,
+  } = useEntity<skill.RunsAttention>(K.runsAttention, skill.listRunsNeedingAttention);
   const asks = useItemAsks(attention, projectId);
   const itemAsks = askReadOf(attention, attentionError, asks);
   const [filter, setFilter] = useState('');
@@ -571,6 +573,13 @@ export function BoardPage(): ReactElement {
           {/* The board area fills the window's height, so each column scrolls on its own; what
               follows it runs on below, in the page's scroll. */}
           <div className={BOARD_AREA}>
+            {/* No card and no header counts needs-you while the asks are unread; said once here,
+                above every pack's columns and either view, rather than per card (#258). */}
+            {itemAsks === 'failed' && attentionError !== undefined ? (
+              <div className="mb-3">
+                <AsksUnread error={attentionError} retry={refetchAttention} />
+              </div>
+            ) : null}
             <BoardToolbar filter={filter} onFilter={setFilter} view={view} onView={setView} />
             <WorkOrdersStrip
               orders={orders}

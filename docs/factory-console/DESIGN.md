@@ -964,7 +964,11 @@ panel). Port the logic and ideas, not the styling: Mission Control used its own 
    (`--text-console-13`, accent, underlined). No questions, recommendations or answering on the
    Overview: Needs you is drawn in two places only, Archon's platform-wide Needs you page and
    the project's Needs you tab (owner and Rasmus, 2026-11-25, #218). Nothing shows while the
-   asks are read or when nothing waits, and the map follows right after.
+   asks are read or when nothing waits, and the map follows right after. When the asks could not
+   be read and none were read before, the line's place says so, with the error and a Retry
+   (`factory/AsksUnread.tsx`), and the need-you tile shows "?" rather than a skeleton; the Board
+   says the same once, above its columns, where its cards show no Needs you button and its
+   headers no needs-you chip (#258).
 4. **The map.**
 
 ## The map

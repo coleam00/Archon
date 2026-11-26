@@ -332,6 +332,8 @@ test('the board page hands its headers the asks as unread until the attention li
   const column = page.querySelector('[data-pack="flow"] [data-stage="build"]');
   expect(column?.querySelector('[data-chip-reading]')).not.toBeNull();
   expect(column?.querySelector('[data-header-chip="needs_you"]')).toBeNull();
+  // Still read, not failed: nothing says the asks could not be read.
+  expect(page.querySelector('[data-asks-unread]')).toBeNull();
 });
 
 /** An active `part_of` link from an item to work order `key`. */
@@ -949,4 +951,76 @@ test('the Overview tiles and the Board count the same items: in flight, merged a
   const table = render('/console/p/web/board?view=table', <BoardPage />);
   expect(table.querySelectorAll('[data-row]').length).toBe(4);
   expect(table.querySelector('[data-stage]')).toBeNull();
+});
+
+/** Fails the attention read with a server error; every other read as `nothingFetched`. */
+const attentionDown = (url: string): Promise<Response> =>
+  url.includes('/api/runs/attention')
+    ? Promise.resolve(
+        new Response(JSON.stringify({ error: 'attention store unavailable' }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+    : nothingFetched(url);
+
+test('a board whose asks could not be read says so once, and claims no needs-you anywhere (#258)', async () => {
+  seedBoard([item('issue-1', 'build', 'waiting'), item('issue-2', 'build', 'running')]);
+  set(K.packGraph('web', 'flow'), graph);
+  // Never read: the board's read is the first, and it fails.
+  invalidate(K.runsAttention);
+  const board = await mountBoard(attentionDown);
+  try {
+    await board.act(async () => new Promise(resolve => setTimeout(resolve, 10)));
+    const page = board.container;
+    const alerts = page.querySelectorAll('[data-asks-unread]');
+    expect(alerts.length).toBe(1);
+    const alert = alerts[0]?.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('attention store unavailable');
+    expect(
+      [...(alert?.querySelectorAll('button') ?? [])].map(button => button.textContent)
+    ).toEqual(['Retry']);
+    // No count claims none, and none claims it is still being read.
+    expect(page.querySelector('[data-header-chip="needs_you"]')).toBeNull();
+    expect(page.querySelector('[data-needs-you-link]')).toBeNull();
+    expect(page.querySelector('[data-chip-reading]')).toBeNull();
+    // What was drawn stays drawn: the column, its cards and their other chips.
+    const column = page.querySelector('[data-pack="flow"] [data-stage="build"]');
+    if (column === null) throw new Error('Expected the build column');
+    expect(keysIn(column as unknown as ParentNode)).toEqual(['issue-1', 'issue-2']);
+    expect(
+      [...column.querySelectorAll('[data-header-chip]')].map(chip =>
+        chip.getAttribute('data-header-chip')
+      )
+    ).toEqual(['running', 'waiting']);
+  } finally {
+    await board.unmount();
+  }
+});
+
+test('a failed re-read of the asks keeps the asks read before, with no alert (#258)', async () => {
+  seedBoard([item('issue-2', 'build', 'waiting')]);
+  set(K.packGraph('web', 'flow'), graph);
+  set(K.runsAttention, {
+    runs: [],
+    ownerLost: [],
+    asks: [askOn('issue-2')],
+    answerRefusals: {},
+    itemIds: new Set(['id-issue-2']),
+    degraded: [],
+  });
+  const board = await mountBoard(attentionDown);
+  try {
+    // The attention list is read again, and that read fails.
+    await board.act(async () => {
+      invalidate(K.runsAttention);
+      await new Promise(resolve => setTimeout(resolve, 10));
+    });
+    const page = board.container;
+    expect(page.querySelector('[data-asks-unread]')).toBeNull();
+    expect(page.querySelector('[data-item="issue-2"] [data-needs-you-link]')).not.toBeNull();
+    expect(page.querySelector('[data-header-chip="needs_you"]')).not.toBeNull();
+  } finally {
+    await board.unmount();
+  }
 });

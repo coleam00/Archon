@@ -111,7 +111,8 @@ export function ColumnHeader({
 /**
  * The header's chip row. With no provider (a pack board drawn alone) no asks are given, so no
  * needs-you chip and no skeleton; while they are read a skeleton stands in for its count (rule
- * 6); when they could not be read the cards show no button and the header no chip.
+ * 6); when they could not be read the cards show no button and the header no chip, and the
+ * board says why once, above its columns (`AsksUnread`).
  */
 function HeaderChips({
   label,
