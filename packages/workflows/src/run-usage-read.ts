@@ -120,8 +120,22 @@ async function loadReferencedChildren(
     try {
       children = await store.getWorkflowRunsByIds(childIds);
     } catch (error) {
-      getLog().warn({ err: error, childRunIds: childIds }, 'run_usage.child_lookup_unavailable');
-      return;
+      getLog().warn(
+        { err: error, childRunIds: childIds },
+        'run_usage.child_lookup_batch_unavailable'
+      );
+      // One malformed row rejects the combined lookup. Read each child on its
+      // own so a readable sibling keeps its usage and only the bad row is
+      // reported as unavailable.
+      children = [];
+      for (const id of childIds) {
+        try {
+          const rows = await store.getWorkflowRunsByIds([id]);
+          children.push(...rows.filter(row => row.id === id));
+        } catch (childError) {
+          getLog().warn({ err: childError, childRunId: id }, 'run_usage.child_lookup_unavailable');
+        }
+      }
     }
     await loadHistories(store, children, histories, unavailable);
     level = children.map(child => child.id);

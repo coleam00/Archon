@@ -409,6 +409,24 @@ describe('strict usage history reads', () => {
     });
   });
 
+  it('keeps readable siblings when one child row rejects the batch', async () => {
+    const fixture = source([run('good')], [parentEvent(['bad', 'good']), agentEvent('good')]);
+    fixture.store.getWorkflowRunsByIds = async ids => {
+      if (ids.includes('bad')) throw new Error('malformed child row');
+      return [run('good')].filter(row => ids.includes(row.id));
+    };
+    const report = await readRunUsageReport(fixture.store, run('parent'));
+    expect(report.totals.usd).toBe(0.25);
+    expect(report.coverage.usd.contributors).toContainEqual(
+      expect.objectContaining({ runId: 'good', path: 'build' })
+    );
+    expect(report.coverage.usd.limitations).toContainEqual({
+      runId: 'bad',
+      path: 'children',
+      reason: 'child_unavailable',
+    });
+  });
+
   it('does not certify a child inside an opaque authoritative instance', async () => {
     const leaf = parentEvent(['child']);
     leaf.step_name = 'fan__item__children';
