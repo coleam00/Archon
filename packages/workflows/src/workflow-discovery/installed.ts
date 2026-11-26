@@ -1,9 +1,16 @@
 import type { WorkflowLoadError, WorkflowWithSource } from '../schemas';
-import { qualifyPackReferences } from '../packaged-workflow';
 import { installedWorkflowName, listInstalledPacks, type InstalledPack } from '../workflow-source';
 import type { DiscoveryContext } from './context';
 import { expandScope } from './expand-scope';
 import { loadPackWorkflows, type PackWorkflowFile, type ScopeFile } from './load-dir';
+import {
+  type PackNaming,
+  packFileName,
+  packNaming,
+  packReferenceRefusal,
+  qualifyPackNames,
+  unloadedEntrypoints,
+} from './pack-entrypoints';
 
 export interface InstalledDiscovery {
   workflows: WorkflowWithSource[];
@@ -17,8 +24,7 @@ interface LoadedInstalledPack {
   pack: InstalledPack;
   label: string;
   files: PackWorkflowFile[];
-  /** Manifest entrypoint name by its `<folder>/<file>` path. */
-  entrypointByPath: Map<string, string>;
+  naming: PackNaming;
 }
 
 /**
@@ -58,7 +64,9 @@ export async function discoverInstalled(context: DiscoveryContext): Promise<Inst
   const reservedNames = new Set([...catalogEntrypoints].map(name => name.toLowerCase()));
   for (const pack of listed.packs) {
     const loaded = await loadInstalledPack(context, pack);
-    const { qualifiedByName, entrypoints } = qualifyPackNames(loaded, reservedNames);
+    const { qualifiedByName, entrypoints } = qualifyPackNames(loaded.naming, loaded.files);
+    for (const names of qualifiedByName.values())
+      for (const name of names) reservedNames.add(name.toLowerCase());
     const files = installedScopeFiles(context, loaded, qualifiedByName, catalogEntrypoints);
     const expandedScope = await expandScope(context, files);
     context.allErrors.push(...expandedScope.errors);
@@ -83,17 +91,12 @@ async function loadInstalledPack(
     { ...context, pack: pack.key, source: 'installed', label },
     pack.dir
   );
-  const entrypointByPath = new Map(
-    Object.entries(pack.manifest.entrypoints).map(([entry, path]) => [path, entry])
-  );
+  const naming = packNaming(pack.manifest.entrypoints, name => installedWorkflowName(pack, name));
   const explainedEntrypoints = reportPackLoadErrors(context, pack, label, loaded.errors, [
-    ...entrypointByPath,
+    ...naming.entrypointByPath,
   ]);
-  for (const [path, entry] of entrypointByPath) {
-    if (
-      !explainedEntrypoints.has(entry) &&
-      !loaded.files.some(file => `${file.folder}/${file.filename}` === path)
-    ) {
+  for (const [entry, path] of unloadedEntrypoints(naming, loaded.files)) {
+    if (!explainedEntrypoints.has(entry)) {
       context.allErrors.push({
         filename: `${label}/${path}`,
         workflowName: installedWorkflowName(pack, entry),
@@ -102,7 +105,7 @@ async function loadInstalledPack(
       });
     }
   }
-  return { pack, label, files: loaded.files, entrypointByPath };
+  return { pack, label, files: loaded.files, naming };
 }
 
 /** Report each load error, under every entrypoint it explains; returns those entrypoints. */
@@ -128,33 +131,6 @@ function reportPackLoadErrors(
   return explainedEntrypoints;
 }
 
-function qualifiedPackName(loaded: LoadedInstalledPack, file: PackWorkflowFile): string {
-  const entry = loaded.entrypointByPath.get(`${file.folder}/${file.filename}`);
-  return installedWorkflowName(loaded.pack, entry ?? file.parsed.workflow.name);
-}
-
-/**
- * A pack workflow is referred to inside its pack by its `name:`. It is known
- * outside as owner/plugin:<entrypoint> (entrypoints) or owner/plugin:<name> (support).
- */
-function qualifyPackNames(
-  loaded: LoadedInstalledPack,
-  reservedNames: Set<string>
-): { qualifiedByName: Map<string, string[]>; entrypoints: Set<string> } {
-  const qualifiedByName = new Map<string, string[]>();
-  const entrypoints = new Set<string>();
-  for (const file of loaded.files) {
-    const qualified = qualifiedPackName(loaded, file);
-    reservedNames.add(qualified.toLowerCase());
-    if (loaded.entrypointByPath.has(`${file.folder}/${file.filename}`)) entrypoints.add(qualified);
-    const authoredName = file.parsed.workflow.name;
-    const targets = qualifiedByName.get(authoredName) ?? [];
-    targets.push(qualified);
-    qualifiedByName.set(authoredName, targets);
-  }
-  return { qualifiedByName, entrypoints };
-}
-
 /** The pack's files under their qualified names, minus each whose references are refused. */
 function installedScopeFiles(
   context: DiscoveryContext,
@@ -166,9 +142,9 @@ function installedScopeFiles(
   const files = new Map<string, ScopeFile>();
   for (const file of loaded.files) {
     const filename = `${loaded.label}/${file.folder}/${file.filename}`;
-    const qualified = qualifiedPackName(loaded, file);
+    const qualified = packFileName(loaded.naming, file);
     const refusal = packReferenceRefusal(
-      loaded.label,
+      `installed plugin ${loaded.label}`,
       file,
       qualifiedByName,
       catalogEntrypoints,
@@ -185,48 +161,4 @@ function installedScopeFiles(
     });
   }
   return files;
-}
-
-/** Why a pack workflow's references keep it out of the catalog, or `undefined`. */
-function packReferenceRefusal(
-  label: string,
-  file: PackWorkflowFile,
-  qualifiedByName: ReadonlyMap<string, string[]>,
-  catalogEntrypoints: ReadonlySet<string>,
-  publicNames: ReadonlySet<string>
-): Pick<WorkflowLoadError, 'error' | 'errorType' | 'cause'> | undefined {
-  let references: ReturnType<typeof qualifyPackReferences>;
-  try {
-    references = qualifyPackReferences(
-      file.parsed.workflow,
-      qualifiedByName,
-      catalogEntrypoints,
-      publicNames
-    );
-  } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : String(error),
-      errorType: 'validation_error',
-      cause: error,
-    };
-  }
-  const { supportChildren, ambiguousReferences } = references;
-  if (ambiguousReferences.length > 0) {
-    return {
-      error: ambiguousReferences
-        .map(
-          name =>
-            `Ambiguous workflow reference '${name}': multiple files in installed plugin ${label} declare that name. Use a qualified workflow name.`
-        )
-        .join(' '),
-      errorType: 'validation_error',
-    };
-  }
-  if (supportChildren.length > 0) {
-    return {
-      error: `'workflow:' launches support workflow ${supportChildren.map(name => `'${name}'`).join(', ')} as a child run. A child run is dispatch, and only entrypoints are dispatchable: compose it with 'include:', or declare it as an entrypoint in archon-plugin.json.`,
-      errorType: 'validation_error',
-    };
-  }
-  return undefined;
 }

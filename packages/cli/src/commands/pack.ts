@@ -51,13 +51,15 @@ import {
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
-  nearestPackBindings,
+  declaredPackCopy,
   type PackCopy,
   packCopies,
   type PackGraph,
   type PackGraphLink,
+  packBindingRefusals,
   packWorkflowName,
   packWorkflows,
+  unprovidedWorkflowRefusal,
 } from '@archon/workflows/pack-graph';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { writeJsonLine } from '../utils/stdout';
@@ -415,20 +417,18 @@ async function findPack(
   const discovered = await loadWorkflows(cwd);
   const workflows = packWorkflows(discovered, packKey, cwd);
   const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
-  const bindings = nearestPackBindings(workflows);
-  if (bindings === undefined)
+  const declared = declaredPackCopy(packKey, workflows, discovered.support);
+  if (declared === undefined)
     throw new Error(
       [
         `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
         ...copyLines(packKey, copies, cwd, explicitSource),
       ].join('\n')
     );
-  return {
-    key: packKey,
-    copies,
-    bindings,
-    workflowNames: workflows.map(entry => entry.workflow.name),
-  };
+  // Every binding of the pack is checked before any is generated, so all are named at once.
+  const refusals = packBindingRefusals(packKey, declared);
+  if (refusals.length > 0) throw new Error(refusals.join('\n'));
+  return { key: packKey, copies, bindings: declared.bindings, workflowNames: declared.names };
 }
 
 function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
@@ -446,10 +446,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
   const name = packWorkflowName(pack.workflowNames, declared);
-  if (name === undefined)
-    throw new Error(
-      `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
-    );
+  if (name === undefined) throw new Error(unprovidedWorkflowRefusal(id, declared, pack.key));
   return name;
 }
 

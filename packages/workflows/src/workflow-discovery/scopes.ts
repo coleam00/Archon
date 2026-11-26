@@ -16,11 +16,13 @@ import { PACK_DECLARATION_PATH, qualifyWorkflowResources } from '../packaged-wor
 import { PackSettingsError, parsePackDeclaration, type PackDeclaration } from '../pack-settings';
 import type { DiscoveryContext } from './context';
 import {
-  addPackToScope,
   loadPackagedWorkflowsFromDir,
+  loadPackWorkflows,
   loadScopeDirectory,
   loadWorkflowsFromDir,
+  mergePackFiles,
   mergeScopeResults,
+  type PackWorkflowFile,
   type DirLoadResult,
   type ParsedWorkflowFile,
   type ScopeFile,
@@ -34,6 +36,13 @@ import {
 } from '../workflow-source/source-pack';
 import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import { getLog } from './log';
+import {
+  packFileName,
+  packNaming,
+  packReferenceRefusal,
+  qualifyPackNames,
+  unloadedEntrypoints,
+} from './pack-entrypoints';
 
 /** Workflows by filename; a higher scope's file replaces a lower scope's of the same name. */
 export type ScopeFiles = Map<string, ScopeFile>;
@@ -339,12 +348,56 @@ async function addSourcePack(
   }
   if (pack === null) return;
   getLog().debug({ pack: pack.name, packDir: pack.dir }, 'source_pack_folder_found');
+  const loaded = await loadPackWorkflows(
+    { ...context, pack: pack.name, source: 'project', label: pack.name },
+    pack.dir
+  );
+  // Named and referenced as an installed copy is, before the files join the project scope:
+  // an entrypoint by its manifest key, the rest as support by their authored name.
+  const naming = packNaming(pack.entrypoints, name => name);
+  const { qualifiedByName, entrypoints } = qualifyPackNames(naming, loaded.files);
+  const names = new Set([...qualifiedByName.values()].flat());
+  const errors = [...loaded.errors];
+  const files: PackWorkflowFile[] = [];
+  for (const file of loaded.files) {
+    const name = packFileName(naming, file);
+    const refusal = packReferenceRefusal(
+      `pack folder ${pack.name}`,
+      file,
+      qualifiedByName,
+      entrypoints,
+      names
+    );
+    if (refusal !== undefined)
+      errors.push({ filename: file.filename, workflowName: name, ...refusal });
+    else
+      files.push({
+        ...file,
+        parsed: { ...file.parsed, workflow: { ...file.parsed.workflow, name } },
+      });
+  }
+  for (const [entry, path] of unloadedEntrypoints(naming, loaded.files)) {
+    // A load error of the file explains it: keyed by its bare filename (a parse error, which
+    // resume matches), or by the pack, its folder or the file under the pack's label.
+    const labelled = `${pack.name}/${path}`;
+    const explained = errors.some(
+      ({ filename }) =>
+        filename === basename(path) || labelled === filename || labelled.startsWith(`${filename}/`)
+    );
+    if (!explained)
+      errors.push({
+        filename: path,
+        workflowName: entry,
+        error: `Entrypoint '${entry}' of pack folder ${pack.name} did not load from ${path}.`,
+        errorType: 'validation_error',
+      });
+  }
+  context.sourcePackSupport = {
+    key: pack.name,
+    names: new Set([...names].filter(name => !entrypoints.has(name))),
+  };
   const packaged: DirLoadResult = { workflows: new Map(), errors: [] };
-  await addPackToScope(context, packaged, new Set(), {
-    name: pack.name,
-    path: pack.dir,
-    source: 'project',
-  });
+  mergePackFiles(packaged, new Set(), { files, errors });
   mergeScopeResults(into, packaged);
 }
 

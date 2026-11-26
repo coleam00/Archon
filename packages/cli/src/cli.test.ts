@@ -3162,7 +3162,8 @@ it('validate workflows --workflow-source reports the source and only its workflo
 }, 30_000);
 
 // The route resolves cwd to the Git root before validate runs, and a named workflow
-// filters results; neither may hide a plugin manifest's unknown keys.
+// filters results; neither may hide a plugin manifest's unknown keys. A pack kept in a
+// repository subdirectory is validated as its own source.
 it('validate names unknown keys in the manifest of the plugin directory it runs in', async () => {
   const root = mkdtempSync(join(tmpdir(), 'archon-validate-manifest-'));
   const repo = join(root, 'repo');
@@ -3176,8 +3177,9 @@ it('validate names unknown keys in the manifest of the plugin directory it runs 
     join(repo, '.archon', 'config.yaml'),
     'defaults:\n  loadDefaultCommands: false\n  loadDefaultWorkflows: false\n'
   );
+  mkdirSync(join(plugin, 'probe'), { recursive: true });
   writeFileSync(
-    join(repo, '.archon', 'workflows', 'probe.yaml'),
+    join(plugin, 'probe', 'probe.yaml'),
     'name: probe\ndescription: Probe\nnodes:\n  - id: probe\n    bash: echo probe\n'
   );
   writeFileSync(
@@ -3220,6 +3222,118 @@ it('validate names unknown keys in the manifest of the plugin directory it runs 
     await removeTempTree(root);
   }
 }, 30_000);
+
+// Every route that reads a pack refuses a binding to a workflow its manifest does not list,
+// with the message pack bindings gives: validate from the pack's root, a workflow folder,
+// with a name, for a pack kept below a project's root, and pack bindings from a checkout.
+it('refuses a binding to an unlisted workflow wherever the pack is read', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-pack-refusal-'));
+  const home = join(root, 'home');
+  const flow = (name: string) =>
+    `name: ${name}\ndescription: d\nnodes:\n  - id: a\n    bash: echo ${name}\n`;
+  /** A pack folder listing `listed`, holding `present`, and bound to `bound`. */
+  const packFolder = (
+    dir: string,
+    name: string,
+    listed: string,
+    present: string[],
+    bound: string
+  ) => {
+    for (const workflow of present) {
+      mkdirSync(join(dir, workflow), { recursive: true });
+      writeFileSync(join(dir, workflow, `${workflow}.yaml`), flow(workflow));
+    }
+    mkdirSync(join(dir, '.pack'), { recursive: true });
+    writeFileSync(
+      join(dir, '.pack', 'pack.yaml'),
+      `bindings:\n  sweep:\n    workflow: ${bound}\n    resource: sweep\n    overlap: queue\n`
+    );
+    writeFileSync(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name,
+        description: 'd',
+        entrypoints: { [listed]: `${listed}/${listed}.yaml` },
+      })
+    );
+  };
+  const pack = join(root, 'factory');
+  const project = join(root, 'project');
+  for (const repo of [pack, project]) {
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+    writeFileSync(
+      join(repo, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultCommands: false\n  loadDefaultWorkflows: false\n'
+    );
+  }
+  packFolder(pack, 'factory', 'plan', ['plan', 'helper'], 'helper');
+  const kit = join(project, 'plugins', 'kit');
+  packFolder(kit, 'kit', 'one', ['one', 'two'], 'two');
+  // Its only listed file is missing; the unlisted one loads.
+  const broken = join(project, 'plugins', 'broken');
+  packFolder(broken, 'broken', 'one', ['two'], 'two');
+  const cli = (cwd: string, args: string[]) =>
+    spawnSync(process.execPath, [CLI_ENTRY, ...args], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, ARCHON_HOME: home, DATABASE_URL: '', ARCHON_TELEMETRY_DISABLED: '1' },
+    });
+  const refusal = (workflow: string, key: string) =>
+    `Binding 'sweep' names workflow '${workflow}', which pack '${key}' does not provide.`;
+  try {
+    const cases: [string, string[], string[]][] = [
+      [pack, [], [refusal('helper', 'factory')]],
+      [join(pack, 'plan'), [], [refusal('helper', 'factory')]],
+      [pack, ['plan'], [refusal('helper', 'factory')]],
+      [kit, [], [refusal('two', 'kit')]],
+      [kit, ['one'], [refusal('two', 'kit')]],
+      [join(kit, 'one'), [], [refusal('two', 'kit')]],
+      [
+        broken,
+        [],
+        [
+          refusal('two', 'broken'),
+          "Entrypoint 'one' of pack folder broken did not load from one/one.yaml.",
+        ],
+      ],
+    ];
+    for (const [cwd, name, expected] of cases) {
+      const result = cli(cwd, ['validate', 'workflows', ...name, '--json']);
+      expect(result.status, `${cwd} ${name}: ${result.stdout}${result.stderr}`).toBe(1);
+      const { results } = JSON.parse(result.stdout) as {
+        results: { issues: { message: string }[] }[];
+      };
+      const messages = results.flatMap(r => r.issues.map(i => i.message));
+      for (const message of expected) expect(messages).toContain(message);
+    }
+
+    const out = join(root, 'out');
+    const bindings = cli(project, [
+      'pack',
+      'bindings',
+      'factory',
+      '--workflow-source',
+      pack,
+      '--repo',
+      'github.com/acme/widgets',
+      '--host',
+      'host-1',
+      '--run-as',
+      'user-1',
+      '--out',
+      out,
+    ]);
+    expect(bindings.status, bindings.stdout + bindings.stderr).toBe(1);
+    expect(bindings.stderr).toContain(refusal('helper', 'factory'));
+    expect(existsSync(out)).toBe(false);
+  } finally {
+    await removeTempTree(root);
+  }
+}, 60_000);
 
 it.each([true, false])(
   'file-only commands inspect local files without a registry (Git: %s)',

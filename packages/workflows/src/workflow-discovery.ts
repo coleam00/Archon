@@ -21,7 +21,7 @@
  * entrypoints are dispatchable, as `owner/plugin:<entrypoint>`.
  */
 import { type ProviderRegistry } from '@archon/provider-contract';
-import type { WorkflowLoadResult } from './schemas';
+import type { WorkflowLoadResult, WorkflowWithSource } from './schemas';
 import * as archonPaths from '@archon/paths';
 import {
   WorkflowSourceUnavailableError,
@@ -122,7 +122,8 @@ export async function discoverWorkflows(
 }
 
 /**
- * Assemble the catalog: the legacy scopes, then installed entrypoints. A qualified
+ * Assemble the catalog: the legacy scopes less a source pack folder's support workflows,
+ * then installed entrypoints. A qualified
  * installed name wins over a legacy workflow declaring the same name, so no project or
  * global file can shadow an installed workflow.
  */
@@ -147,7 +148,18 @@ async function finishDiscovery(
   const legacy = await expandScope(context, workflowsByFile);
   allErrors.push(...legacy.errors);
   await assertCapturedFilesPresent(verifiedFiles);
-  const workflows = [...legacy.workflows, ...installed.workflows];
+  // A source pack folder's support workflows were in the scope for include expansion only.
+  const sourceSupport = context.sourcePackSupport;
+  const isSourceSupport = ({ workflow, source }: WorkflowWithSource): boolean =>
+    sourceSupport !== undefined &&
+    source === 'project' &&
+    workflow.pack?.key === sourceSupport.key &&
+    sourceSupport.names.has(workflow.name);
+  const support = [...legacy.workflows.filter(isSourceSupport), ...installed.support];
+  const workflows = [
+    ...legacy.workflows.filter(entry => !isSourceSupport(entry)),
+    ...installed.workflows,
+  ];
   if (context.roots.kind === 'captured') {
     const failure = allErrors.find(
       error => error.errorType === 'read_error' && isSourceReadFailure(error.cause, verifiedFiles)
@@ -166,7 +178,7 @@ async function finishDiscovery(
     },
     'workflows_discovery_completed'
   );
-  return { workflows, support: installed.support, errors: allErrors };
+  return { workflows, support, errors: allErrors };
 }
 
 /**

@@ -317,9 +317,62 @@ export function packWorkflows(
 export function nearestPackBindings(
   workflows: readonly WorkflowWithSource[]
 ): Readonly<Record<string, PackBinding>> | undefined {
-  return workflows
+  return nearestPackDeclaration(workflows)?.bindings;
+}
+
+/** The nearest declaration's bindings with the scope of the copy that declares them. */
+function nearestPackDeclaration(
+  workflows: readonly WorkflowWithSource[]
+): { source: WorkflowSource; bindings: Readonly<Record<string, PackBinding>> } | undefined {
+  const [pack] = workflows
     .flatMap(({ workflow: { pack } }) => (pack?.bindings !== undefined ? [pack] : []))
-    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0]?.bindings;
+    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source]);
+  return pack?.bindings === undefined
+    ? undefined
+    : { source: pack.source, bindings: pack.bindings };
+}
+
+/**
+ * The copy of pack `packKey` whose declaration binds its stages: the bindings, and the
+ * names that copy dispatches, which are all a binding may name. `workflows` is a dispatch
+ * catalog; `support` lets a declaration be read when only a support workflow loaded. Only
+ * the declaring copy's own workflows count: a same-named pack in another scope merges by key
+ * at run time but is not the pack these bindings were written for.
+ */
+export function declaredPackCopy(
+  packKey: string,
+  workflows: readonly WorkflowWithSource[],
+  support: readonly WorkflowWithSource[] = []
+):
+  | { source: WorkflowSource; bindings: Readonly<Record<string, PackBinding>>; names: string[] }
+  | undefined {
+  const ofPack = (entry: WorkflowWithSource): boolean => entry.workflow.pack?.key === packKey;
+  const declaration = nearestPackDeclaration([...workflows, ...support].filter(ofPack));
+  if (declaration === undefined) return undefined;
+  const names = workflows
+    .filter(entry => ofPack(entry) && entry.workflow.pack?.source === declaration.source)
+    .map(entry => entry.workflow.name);
+  return { ...declaration, names };
+}
+
+/**
+ * The refusal of a binding that names a workflow its pack does not dispatch, keyed as the
+ * operator named the pack (`factory` from its folder, `acme.factory` installed).
+ */
+export function unprovidedWorkflowRefusal(id: string, declared: string, packKey: string): string {
+  return `Binding '${id}' names workflow '${declared}', which pack '${packKey}' does not provide.`;
+}
+
+/** The refusal of each workflow name the bindings declare that `names` does not provide. */
+export function packBindingRefusals(
+  packKey: string,
+  copy: { bindings: Readonly<Record<string, PackBinding>>; names: readonly string[] }
+): string[] {
+  return Object.entries(copy.bindings).flatMap(([id, binding]) =>
+    bindingWorkflowNames(binding)
+      .filter(name => packWorkflowName(copy.names, name) === undefined)
+      .map(name => unprovidedWorkflowRefusal(id, name, packKey))
+  );
 }
 
 /**

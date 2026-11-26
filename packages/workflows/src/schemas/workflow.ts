@@ -591,7 +591,8 @@ export interface WorkflowLoadResult {
   /** Every dispatchable workflow: the only list a run, route, or listing may resolve against. */
   readonly workflows: readonly WorkflowWithSource[];
   /**
-   * Installed packs' support workflows, named `owner/plugin:<name>`. Not dispatchable:
+   * Support workflows: an installed pack's, named `owner/plugin:<name>`, and the unlisted
+   * workflows of a pack folder read as the source, by their authored name. Not dispatchable:
    * only composition inside their own pack (a runtime `include:` fan-out) resolves them.
    * Discovery always sets it; a result built by hand without installed packs may omit it.
    */
