@@ -856,7 +856,7 @@ Raising a capacity admits queued work at the next drain or start. Lowering it en
 The `overlap` setting controls a request that arrives while the resource is full:
 
 - `skip` records the blocking run and retains no promise to execute later.
-- `queue` retains the prepared request in its host's durable FIFO order.
+- `queue` retains the prepared request in its host's durable queue: first in, first out, with starts of an item with [priority](/reference/cli/#workflow-priority) ahead of the rest.
 
 When a `trigger fire` with a delivery ID and source run is skipped, the engine records one notice on the source run if its shared 50-notice allowance has room, even after the run ends. The notice names the binding, resource and blocking run or request and says the fire was dropped rather than queued. Inspect it with `archon workflow attention --notices --since 24h --json` or follow `archon workflow attention --watch --notices`. Scheduled skips and fires without a delivery ID or source run produce no notice. At or above the ceiling, admission records the skip without a notice. The skip remains visible through `archon trigger inspect`. A storage failure still fails admission and the host reports the preparation failure. Replaying the same delivery adds no second notice.
 

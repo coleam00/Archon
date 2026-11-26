@@ -37,6 +37,7 @@ export { workflowEndCommand, WORKFLOW_END_USAGE } from './workflow-end';
 export { workflowItemsCommand, WORKFLOW_ITEMS_USAGE } from './workflow-items';
 export { workflowMergedCommand, WORKFLOW_MERGED_USAGE } from './workflow-merged';
 export { workflowLandingCommand, WORKFLOW_LANDING_USAGE } from './workflow-landing';
+export { workflowPriorityCommand, WORKFLOW_PRIORITY_USAGE } from './workflow-priority';
 export { workflowLinkCommand, WORKFLOW_LINK_USAGE } from './workflow-link';
 export { workflowAnswerRefCommand, WORKFLOW_ANSWER_REF_USAGE } from './workflow-answer-ref';
 export {

@@ -341,6 +341,8 @@ export function createAdmissionTransaction(
       foreignHeldCheckouts: heldCheckouts(foreign, reusable),
       unknownForeignCheckoutHolder,
       heldItems: new Map(),
+      // This store holds no items, so no start has priority.
+      priorityItems: new Set(),
     };
   }
   async function admitExisting(

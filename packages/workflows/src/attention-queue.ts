@@ -109,6 +109,11 @@ const itemBase = {
   project: projectRefSchema.nullable(),
   /** The item (`workflow run --item`) the work belongs to, when it belongs to one. */
   item: workflowItemSchema.optional(),
+  /**
+   * The item has priority (`schemas/item-priority.ts`): its queued starts go ahead of ordinary
+   * ones. False when the work belongs to no item.
+   */
+  priority: z.boolean(),
   /** 1, plus one for every label write since the item opened. */
   revision: z.number().int().positive(),
   labels: attentionLabelsSchema,
@@ -360,6 +365,8 @@ export interface AttentionQueueItemSources {
   branch: string | null;
   /** The item the run belongs to; null when it belongs to none. */
   item: WorkflowItem | null;
+  /** The item has priority; false without an item. */
+  priority: boolean;
   /** For a usage-limit wait, the provider its node's failure record names, when it names one. */
   limitProvider?: string;
 }
@@ -438,6 +445,7 @@ export function toAttentionQueueItem(
   const base = {
     project: projectRefForRun(run, sources.codebase),
     ...(sources.item === null ? {} : { item: sources.item }),
+    priority: sources.priority,
     revision: wait === undefined ? 1 : attentionRevision(wait),
     labels: wait === undefined ? {} : attentionLabels(wait),
     pausedAt: (wait ?? pausedUsageLimitWait(run))?.waitingSince ?? null,
@@ -496,6 +504,7 @@ export interface AttentionQueueSource {
     | 'getWorkflowRunForAttention'
     | 'getCodebase'
     | 'getItem'
+    | 'getItemPriority'
     | 'listEventsForRuns'
   >;
   /** The branch of a run's checkout; null when the host has no record of one. */
@@ -509,6 +518,23 @@ export interface AttentionQueueSource {
   itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;
   /** Without it the queue lists no `owner_lost` items and an item read observes no owners. */
   ownerLost?: OwnerObserver;
+}
+
+/** The item `itemId` names and whether it has priority, as a queue item carries them. */
+export async function queueItemOf(
+  store: Pick<IWorkflowStore, 'getItem' | 'getItemPriority'>,
+  itemId: string | null
+): Promise<Pick<AttentionQueueItemSources, 'item' | 'priority'>> {
+  const item = itemId === null ? null : await store.getItem(itemId);
+  return withPriority(store, item);
+}
+
+/** `item` and whether it has priority; false without an item. */
+export async function withPriority(
+  store: Pick<IWorkflowStore, 'getItemPriority'>,
+  item: WorkflowItem | null
+): Promise<Pick<AttentionQueueItemSources, 'item' | 'priority'>> {
+  return { item, priority: item !== null && (await store.getItemPriority(item.id)) !== null };
 }
 
 export type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
@@ -543,7 +569,7 @@ async function itemFor(
     codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
     // Only a run started for an item has one, so most reads skip the store.
-    item: run.item_id === null ? null : await source.store.getItem(run.item_id),
+    ...(await queueItemOf(source.store, run.item_id)),
     // The wait stores no provider, so a binary that reads it strictly still reads it.
     ...(attention.kind === 'usage_limit'
       ? {
@@ -605,13 +631,14 @@ async function ownerLostItem(
   const sources: AttentionQueueItemSources = {
     codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
-    item: run.item_id === null ? null : await source.store.getItem(run.item_id),
+    ...(await queueItemOf(source.store, run.item_id)),
   };
   return {
     kind: 'owner_lost',
     ref: runItemRef(run.id),
     project: projectRefForRun(run, sources.codebase),
     ...(sources.item === null ? {} : { item: sources.item }),
+    priority: sources.priority,
     revision: 1,
     labels: {},
     pausedAt: null,
@@ -656,6 +683,7 @@ async function runAttentionQueueItems(
       getWorkflowRunForAttention: id => source.store.getWorkflowRunForAttention(id),
       getCodebase: id => source.store.getCodebase(id),
       getItem: id => source.store.getItem(id),
+      getItemPriority: id => source.store.getItemPriority(id),
       listEventsForRuns: (...args) => source.store.listEventsForRuns(...args),
       getWorkflowRun: async id => {
         // The batch already reports this row. Rereading it could log stored parser text;

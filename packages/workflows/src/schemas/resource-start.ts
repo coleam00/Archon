@@ -258,11 +258,11 @@ export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
 ]);
 /**
  * A start on an item still waiting for capacity, as the item read lists it. What it waits
- * behind is `ahead`: the queued starts of the same resource and host with an earlier queue
- * position, read when the item is read; at 0 it waits for a free slot on `resource`. A drain
- * admits one host's requests in queue order. It is queue order, not a promise; a start whose
- * checkout is held is passed over. The blocker a request recorded when it queued is not
- * listed: drains do not refresh it, so it soon names a start that has ended.
+ * behind is `ahead`: the queued starts of the same resource and host ahead of it in queue
+ * order (priority items' starts first, each group oldest first), read when the item is read;
+ * at 0 it waits for a free slot on `resource`. A drain admits one host's requests in queue
+ * order. It is not a promise; a start whose checkout is held is passed over. The blocker a
+ * request recorded when it queued is not listed: drains do not refresh it.
  * `workflow` is null when the stored launch does not read.
  */
 export const queuedItemStartSchema = z.object({

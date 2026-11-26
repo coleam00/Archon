@@ -805,6 +805,27 @@ describe('trigger CLI durable execution', () => {
     expect(fixture.runs()).toEqual([]);
   });
 
+  test('--priority on a start with no item is refused before anything queues', async () => {
+    const fixture = await heldTriggerRun('priority-none');
+    const refused = await runCli(
+      fixture.cliPath,
+      fixture.projectRoot,
+      fixture.archonHome,
+      [
+        'trigger',
+        'fire',
+        '--config',
+        join(fixture.projectRoot, '..', 'trigger.json'),
+        '--no-item',
+        '--priority',
+      ],
+      false
+    );
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain('--priority needs an item');
+    expect(fixture.requests()).toEqual([]);
+  });
+
   test.skipIf(process.platform === 'win32')(
     'published polling recipes distinguish delimiter collisions and replay on both hosts',
     async () => {

@@ -42,6 +42,7 @@ import { projectAddCommand } from './project';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
 import { workflowLandingCommand } from './workflow-landing';
+import { workflowPriorityCommand } from './workflow-priority';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
@@ -502,6 +503,85 @@ nodes:
   await runOn('shadow');
   expect(await stopsOnItem()).toMatchObject([{ stoppedIn: { workflow: 'review' } }]);
 });
+
+test.serial(
+  'workflow priority marks a work order and its members in the item read and attention',
+  async () => {
+    // A quiet outcome starts nothing and ends nothing, so the run stops its item.
+    writeFileSync(
+      join(projectRoot, '.archon', 'workflows', 'quiet.yaml'),
+      `name: quiet
+description: quiet
+mutates_checkout: false
+returns: { node: decide, outcome: outcome }
+nodes:
+  - id: decide
+    bash: |
+      echo '{"outcome": "not_ready"}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [not_ready] }
+      required: [outcome]
+`
+    );
+    const result = await invoke(host =>
+      workflowRunCommand(host, projectRoot, 'quiet', 'go', {
+        noWorktree: true,
+        item: 'item-urgent',
+      })
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+    const priority = (request: Parameters<typeof workflowPriorityCommand>[2], json = true) =>
+      invoke(host => workflowPriorityCommand(host, projectRoot, request, json, callerEnv));
+    expect(succeeded(await priority({ item: 'WO-urgent', clear: false }))).toEqual({
+      priority: { own: true, inheritedFrom: [] },
+    });
+    succeeded(
+      await invoke(host =>
+        workflowLinkCommand(
+          host,
+          projectRoot,
+          { item: 'item-urgent', kind: 'part_of', to: 'WO-urgent' },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const workOrder = (await readItemJson('WO-urgent')).item;
+    expect((await readItemJson('item-urgent')).priority).toEqual({
+      own: false,
+      inheritedFrom: [workOrder],
+    });
+    const stopped = async () => {
+      const read = await invoke(host =>
+        workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+      );
+      return (
+        JSON.parse(read.stdout) as {
+          items: { kind: string; priority: boolean; item?: { key: string } }[];
+        }
+      ).items.find(item => item.kind === 'stopped' && item.item?.key === 'item-urgent');
+    };
+    expect((await stopped())?.priority).toBe(true);
+
+    // A member's own clear leaves what the work order gives it, and says where to clear it.
+    const memberClear = await priority({ item: 'item-urgent', clear: true }, false);
+    expect(memberClear.exitCode, memberClear.stderr).toBe(0);
+    expect(memberClear.stdout).toContain('still priority through WO-urgent');
+    expect(succeeded(await priority({ item: 'WO-urgent', clear: true }))).toEqual({
+      priority: null,
+    });
+    expect((await readItemJson('item-urgent')).priority).toBeNull();
+    expect((await stopped())?.priority).toBe(false);
+    // Clearing names an item; it never creates one.
+    const missing = await priority({ item: 'never-named', clear: true });
+    expect(missing.exitCode).toBe(1);
+    expect(
+      rows<{ key: string }>("SELECT key FROM remote_agent_items WHERE key = 'never-named'")
+    ).toEqual([]);
+  }
+);
 
 /** A binding start on `key` not yet prepared, as a fire or a run's end writes it. */
 async function unpreparedStart(

@@ -401,6 +401,15 @@ export async function createFileWorkflowStore(
     recordItemLanding: async () => {
       throw new FileStoreUnsupportedError('items');
     },
+    getItemPriority: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    setItemPriority: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    clearItemPriority: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listItemLinks: async () => {
       throw new FileStoreUnsupportedError('items');
     },

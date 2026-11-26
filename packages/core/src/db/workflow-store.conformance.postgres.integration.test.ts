@@ -16,6 +16,7 @@ import {
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
 import { describeItemLandingConformance } from './item-landings.conformance-harness';
+import { describeItemPriorityConformance } from './item-priorities.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
 import {
   describeLinkedStartConformance,
@@ -346,6 +347,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   describeSqlStatusReadConformance(makeHarness);
   describeItemLinkConformance(makeHarness);
   describeItemLandingConformance(makeHarness);
+  describeItemPriorityConformance(makeHarness);
   describeLinkedStartConformance(makeHarness);
   test('a linked start and an unlink of its link are ordered: the unlink waits for the completion', async () => {
     const harness = await makeHarness();

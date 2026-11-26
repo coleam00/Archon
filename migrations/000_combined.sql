@@ -881,6 +881,18 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_landings (
   recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- An item's priority (`archon workflow priority`): the row existing means the item has its
+-- own priority. An item `part_of` one with priority has it too. A queued start of an item
+-- with priority goes ahead of ordinary ones on its resource and host; queue_position on the
+-- start requests is unchanged, so an older binary still admits in its own order.
+-- from_run_id has no foreign key, so run cleanup keeps the fact.
+CREATE TABLE IF NOT EXISTS remote_agent_item_priorities (
+  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id),
+  from_run_id TEXT,
+  from_node_path TEXT,
+  recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 -- One row per item tracker destination ('tracker:<project>'). The row exists once the
 -- destination's activation baseline is committed, so a later activation does not baseline
 -- again. The pass_owner_* columns name the process running the destination's pass, NULL

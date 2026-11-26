@@ -17,6 +17,7 @@ import type {
 } from '@archon/workflows/item-read';
 import { describeOperatorPause } from '@archon/workflows/schemas/operator-pause';
 import { landingSourceText } from '@archon/workflows/item-landing';
+import { prioritySourceText } from './workflow-priority';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
@@ -365,6 +366,7 @@ function itemFactLines(read: ItemRead): string[] {
   lines.push(...workOrderLines(read), ...dependsOnLines(read));
   if (read.landing !== null)
     lines.push(`Lands on: ${read.landing.branch} (${landingSourceText(read.landing)})`);
+  if (read.priority !== null) lines.push(`Priority: ${prioritySourceText(read.priority)}`);
   for (const report of read.degraded)
     if (report.reason === 'landing_unresolved') lines.push(`Lands on: unknown. ${report.message}`);
   return lines;

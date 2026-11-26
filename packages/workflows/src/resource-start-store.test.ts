@@ -36,6 +36,7 @@ const slot = (): ResourceSlotOccupancy => ({
   heldCheckouts: new Map(),
   foreignHeldCheckouts: new Map(),
   heldItems: new Map(),
+  priorityItems: new Set(),
 });
 test('local checkout occupancy takes precedence, including for read-only starts', () => {
   const guarded = launch(),
@@ -121,6 +122,31 @@ test('a free slot goes to a new start before an older start of another host, nev
     kind: 'run',
     id: 'holder',
   });
+});
+
+test('a new start on an item with priority passes older ordinary starts of its host, not older priority ones', () => {
+  const ordinary = { id: 'ordinary', hostId: 'host', launch: launch(false), itemId: 'plain' };
+  const urgent = { id: 'urgent', hostId: 'host', launch: launch(false), itemId: 'wo' };
+  const free = { ...slot(), capacity: 1, priorityItems: new Set(['wo', 'member']) };
+  expect(
+    resourceStartBlocker({ ...free, queue: [ordinary] }, launch(false), 'host', 'member')
+  ).toBeNull();
+  expect(
+    resourceStartBlocker({ ...free, queue: [urgent, ordinary] }, launch(false), 'host', 'member')
+  ).toEqual({ kind: 'request', id: 'urgent' });
+  // An ordinary start still waits for every older start of its host.
+  expect(
+    resourceStartBlocker({ ...free, queue: [urgent, ordinary] }, launch(false), 'host', 'plain')
+  ).toEqual({ kind: 'request', id: 'urgent' });
+  // Priority never takes a held slot.
+  expect(
+    resourceStartBlocker(
+      { ...free, queue: [ordinary], holders: [{ id: 'holder' }] },
+      launch(false),
+      'host',
+      'member'
+    )
+  ).toEqual({ kind: 'run', id: 'holder' });
 });
 
 test('failed resume ignores foreign-blocked promises but yields to runnable read-only ones', () => {

@@ -236,6 +236,7 @@ export type AttentionWatchStore = Pick<
   | 'getWorkflowRunForAttention'
   | 'getCodebase'
   | 'getItem'
+  | 'getItemPriority'
   | 'getItemAsk'
   | 'listWorkflowRuns'
   | 'listEventsForRuns'
