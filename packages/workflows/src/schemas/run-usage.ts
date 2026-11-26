@@ -18,6 +18,8 @@ const fields = {
   unknown: 'total_tokens_unknown',
 } as const;
 
+export const RUN_COST_METADATA_KEY = fields.cost;
+
 const persistedTokensSchema = tokenUsageSchema.omit({
   total: true,
   cost: true,

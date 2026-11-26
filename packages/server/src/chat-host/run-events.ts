@@ -6,6 +6,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowCommandSurface } from '@archon/workflows/deps';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { RUN_COST_METADATA_KEY } from '@archon/workflows/schemas/run-usage';
 import type { ChatRunEvent } from '@archon/chat-contract';
 import {
   getWorkflowEventEmitter,
@@ -24,7 +25,7 @@ type ProjectedRunEvent =
 
 /** The run's recorded total cost, when it is a usable amount. */
 export function runTotalCostUsd(run: WorkflowRun): number | undefined {
-  const cost = run.metadata.total_cost_usd;
+  const cost = run.metadata[RUN_COST_METADATA_KEY];
   return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined;
 }
 
