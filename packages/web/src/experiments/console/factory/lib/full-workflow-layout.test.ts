@@ -1,13 +1,17 @@
 import { describe, expect, test } from 'bun:test';
 import { columnsOf } from '../../routes/BoardPage';
-import { shippedGraph } from '../curated.test-fixtures';
+import { shippedFile, shippedGraph } from '../curated.test-fixtures';
 import { LIVE_FITTING } from '../map/useMapCamera';
 import { fullWorkflowLayout } from './full-workflow-layout';
 import { fitCamera } from './map-camera';
 import { boxesMeet } from './map-geometry.test-fixtures';
+import { groupsOf } from './view-groups';
 
 describe("the shipped pack's full workflow", () => {
-  const layout = fullWorkflowLayout(shippedGraph, columnsOf(shippedGraph));
+  const layout = fullWorkflowLayout(
+    shippedGraph,
+    columnsOf(shippedGraph, groupsOf(shippedFile, shippedGraph))
+  );
   const named = layout.arrows.map(arrow => ({
     name: `${arrow.from}>${arrow.to} [${arrow.lines.join('/')}]`,
     box: arrow.pillBox,

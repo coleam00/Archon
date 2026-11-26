@@ -128,17 +128,46 @@ describe('the shipped map', () => {
     expect(
       layout.arrows.map(arrow => [arrow.from, arrow.to, arrow.lines.join(' '), arrow.outcomes])
     ).toEqual([
-      ['intake', 'plan-and-build', 'placed, kept whole', ['placed', 'kept whole']],
-      // Build to CI and review (built_for_host) skips no card: Plan and build and Checks are
-      // neighbours, so it joins the one pill between them. Build to close (a drop or reshape
-      // answer) skips a card, so it is worded on this pill with its target.
+      // Triage's drop and reshape answers go to close, which skips a card, so they are worded
+      // on this pill with their target. Attend, in Plan and build, takes the asks link and
+      // split leave.
+      [
+        'intake',
+        'plan-and-build',
+        'placed +6',
+        [
+          'placed',
+          'drop → Landing',
+          'reshape → Landing',
+          'kept whole',
+          'waiting on what it needs',
+          'Folded into another item',
+          'Split into pieces',
+        ],
+      ],
+      // Build to CI and review (built_for_host) and to catch-up (built_for_land) skips no card:
+      // Plan and build and Checks are neighbours, so they join the one pill between them. Build
+      // to close (a drop or reshape answer) skips a card, so it is worded on this pill with its
+      // target.
       [
         'plan-and-build',
         'checks',
-        'built +4',
-        ['built', 'fixed for CI', 'take-as-is', 'drop → Landing', 'reshape → Landing'],
+        'built +5',
+        [
+          'built',
+          'fixed for CI',
+          'take-as-is',
+          'brought up to date',
+          'drop → Landing',
+          'reshape → Landing',
+        ],
       ],
-      ['checks', 'landing', 'ready +3', ['ready', 'take-as-is', 'drop', 'reshape']],
+      [
+        'checks',
+        'landing',
+        'ready +4',
+        ['ready', 'take-as-is', 'unchanged and green', 'drop', 'reshape'],
+      ],
       ['landing', 'landed', 'merged', ['merged']],
     ]);
     for (const arrow of layout.arrows) {
@@ -155,7 +184,9 @@ describe('the shipped map', () => {
       ['link', 'asked'],
       ['split', 'answered'],
       ['plan', 'answered, replan'],
-      ['stage-build', 'returned, send-back, one-more-round'],
+      ['attend', 'asked you'],
+      ['stage-build', 'returned, send-back, one-more-round, other, behind its branch'],
+      ['stage-host', 'changed'],
       ['land', 'land'],
     ]);
     // Checks holds stage-check and stage-host, which both send back to stage-build and to plan:
@@ -164,7 +195,7 @@ describe('the shipped map', () => {
     expect(routes).toEqual([...new Set(routes)]);
     expect(
       layout.feedback.paths.find(p => p.from === 'landing' && p.to === 'stage-build')?.label
-    ).toBe('send-back, returned');
+    ).toBe('send-back, other, returned, behind its branch');
     const bottom = Math.max(...layout.cards.map(card => card.box.y + card.box.h));
     for (const path of layout.feedback.paths)
       expect(Math.max(...segments(path.d).map(seg => seg.y2))).toBeGreaterThan(bottom);

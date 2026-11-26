@@ -13,9 +13,9 @@ export const shippedFile = JSON.parse(
   )
 ) as FactoryView;
 
-/** The pack graph of the commit that file is written for, b62ec7b, as the graph route answered it. */
+/** The pack graph of the commit that file is written for, c1104737, as the checker's graph read gives it. */
 export const shippedGraph = JSON.parse(
-  readFileSync(join(import.meta.dir, '__fixtures__', 'pack-graph-b62ec7b.json'), 'utf8')
+  readFileSync(join(import.meta.dir, '__fixtures__', 'pack-graph-c1104737.json'), 'utf8')
 ) as PackGraph;
 
 export const shippedView: CuratedView = curatedView(shippedFile, shippedGraph);

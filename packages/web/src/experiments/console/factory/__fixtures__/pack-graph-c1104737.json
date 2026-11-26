@@ -1,17 +1,13 @@
 {
   "pack": "Wirasm.archon-software-factory",
-  "entries": [
+  "loaded": [
     {
-      "binding": "order",
-      "kind": "fire",
-      "stage": "Wirasm/archon-software-factory:order"
-    },
-    {
-      "binding": "order-on-label",
-      "kind": "event",
-      "stage": "Wirasm/archon-software-factory:order"
+      "source": "installed",
+      "key": "Wirasm.archon-software-factory",
+      "dir": "<install>"
     }
   ],
+  "otherCopies": [],
   "stages": [
     {
       "name": "Wirasm/archon-software-factory:order",
@@ -65,9 +61,9 @@
         }
       ],
       "inFlow": true,
-      "returns": "judge__judge",
+      "returns": "verdict",
       "outcome": {
-        "field": "recommend",
+        "field": "outcome",
         "form": "enum",
         "values": [
           {
@@ -127,7 +123,7 @@
           }
         ]
       },
-      "asks": false,
+      "asks": true,
       "waits": false,
       "nodes": [
         {
@@ -139,7 +135,7 @@
           "fanOut": null
         },
         {
-          "id": "admit",
+          "id": "judge__admit",
           "kind": "agent",
           "dependsOn": ["judge__judge"],
           "loopGroup": null,
@@ -147,9 +143,17 @@
           "fanOut": null
         },
         {
-          "id": "admitted",
+          "id": "judge__admitted",
           "kind": "exec",
-          "dependsOn": ["admit"],
+          "dependsOn": ["judge__admit"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "verdict",
+          "kind": "exec",
+          "dependsOn": ["judge__admitted"],
           "loopGroup": null,
           "blocks": [],
           "fanOut": null
@@ -283,6 +287,55 @@
       ]
     },
     {
+      "name": "Wirasm/archon-software-factory:complexity",
+      "workflow": "complexity",
+      "entry": false,
+      "roles": [
+        {
+          "role": "@judge",
+          "fallback": "medium"
+        }
+      ],
+      "inFlow": true,
+      "returns": "end",
+      "outcome": {
+        "field": "outcome",
+        "form": "enum",
+        "values": [
+          {
+            "value": "recorded",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "none",
+            "startsNothing": true,
+            "final": true
+          }
+        ]
+      },
+      "asks": false,
+      "waits": false,
+      "nodes": [
+        {
+          "id": "at_triage",
+          "kind": "agent",
+          "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "end",
+          "kind": "exec",
+          "dependsOn": ["at_triage"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        }
+      ]
+    },
+    {
       "name": "Wirasm/archon-software-factory:plan",
       "workflow": "plan",
       "entry": false,
@@ -329,6 +382,63 @@
       ]
     },
     {
+      "name": "Wirasm/archon-software-factory:attend",
+      "workflow": "attend",
+      "entry": false,
+      "roles": [
+        {
+          "role": "@manager",
+          "fallback": "large"
+        }
+      ],
+      "inFlow": true,
+      "returns": "end",
+      "outcome": {
+        "field": "outcome",
+        "form": "enum",
+        "values": [
+          {
+            "value": "recorded",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "none",
+            "startsNothing": true,
+            "final": true
+          }
+        ]
+      },
+      "asks": false,
+      "waits": false,
+      "nodes": [
+        {
+          "id": "given",
+          "kind": "exec",
+          "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "attend",
+          "kind": "agent",
+          "dependsOn": ["given"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "end",
+          "kind": "exec",
+          "dependsOn": ["given", "attend"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        }
+      ]
+    },
+    {
       "name": "Wirasm/archon-software-factory:stage-build",
       "workflow": "stage-build",
       "entry": false,
@@ -351,6 +461,11 @@
           },
           {
             "value": "built_for_host",
+            "startsNothing": true,
+            "final": false
+          },
+          {
+            "value": "built_for_land",
             "startsNothing": true,
             "final": false
           },
@@ -465,6 +580,14 @@
           "fanOut": null
         },
         {
+          "id": "sizes",
+          "kind": "exec",
+          "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
           "id": "review__review",
           "kind": "agent",
           "dependsOn": ["base"],
@@ -506,7 +629,7 @@
         {
           "id": "verdict__verdict",
           "kind": "agent",
-          "dependsOn": ["review__review", "tests__tests", "product__product"],
+          "dependsOn": ["review__review", "tests__tests", "product__product", "sizes"],
           "loopGroup": null,
           "blocks": [
             {
@@ -527,7 +650,7 @@
         {
           "id": "exhausted",
           "kind": "agent",
-          "dependsOn": ["limit"],
+          "dependsOn": ["limit", "sizes"],
           "loopGroup": null,
           "blocks": [],
           "fanOut": null
@@ -652,6 +775,71 @@
       ]
     },
     {
+      "name": "Wirasm/archon-software-factory:catchup",
+      "workflow": "catchup",
+      "entry": false,
+      "roles": [
+        {
+          "role": "@host",
+          "fallback": "medium"
+        }
+      ],
+      "inFlow": true,
+      "returns": "end",
+      "outcome": {
+        "field": "outcome",
+        "form": "enum",
+        "values": [
+          {
+            "value": "ready",
+            "startsNothing": true,
+            "final": false
+          },
+          {
+            "value": "changed",
+            "startsNothing": true,
+            "final": false
+          }
+        ]
+      },
+      "asks": false,
+      "waits": false,
+      "nodes": [
+        {
+          "id": "onto",
+          "kind": "exec",
+          "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "same",
+          "kind": "exec",
+          "dependsOn": ["onto"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "checks",
+          "kind": "agent",
+          "dependsOn": ["same"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "end",
+          "kind": "exec",
+          "dependsOn": ["same", "checks"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        }
+      ]
+    },
+    {
       "name": "Wirasm/archon-software-factory:landgate",
       "workflow": "landgate",
       "entry": false,
@@ -718,6 +906,11 @@
         "values": [
           {
             "value": "landed",
+            "startsNothing": true,
+            "final": false
+          },
+          {
+            "value": "behind",
             "startsNothing": true,
             "final": false
           },
@@ -1153,6 +1346,22 @@
           "loopGroup": null,
           "blocks": [],
           "fanOut": null
+        },
+        {
+          "id": "admit",
+          "kind": "agent",
+          "dependsOn": ["judge"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "admitted",
+          "kind": "exec",
+          "dependsOn": ["admit"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
         }
       ]
     },
@@ -1280,6 +1489,108 @@
       ]
     },
     {
+      "name": "Wirasm/archon-software-factory:survey",
+      "workflow": "survey",
+      "entry": false,
+      "roles": [
+        {
+          "role": "@judge",
+          "fallback": "medium"
+        }
+      ],
+      "inFlow": false,
+      "returns": "judge__judge",
+      "outcome": {
+        "field": "recommend",
+        "form": "enum",
+        "values": [
+          {
+            "value": "build",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "narrow",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "split",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "shape",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "recipe",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "native",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "fold",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "park",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "deprecate",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "decline",
+            "startsNothing": true,
+            "final": true
+          },
+          {
+            "value": "close",
+            "startsNothing": true,
+            "final": true
+          }
+        ]
+      },
+      "asks": false,
+      "waits": false,
+      "nodes": [
+        {
+          "id": "judge__judge",
+          "kind": "agent",
+          "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "judge__admit",
+          "kind": "agent",
+          "dependsOn": ["judge__judge"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        },
+        {
+          "id": "judge__admitted",
+          "kind": "exec",
+          "dependsOn": ["judge__admit"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null
+        }
+      ]
+    },
+    {
       "name": "Wirasm/archon-software-factory:tests",
       "workflow": "tests",
       "entry": false,
@@ -1377,6 +1688,180 @@
       ]
     }
   ],
+  "entries": [
+    {
+      "binding": "order",
+      "kind": "fire",
+      "stage": "Wirasm/archon-software-factory:order"
+    },
+    {
+      "binding": "order-on-label",
+      "kind": "event",
+      "stage": "Wirasm/archon-software-factory:order"
+    }
+  ],
+  "document": null,
+  "metricViews": {
+    "names": {
+      "sf.ended_ready": "Changes that reached the land gate",
+      "sf.round_findings": "Findings the checks sent back",
+      "sf.round_notes": "Notes the checks left",
+      "sf.review_rounds": "Check round number at each ending",
+      "sf.landgate_would_land": "Changes the land policy would have landed without asking",
+      "sf.link_would_wait": "Items that would have waited on work outside their order",
+      "sf.admit_would_start": "Items that could have started without an operator",
+      "sf.admit_would_ask": "Items an operator would have been asked about",
+      "sf.complexity_at_triage": "Items triage judged for complexity, by step",
+      "sf.complexity_after_build": "Built changes judged for complexity, by step",
+      "sf.complexity_agrees": "Built changes whose complexity matched triage's",
+      "sf.attend_would_answer": "Asks the attend shadow would have answered",
+      "sf.attend_would_escalate": "Asks the attend shadow would have left to an operator"
+    },
+    "cards": [
+      {
+        "shape": "count",
+        "title": "Changes ready to land",
+        "metric": "sf.ended_ready"
+      },
+      {
+        "shape": "count",
+        "title": "Found by the checks",
+        "metric": "sf.round_findings",
+        "breakdown": [
+          {
+            "metric": "sf.round_notes",
+            "label": "notes"
+          }
+        ]
+      },
+      {
+        "shape": "count",
+        "title": "Would have landed by policy",
+        "metric": "sf.landgate_would_land"
+      },
+      {
+        "shape": "ratio",
+        "title": "Could have started without asking",
+        "numerator": "sf.admit_would_start",
+        "denominator": "sf.admit_would_ask",
+        "denominator_label": "items an operator would be asked about"
+      },
+      {
+        "shape": "ratio",
+        "title": "Complexity: the build agreed with triage",
+        "numerator": "sf.complexity_agrees",
+        "denominator": "sf.complexity_after_build",
+        "denominator_label": "changes judged after the build"
+      }
+    ],
+    "problem": null
+  },
+  "groups": [],
+  "capacity": [],
+  "settings": [
+    {
+      "name": "triage_policy",
+      "description": "Path to the project's own triage policy, a document that says what its maintainers judge work items against. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
+      "type": "string",
+      "default": "",
+      "value": ""
+    },
+    {
+      "name": "plan_policy",
+      "description": "Path to the project's own plan policy, a document that says what its maintainers hold a design to. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
+      "type": "string",
+      "default": "",
+      "value": "docs/factory-console/ENGINEERING.md"
+    },
+    {
+      "name": "split_policy",
+      "description": "Path to the project's own split policy, a document that says when its maintainers build an item as several changes, and how a PRD, an epic and a bundle of tasks are cut. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
+      "type": "string",
+      "default": "",
+      "value": null
+    },
+    {
+      "name": "build_policy",
+      "description": "Path to the project's own build policy, a document that says what its maintainers hold the code of a change to. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
+      "type": "string",
+      "default": "",
+      "value": "docs/factory-console/ENGINEERING.md"
+    },
+    {
+      "name": "review_policy",
+      "description": "Path to the project's own review policy, a document that says what its maintainers hold a change to before it lands. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
+      "type": "string",
+      "default": "",
+      "value": "docs/factory-console/ENGINEERING.md"
+    },
+    {
+      "name": "test_policy",
+      "description": "Path to the project's own test policy, a document that says what its maintainers hold tests to. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
+      "type": "string",
+      "default": "",
+      "value": "docs/factory-console/ENGINEERING.md"
+    },
+    {
+      "name": "host_policy",
+      "description": "Path to the project's own host policy, a document that says which checks a proposed change needs that the host does not start on its own, and how to start them. Relative to the project, or absolute. Empty means the project has none.",
+      "type": "string",
+      "default": "",
+      "value": ""
+    },
+    {
+      "name": "admit_policy",
+      "description": "Path to the project's own admit policy, a document that says which items may start without an operator being asked. Relative to the project, or absolute. Empty means the project has none. Shadow only for now: the judgment is recorded and nothing acts on it.",
+      "type": "string",
+      "default": "",
+      "value": "docs/factory-console/policy/admit.md"
+    },
+    {
+      "name": "land_policy",
+      "description": "Path to the project's own land policy, a document that says which ready changes may land without an operator being asked. Relative to the project, or absolute. Empty means the project has none: the land gate then asks an operator every time.",
+      "type": "string",
+      "default": "",
+      "value": "docs/factory-console/policy/land.md"
+    },
+    {
+      "name": "land_gate",
+      "description": "Whether the land gate acts on the land policy. `shadow`: the gate asks an operator every time, and its ask, its result and the metric `sf.landgate_would_land` say what the policy would have done. `policy`: a change the policy lets land starts the land stage with no ask.",
+      "type": "enum",
+      "default": "shadow",
+      "value": null
+    },
+    {
+      "name": "discoveries_policy",
+      "description": "Path to the project's own discoveries policy, a document that says what its maintainers want filed from what agents notice. Relative to the project, or absolute. Empty means the pack's default applies alone.",
+      "type": "string",
+      "default": "",
+      "value": "docs/factory-console/policy/discoveries.md"
+    },
+    {
+      "name": "validate_command",
+      "description": "The command that proves a change works in this project, run from the project's root, for example `cargo test && cargo clippy -- -D warnings`. The land stage runs it when the project has no host. Empty means none is declared: the land stage then uses the check the maintainers use and says which.",
+      "type": "string",
+      "default": "",
+      "value": "bun run validate --only generated-files,type-check,lint,format && bun run --cwd packages/web test && bun run --cwd packages/server test && bun run build:web"
+    },
+    {
+      "name": "attend_policy",
+      "description": "Path to the project's own attend policy, a document that says what an agent may do with an ask: which asks are always the operator's, beyond the pack's list, which kinds an agent may answer alone, and the rulings already made. Relative to the project, or absolute. Empty means the pack's list applies alone. The attend stage only advises for now: nothing acts on its answers.",
+      "type": "string",
+      "default": "",
+      "value": null
+    },
+    {
+      "name": "product_policy",
+      "description": "Path to the project's own product policy, a document that says what the project is for, who uses it and how it wants to feel to them, or points at the product and design documents that do. Relative to the project, or absolute. Empty means the pack's default applies alone.",
+      "type": "string",
+      "default": "",
+      "value": "docs/factory-console/DESIGN.md"
+    }
+  ],
+  "settingsFile": {
+    "path": ".archon\\packs\\Wirasm.archon-software-factory.yaml",
+    "problems": []
+  },
   "arrows": [
     {
       "from": {
@@ -1758,6 +2243,66 @@
     {
       "from": {
         "stage": "Wirasm/archon-software-factory:triage",
+        "settled": "answered",
+        "option": "build"
+      },
+      "to": "Wirasm/archon-software-factory:link",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "link-after-triage-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:triage",
+        "settled": "answered",
+        "option": "split"
+      },
+      "to": "Wirasm/archon-software-factory:split",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "split-after-triage-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:triage",
+        "settled": "answered",
+        "option": "drop"
+      },
+      "to": "Wirasm/archon-software-factory:close",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "close-after-triage-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:triage",
+        "settled": "answered",
+        "option": "reshape"
+      },
+      "to": "Wirasm/archon-software-factory:close",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "close-after-triage-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:triage",
         "outcome": "split"
       },
       "to": "Wirasm/archon-software-factory:split",
@@ -2016,6 +2561,21 @@
     },
     {
       "from": {
+        "stage": "Wirasm/archon-software-factory:landgate",
+        "settled": "answered",
+        "option": "other"
+      },
+      "to": "Wirasm/archon-software-factory:stage-build",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "stage-build-after-landgate-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
         "stage": "Wirasm/archon-software-factory:land",
         "outcome": "returned"
       },
@@ -2024,6 +2584,62 @@
       "active": false,
       "declared": {
         "binding": "stage-build-after-land",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:land",
+        "outcome": "behind"
+      },
+      "to": "Wirasm/archon-software-factory:stage-build",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "stage-build-after-land-behind",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:stage-build",
+        "outcome": "built_for_land"
+      },
+      "to": "Wirasm/archon-software-factory:catchup",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "catchup-after-build",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:catchup",
+        "outcome": "ready"
+      },
+      "to": "Wirasm/archon-software-factory:land",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "land-after-catchup",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:catchup",
+        "outcome": "changed"
+      },
+      "to": "Wirasm/archon-software-factory:stage-host",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "stage-host-after-catchup",
         "problems": []
       },
       "installed": null
@@ -2048,6 +2664,21 @@
         "stage": "Wirasm/archon-software-factory:land",
         "settled": "answered",
         "option": "send-back"
+      },
+      "to": "Wirasm/archon-software-factory:stage-build",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "stage-build-after-land-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:land",
+        "settled": "answered",
+        "option": "other"
       },
       "to": "Wirasm/archon-software-factory:stage-build",
       "linked": null,
@@ -2091,6 +2722,21 @@
         "stage": "Wirasm/archon-software-factory:stage-build",
         "settled": "answered",
         "option": "send-back"
+      },
+      "to": "Wirasm/archon-software-factory:stage-build",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "stage-build-after-build-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:stage-build",
+        "settled": "answered",
+        "option": "other"
       },
       "to": "Wirasm/archon-software-factory:stage-build",
       "linked": null,
@@ -2165,6 +2811,21 @@
       "from": {
         "stage": "Wirasm/archon-software-factory:stage-check",
         "settled": "answered",
+        "option": "other"
+      },
+      "to": "Wirasm/archon-software-factory:stage-build",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "stage-build-after-check-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:stage-check",
+        "settled": "answered",
         "option": "take-as-is"
       },
       "to": "Wirasm/archon-software-factory:stage-host",
@@ -2196,6 +2857,21 @@
         "stage": "Wirasm/archon-software-factory:stage-host",
         "settled": "answered",
         "option": "send-back"
+      },
+      "to": "Wirasm/archon-software-factory:stage-build",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "stage-build-after-host-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:stage-host",
+        "settled": "answered",
+        "option": "other"
       },
       "to": "Wirasm/archon-software-factory:stage-build",
       "linked": null,
@@ -2400,142 +3076,148 @@
         "problems": []
       },
       "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:plan",
+        "outcome": "ask"
+      },
+      "to": "Wirasm/archon-software-factory:attend",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "attend-after-plan",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:link",
+        "outcome": "waiting"
+      },
+      "to": "Wirasm/archon-software-factory:attend",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "attend-after-link",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:link",
+        "outcome": "fold"
+      },
+      "to": "Wirasm/archon-software-factory:attend",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "attend-after-link",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:split",
+        "outcome": "whole"
+      },
+      "to": "Wirasm/archon-software-factory:attend",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "attend-after-split",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:split",
+        "outcome": "split"
+      },
+      "to": "Wirasm/archon-software-factory:attend",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "attend-after-split",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:stage-build",
+        "outcome": "ask"
+      },
+      "to": "Wirasm/archon-software-factory:attend",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "attend-after-stage-build",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:stage-check",
+        "outcome": "ask"
+      },
+      "to": "Wirasm/archon-software-factory:attend",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "attend-after-stage-check",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:stage-host",
+        "outcome": "ask"
+      },
+      "to": "Wirasm/archon-software-factory:attend",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "attend-after-stage-host",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:triage",
+        "outcome": "build"
+      },
+      "to": "Wirasm/archon-software-factory:complexity",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "complexity-after-triage",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:triage",
+        "outcome": "narrow"
+      },
+      "to": "Wirasm/archon-software-factory:complexity",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "complexity-after-triage",
+        "problems": []
+      },
+      "installed": null
     }
   ],
   "fanOutBlocks": [],
-  "discoveryErrors": [],
-  "loaded": [
-    {
-      "source": "installed",
-      "key": "Wirasm.archon-software-factory",
-      "dir": "<install>"
-    }
-  ],
-  "otherCopies": [],
-  "document": {
-    "path": "how-it-works.md",
-    "problems": [],
-    "text": "# How the factory works\n\nWork comes in as a work order, or as an issue someone adds the `factory` label to. Agents also find work while they do other work. Triage decides whether it is worth building. The link stage places it among the project's other work. Plan writes down how to build it. Build writes the change and opens a draft pull request. Three checks read it, then the project's own CI and the reviews on the pull request. The land gate lets it land or asks you, and the change lands on its branch.\n\nYou are asked only when a decision is yours. Each ask comes with its options, what each costs, and a recommendation when the stage has a basis for one.\n\n## How work gets in\n\n- **A work order.** Handed to the factory by an operator: one item, or several that belong together.\n- **An issue.** Someone adds the `factory` label to it.\n- **Found by agents.** Noticed outside their own task, and filed as new work after a change lands.\n\n## Triage\n\nTriage reads a new item and decides what should happen to it, the way the project's maintainers would.\n\n- **The item.** A work order, a labelled issue or a finding.\n- **Judge.** Decides what happens, as maintainers would.\n- **The call.** Build, narrow, split, shape, park or close. A call that does not start a build is shown to you; nothing is closed behind your back.\n\n## Link\n\nLink decides whether the item can be built now.\n\n- **Place it.** Sets it among the project's other open work and records what it depends on.\n- **Wait.** An item that cannot be built before another lands waits, and goes on by itself when that one lands.\n- **You.** Asked when what it waits on will not land: keep waiting, start anyway, or drop it.\n\n## Plan\n\nPlan reads the project and writes down how to build the item. It changes nothing. When it asks you, your answer starts it again with the answer in hand.\n\n- **Read the project.** Code, rules and history.\n- **Weigh the ways.** The smallest, the complete, and any other.\n- **The plan.** What a builder needs, with no questions left.\n- **You.** Asked when the choice is yours.\n\n## Build\n\nBuild writes the change in its own checkout and opens a draft pull request. What the checks and CI find comes back to the same builder to fix. A plan that cannot be built as written goes back to Plan.\n\n- **Build the change.** Writes and tests it in its own checkout.\n- **Draft pull request.** The change, ready to be read.\n- **What comes back.** Findings from the checks and from CI.\n\n## Checks\n\nThree checks read every change. The verdict approves it, sends it back to the same builder with what they found, or sends it back to Plan when it needs a different approach. After three rounds it asks you.\n\n- **Review.** Reads the code.\n- **Tests.** Judges the tests the change adds.\n- **Product.** Tries what a user sees.\n- **Verdict.** Approve, send back, or replan.\n\n## CI and reviews\n\nThe host round reads what the project's own CI and the reviewers on the pull request say, and sends what must change back to the builder.\n\n## Landing\n\n- **Land gate.** Decides whether the change lands without asking you. With no land policy it asks every time.\n- **Land.** Merges the change into its landing branch: the project's base branch, or the branch its work order names.\n- **Landed check.** Looks at the branch after the landing, and starts a fix when the change broke it.\n- **Discoveries.** What the agents noticed along the way becomes new work.\n- **Close.** A change you dropped is closed with your reason; one you sent back to shaping stays open as a draft.\n\n## You\n\nAnswer what the factory asks. An answer is a decision: it starts what comes next and reaches that stage as already made.\n\n---\n\nThe explainer this page grew from was written by Cole Medin for the factory's first Console view.\n"
-  },
-  "metricViews": {
-    "names": {},
-    "cards": [],
-    "problem": ".shared/metric-views.json is invalid: cards.3.denominator_label: Invalid input: expected string, received undefined"
-  },
-  "groups": [
-    {
-      "name": "Intake",
-      "stages": ["order", "triage", "split", "link"]
-    },
-    {
-      "name": "Plan and build",
-      "stages": ["plan", "stage-build"]
-    },
-    {
-      "name": "Checks",
-      "stages": ["stage-check", "stage-host"]
-    },
-    {
-      "name": "Landing",
-      "stages": ["landgate", "land", "landed", "discoveries", "close"]
-    }
-  ],
-  "settings": [
-    {
-      "name": "triage_policy",
-      "description": "Path to the project's own triage policy, a document that says what its maintainers judge work items against. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "plan_policy",
-      "description": "Path to the project's own plan policy, a document that says what its maintainers hold a design to. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "split_policy",
-      "description": "Path to the project's own split policy, a document that says when its maintainers build an item as several changes, and how a PRD, an epic and a bundle of tasks are cut. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "build_policy",
-      "description": "Path to the project's own build policy, a document that says what its maintainers hold the code of a change to. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "review_policy",
-      "description": "Path to the project's own review policy, a document that says what its maintainers hold a change to before it lands. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "test_policy",
-      "description": "Path to the project's own test policy, a document that says what its maintainers hold tests to. Relative to the project, or absolute. Empty means the project has none and the pack's default applies alone.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "host_policy",
-      "description": "Path to the project's own host policy, a document that says which checks a proposed change needs that the host does not start on its own, and how to start them. Relative to the project, or absolute. Empty means the project has none.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "admit_policy",
-      "description": "Path to the project's own admit policy, a document that says which items may start without an operator being asked. Relative to the project, or absolute. Empty means the project has none. Shadow only for now: the judgment is recorded and nothing acts on it.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "land_policy",
-      "description": "Path to the project's own land policy, a document that says which ready changes may land without an operator being asked. Relative to the project, or absolute. Empty means the project has none: the land gate then asks an operator every time.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "land_gate",
-      "description": "Whether the land gate acts on the land policy. `shadow`: the gate asks an operator every time, and its ask, its result and the metric `sf.landgate_would_land` say what the policy would have done. `policy`: a change the policy lets land starts the land stage with no ask.",
-      "type": "enum",
-      "default": "shadow",
-      "value": null
-    },
-    {
-      "name": "discoveries_policy",
-      "description": "Path to the project's own discoveries policy, a document that says what its maintainers want filed from what agents notice. Relative to the project, or absolute. Empty means the pack's default applies alone.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "validate_command",
-      "description": "The command that proves a change works in this project, run from the project's root, for example `cargo test && cargo clippy -- -D warnings`. The land stage runs it when the project has no host. Empty means none is declared: the land stage then uses the check the maintainers use and says which.",
-      "type": "string",
-      "default": "",
-      "value": null
-    },
-    {
-      "name": "product_policy",
-      "description": "Path to the project's own product policy, a document that says what the project is for, who uses it and how it wants to feel to them, or points at the product and design documents that do. Relative to the project, or absolute. Empty means the pack's default applies alone.",
-      "type": "string",
-      "default": "",
-      "value": null
-    }
-  ],
-  "settingsFile": {
-    "path": ".archon\\packs\\Wirasm.archon-software-factory.yaml",
-    "problems": []
-  },
-  "capacity": []
+  "discoveryErrors": []
 }

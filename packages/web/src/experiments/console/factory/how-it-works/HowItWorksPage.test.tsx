@@ -13,7 +13,7 @@ const { mount: mountTree, settle } = await installDom();
 const { FactoryHome, HowItWorksPage } = await import('./HowItWorksPage');
 
 const PACK = 'Wirasm.archon-software-factory';
-const PATH = '/packs/Wirasm/archon-software-factory/b62ec7b/.shared/factory-view.json';
+const PATH = '/packs/Wirasm/archon-software-factory/c1104737/.shared/factory-view.json';
 
 const project = (id: string, itemPacks: string[]): Project => ({
   id,
@@ -34,10 +34,10 @@ afterEach(async () => {
 });
 
 /** Mounts the sidebar's Factory routes at `at`, the pack staged by the second project. */
-async function mount(at: string, view: PackView): Promise<HTMLElement> {
+async function mount(at: string, view: PackView, graph = shippedGraph): Promise<HTMLElement> {
   set(K.projects, [project('cb-0', []), project('cb-1', [PACK])]);
   set(K.packView('cb-1', PACK), view);
-  set(K.packGraph('cb-1', PACK), shippedGraph);
+  set(K.packGraph('cb-1', PACK), graph);
   const mounted = await mountTree(
     <MemoryRouter initialEntries={[at]}>
       <Routes>
@@ -124,7 +124,9 @@ describe('How it works', () => {
   });
 
   test("without the file: the pack's document and the derived map", async () => {
-    const opened = await mount(page, NO_FILE);
+    // The pack's main declares no document; one that does has it served with its graph.
+    const document = { path: 'how-it-works.md', problems: [], text: '# How the factory works' };
+    const opened = await mount(page, NO_FILE, { ...shippedGraph, document });
     expect(opened.querySelector('[data-document]')?.textContent).toContain('How the factory works');
     expect(opened.querySelector('div[data-flow]')).not.toBeNull();
     expect(cards(opened)).toEqual([]);

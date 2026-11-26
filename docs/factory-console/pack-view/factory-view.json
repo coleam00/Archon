@@ -1,7 +1,7 @@
 {
   "version": 1,
   "title": "Software factory",
-  "summary": "Work comes in as a work order, or as an issue someone adds the factory label to. Order turns each one into an item the factory can read. Triage decides whether the item is worth building. Link holds it until what it depends on has landed. Plan writes down the approach. Build writes the change and opens a draft pull request. Three checks then read it (a review, a test check and a product check) and send what they find back to the builder, for up to three rounds. Once they approve, the factory reads CI and the reviews on the pull request and fixes what they raise. A ready change goes to a merge gate that lets it through or asks you; told \"land\", the factory merges it itself. A person steps in only to answer the questions an item asks, and to shape an item triage or your answer sent back to shaping.",
+  "summary": "Work comes in as a work order, or as an issue someone adds the factory label to. Order turns each one into an item the factory can read. Triage decides whether the item is worth building. Link holds it until what it depends on has landed. Plan writes down the approach. Build writes the change and opens a draft pull request. Three checks then read it (a review, a test check and a product check) and send what they find back to the builder, for up to three rounds. Once they approve, the factory reads CI and the reviews on the pull request and fixes what they raise. A ready change goes to a merge gate that lets it through or asks you; told \"land\", the factory merges it itself. A change that fell behind its landing branch is brought up to date, and goes straight back to merging when it is unchanged and CI is green. A person steps in only to answer the questions an item asks, and to shape an item triage or your answer sent back to shaping.",
   "groups": [
     {
       "name": "Intake",
@@ -10,7 +10,8 @@
         "order",
         "triage",
         "split",
-        "link"
+        "link",
+        "complexity"
       ],
       "kind": "intake"
     },
@@ -19,16 +20,18 @@
       "blurb": "Plan, then build",
       "stages": [
         "plan",
-        "stage-build"
+        "stage-build",
+        "attend"
       ],
       "kind": "build"
     },
     {
       "name": "Checks",
-      "blurb": "Checks, CI and PR reviews",
+      "blurb": "Checks, CI and PR reviews, and catching up",
       "stages": [
         "stage-check",
-        "stage-host"
+        "stage-host",
+        "catchup"
       ],
       "kind": "check"
     },
@@ -78,8 +81,9 @@
       "blurb": "Judges whether an item is worth building, the way the project's maintainers would.",
       "steps": {
         "judge__judge": "Decides whether to build",
-        "admit": "Would it start on its own",
-        "admitted": "Records the admit measurement"
+        "judge__admit": "Would it start on its own",
+        "judge__admitted": "Records the admit measurement",
+        "verdict": "Asks you when the call is yours"
       },
       "drilldown": {
         "phases": [
@@ -106,7 +110,7 @@
                 "icon": "ruler",
                 "kind": "agent",
                 "covers": [
-                  "admit"
+                  "judge__admit"
                 ]
               },
               {
@@ -115,7 +119,21 @@
                 "icon": "database",
                 "kind": "script",
                 "covers": [
-                  "admitted"
+                  "judge__admitted"
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Hand on",
+            "cards": [
+              {
+                "title": "The call",
+                "text": "Hands on build, narrow or split, and asks you about every other call",
+                "icon": "send",
+                "kind": "script",
+                "covers": [
+                  "verdict"
                 ]
               }
             ]
@@ -215,6 +233,47 @@
         ]
       }
     },
+    "complexity": {
+      "label": "Complexity",
+      "short": "How hard to get right?",
+      "blurb": "Judges, at triage, how complex the item is to get right and what a shorter path could skip. A measurement only: it starts nothing.",
+      "steps": {
+        "at_triage": "Judges how complex it is",
+        "end": "Records the judgment"
+      },
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Judge",
+            "cards": [
+              {
+                "title": "Judge",
+                "text": "Judges whether the item is plain, ordinary or involved, and what a shorter path could skip",
+                "icon": "ruler",
+                "kind": "agent",
+                "covers": [
+                  "at_triage"
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Record",
+            "cards": [
+              {
+                "title": "Record",
+                "text": "Records the judgment; nothing acts on it",
+                "icon": "database",
+                "kind": "script",
+                "covers": [
+                  "end"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
     "plan": {
       "label": "Plan",
       "short": "Plans how to build it",
@@ -234,6 +293,62 @@
                 "kind": "agent",
                 "covers": [
                   "plan"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "attend": {
+      "label": "Attend",
+      "short": "Your agent's advice",
+      "blurb": "Reads the asks a stage left the way your own agent would, and records the answer it would give or that it would bring the ask to you. Advice only: it answers nothing.",
+      "steps": {
+        "given": "Counts the asks",
+        "attend": "Advises on each ask",
+        "end": "Records the advice"
+      },
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Read the asks",
+            "cards": [
+              {
+                "title": "Count the asks",
+                "text": "Counts the asks the stage left, so no agent starts when there are none",
+                "icon": "clipboard-list",
+                "kind": "script",
+                "covers": [
+                  "given"
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Advise",
+            "cards": [
+              {
+                "title": "Advise",
+                "text": "Says how your agent would answer each ask, or that it would bring the ask to you",
+                "icon": "message-square",
+                "kind": "agent",
+                "covers": [
+                  "attend"
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Record",
+            "cards": [
+              {
+                "title": "Record",
+                "text": "Records the advice beside the asks; nothing acts on it",
+                "icon": "database",
+                "kind": "script",
+                "covers": [
+                  "end"
                 ]
               }
             ]
@@ -298,6 +413,7 @@
       "blurb": "A review, a test check and a product check read the change and approve it or send it back.",
       "steps": {
         "base": "Reads the base commit",
+        "sizes": "Reads the change's sizes",
         "review__review": "Code review",
         "tests__tests": "Test check",
         "product__product": "Product check",
@@ -319,6 +435,15 @@
                 "kind": "script",
                 "covers": [
                   "base"
+                ]
+              },
+              {
+                "title": "Sizes",
+                "text": "Reads the change's size at each delivery run since it was last planned",
+                "icon": "ruler",
+                "kind": "script",
+                "covers": [
+                  "sizes"
                 ]
               }
             ]
@@ -484,6 +609,72 @@
         ]
       }
     },
+    "catchup": {
+      "label": "Catch up",
+      "short": "Still what was approved?",
+      "blurb": "The short way back to merging. A change brought up to date with its landing branch goes straight back to land when the change itself is unchanged and CI is green; otherwise CI and the reviews read it again.",
+      "steps": {
+        "onto": "Finds the landing branch",
+        "same": "Compares the change before and after",
+        "checks": "Reads CI at the new head",
+        "end": "Hands the change on"
+      },
+      "drilldown": {
+        "phases": [
+          {
+            "label": "Compare",
+            "cards": [
+              {
+                "title": "Landing branch",
+                "text": "Finds the branch the change lands on",
+                "icon": "git-branch",
+                "kind": "script",
+                "covers": [
+                  "onto"
+                ]
+              },
+              {
+                "title": "Compare",
+                "text": "Compares the lines the change adds and removes with what was approved",
+                "icon": "search-code",
+                "kind": "script",
+                "covers": [
+                  "same"
+                ]
+              }
+            ]
+          },
+          {
+            "label": "CI",
+            "cards": [
+              {
+                "title": "Read CI",
+                "text": "Reads the checks at the new head, when the change is unchanged",
+                "icon": "monitor-check",
+                "kind": "agent",
+                "covers": [
+                  "checks"
+                ]
+              }
+            ]
+          },
+          {
+            "label": "Hand on",
+            "cards": [
+              {
+                "title": "Hand on",
+                "text": "Back to land, or to CI and the reviews",
+                "icon": "send",
+                "kind": "script",
+                "covers": [
+                  "end"
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
     "landgate": {
       "label": "Merge gate",
       "short": "May it merge?",
@@ -619,6 +810,22 @@
     }
   },
   "outcomes": {
+    "attend:none": {
+      "label": "no asks to advise on",
+      "story": "Attend found no open asks to advise on"
+    },
+    "attend:recorded": {
+      "label": "advice recorded",
+      "story": "Attend recorded how your agent would answer the asks"
+    },
+    "catchup:changed": {
+      "label": "changed",
+      "story": "Catch up found the change differs from what was approved, or its CI is not green, and sent it to CI and the reviews"
+    },
+    "catchup:ready": {
+      "label": "unchanged and green",
+      "story": "Catch up found the change unchanged and CI green, and sent it back to land"
+    },
     "close:dropped": {
       "label": "Dropped by you",
       "reads": "ended",
@@ -645,12 +852,24 @@
         "withoutChange": "You sent it back to shaping before a change was proposed"
       }
     },
+    "complexity:none": {
+      "label": "nothing recorded",
+      "story": "Complexity recorded no judgment"
+    },
+    "complexity:recorded": {
+      "label": "complexity recorded",
+      "story": "Complexity recorded how hard it is to get right"
+    },
     "discoveries:*": {
       "story": "The factory looked for other work it noticed"
     },
     "land:ask": {
       "label": "asked you",
       "story": "Merging asked you"
+    },
+    "land:behind": {
+      "label": "behind its branch",
+      "story": "Merging found it behind its landing branch and sent it back to the builder"
     },
     "land:landed": {
       "label": "merged",
@@ -774,6 +993,10 @@
       "label": "fixed for CI",
       "story": "Build fixed what CI and the reviews raised"
     },
+    "stage-build:built_for_land": {
+      "label": "brought up to date",
+      "story": "Build brought the change up to date with its landing branch"
+    },
     "stage-build:replan": {
       "label": "replan",
       "story": "Build sent it back to planning"
@@ -819,22 +1042,22 @@
     "triage:close": {
       "label": "Closed by triage",
       "reads": "ended",
-      "story": "Triage closed it"
+      "story": "Triage judged it should be closed"
     },
     "triage:decline": {
       "label": "Closed by triage",
       "reads": "ended",
-      "story": "Triage closed it"
+      "story": "Triage judged it should be declined"
     },
     "triage:deprecate": {
       "label": "Closed by triage",
       "reads": "ended",
-      "story": "Triage closed it"
+      "story": "Triage judged it should be deprecated"
     },
     "triage:fold": {
       "label": "Folded into another item",
       "reads": "ended",
-      "story": "Triage folded it into another item"
+      "story": "Triage judged it belongs in another item"
     },
     "triage:narrow": {
       "label": "narrow",
@@ -848,7 +1071,7 @@
     "triage:park": {
       "label": "Parked by triage",
       "reads": "parked",
-      "story": "Triage parked it for later"
+      "story": "Triage judged it should be parked for later"
     },
     "triage:recipe": {
       "label": "Handled another way",
@@ -1114,7 +1337,8 @@
             "row": 2,
             "stages": [
               "landgate",
-              "land"
+              "land",
+              "catchup"
             ]
           },
           {

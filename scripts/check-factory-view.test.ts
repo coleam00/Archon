@@ -18,12 +18,12 @@ import {
 
 const docsCopy = resolve(import.meta.dir, '../docs/factory-console/pack-view/factory-view.json');
 const readDocsCopy = (): unknown => JSON.parse(readFileSync(docsCopy, 'utf8'));
-/** The graph of the pack commit the docs copy is written for, b62ec7b, as the graph route served it. */
+/** The graph of the pack commit the docs copy is written for, c1104737, as the checker's graph read gives it. */
 const shippedGraph = JSON.parse(
   readFileSync(
     resolve(
       import.meta.dir,
-      '../packages/web/src/experiments/console/factory/__fixtures__/pack-graph-b62ec7b.json'
+      '../packages/web/src/experiments/console/factory/__fixtures__/pack-graph-c1104737.json'
     ),
     'utf8'
   )

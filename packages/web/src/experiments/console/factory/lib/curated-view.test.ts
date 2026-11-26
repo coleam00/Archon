@@ -9,10 +9,13 @@ const FLOW = [
   'triage',
   'link',
   'split',
+  'complexity',
   'plan',
+  'attend',
   'stage-build',
   'stage-check',
   'stage-host',
+  'catchup',
   'landgate',
   'land',
   'landed',
@@ -20,7 +23,7 @@ const FLOW = [
   'close',
 ];
 
-describe('the slim file over the b62ec7b graph', () => {
+describe('the slim file over the c1104737 graph', () => {
   test('one map stage per in-flow graph stage, in flow order, with its words from the file', () => {
     expect(shippedView.stages.map(entry => [entry.id, entry.workflows])).toEqual(
       FLOW.map(workflow => [workflow, [workflow]])
@@ -37,9 +40,9 @@ describe('the slim file over the b62ec7b graph', () => {
     expect(
       mapColumns(shippedView).map(column => [column.label, column.stages, column.tone])
     ).toEqual([
-      ['Intake', ['order', 'triage', 'link', 'split'], 'intake'],
-      ['Plan and build', ['plan', 'stage-build'], 'build'],
-      ['Checks', ['stage-check', 'stage-host'], 'check'],
+      ['Intake', ['order', 'triage', 'link', 'split', 'complexity'], 'intake'],
+      ['Plan and build', ['plan', 'attend', 'stage-build'], 'build'],
+      ['Checks', ['stage-check', 'stage-host', 'catchup'], 'check'],
       ['Landing', ['landgate', 'land', 'discoveries', 'close'], 'land'],
       ['Merged', ['landed'], 'merged'],
     ]);
@@ -104,7 +107,7 @@ describe('the slim file over the b62ec7b graph', () => {
   });
 });
 
-describe("the map's arrows over the b62ec7b graph", () => {
+describe("the map's arrows over the c1104737 graph", () => {
   const label = (from: string, to: string) =>
     shippedArrows.find(arrow => arrow.from === from && arrow.to === to)?.label;
 
@@ -112,7 +115,7 @@ describe("the map's arrows over the b62ec7b graph", () => {
     expect(label('triage', 'link')).toBe('build, narrow');
     expect(label('link', 'plan')).toBe('placed');
     expect(label('stage-build', 'close')).toBe('drop, reshape');
-    expect(label('stage-check', 'stage-build')).toBe('returned, send-back, one-more-round');
+    expect(label('stage-check', 'stage-build')).toBe('returned, send-back, one-more-round, other');
     expect(label('land', 'landed')).toBe('merged');
     expect(label('plan', 'plan')).toBe('answered');
     expect(label('link', 'link')).toBe('asked');
