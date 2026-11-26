@@ -262,6 +262,31 @@ test('a failed card keeps its label top right and its PR as a button at its bott
   }
 });
 
+test("a failed card's reason names its stage by the view file's label, not its workflow id (#261)", async () => {
+  const base = READS[0]!;
+  const failed: ItemRead = {
+    ...base,
+    item: { ...base.item, id: 'id-issue-5', key: 'issue-5' },
+    standing: { ...base.standing, state: 'failed' },
+  };
+  const packs = new Map<string, CardPack>([
+    [
+      'flow',
+      {
+        stages: [{ name: 'acme/flow:check', workflow: 'check', inFlow: true }],
+        view: { stages: { check: { label: 'Checks' } } } as unknown as FactoryView,
+      },
+    ],
+  ]);
+  const view = await mount([failed], packs);
+  try {
+    const reason = view.container.querySelector('[data-item="issue-5"] [data-item-reason]');
+    expect(reason?.textContent).toBe('Checks failed');
+  } finally {
+    await view.unmount();
+  }
+});
+
 test("a card's Needs you N is the open-ask count of the tab its link opens, twins too (#225)", () => {
   const on = (ref: string, key: string): ItemAsk => ({
     ...ask,

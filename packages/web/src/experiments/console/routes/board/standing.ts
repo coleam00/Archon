@@ -107,10 +107,16 @@ export function runToOpen(read: ItemRead): ItemRead['runs'][number] | undefined 
 export const needsDecision = (read: ItemRead): boolean =>
   read.standing.state === 'failed' || read.standing.state === 'stopped';
 
-/** Why the item needs a decision, in the engine's own facts: what failed, or how its run ended. */
-export function decisionReason(read: ItemRead): string {
+/**
+ * Why the item needs a decision, in the engine's own facts: what failed, or how its run ended.
+ * `stageOf` names the run's stage (`runStageName`), so the reason never prints a workflow id.
+ */
+export function decisionReason(
+  read: ItemRead,
+  stageOf: (run: ItemRead['runs'][number]) => string
+): string {
   const run = standingRun(read);
-  const stage = run?.pack?.workflow ?? run?.workflow ?? 'A run';
+  const stage = run === undefined ? 'A run' : stageOf(run);
   if (read.standing.state === 'failed') return `${stage} failed`;
   const [stop] = read.questions.flatMap(question =>
     question.kind === 'stopped' ? [question] : []

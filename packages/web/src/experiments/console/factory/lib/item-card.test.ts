@@ -3,6 +3,7 @@ import type { ItemAsk } from '../../primitives/run';
 import type { ItemRead } from '../../skills/items';
 import type { FactoryView, ForgeSubjects, RunRecord } from '../api';
 import fixture from './__fixtures__/card-items.json';
+import { stageWords } from './stage-words';
 import {
   cardProgress,
   itemMatches,
@@ -180,6 +181,18 @@ describe('rounds and returns from run records', () => {
     expect(card.round?.text).toBe('4 of 4 check rounds, next one running');
     expect(card.round?.dots.at(-1)?.verdict).toBe('running');
     expect(card.running).toMatchObject({ stage: 'Check', step: 'review' });
+  });
+
+  test('a running stage the view gives no label reads as its id in words, never the raw id (#261)', () => {
+    const { read, records: all } = checkRunning(byKey('125'));
+    const { label: _, ...unlabelled } = VIEW.stages['stage-check']!;
+    const view = {
+      ...VIEW,
+      stages: { ...VIEW.stages, 'stage-check': unlabelled },
+    } as unknown as FactoryView;
+    const card = cardProgress(read, { stages: STAGES, view }, allRead(all), []);
+    expect(card.running?.stage).toBe(stageWords('stage-check'));
+    expect(card.running?.stage).not.toBe('stage-check');
   });
 
   test('a first check round running, before any is recorded, reads "first check round running"', () => {

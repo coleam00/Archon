@@ -78,17 +78,19 @@ export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapPro
   const boardPath = `/console/p/${encodeURIComponent(projectId)}/board`;
   // The derived map's columns are the same groups the curated map draws, so a card's heading
   // is its group's on both.
-  const groups = groupsOf(source.kind === 'curated' ? source.view : null, graph.data);
+  const view = source.kind === 'curated' ? source.view : null;
+  const groups = groupsOf(view, graph.data);
   const derived = (
     <DerivedFlow
       flow={flowCounts(
-        columnsOf(graph.data, groups),
+        columnsOf(graph.data, groups, view),
         board?.moving ?? [],
         graph.data?.stages,
         asks,
         retired
       )}
       graph={graph.data}
+      view={view}
       counts={stageCounts(board?.moving ?? [], graph.data?.stages, asks, retired)}
       live={{ board: boardPath, numbers: board?.numbers, failed: itemsError !== undefined }}
     />

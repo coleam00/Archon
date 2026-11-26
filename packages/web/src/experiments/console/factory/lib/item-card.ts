@@ -12,6 +12,7 @@ import type { ItemAsk } from '../../primitives/run';
 import type { FactoryView, ForgeSubjects, RunRecord } from '../api';
 import { displayItemKey, issueNumber } from '../../lib/item-key';
 import { retiredRun, type Retired } from '../../routes/board/standing';
+import { stageLabel } from './stage-words';
 import { listOf, runFacts, type RoundVerdict, type RunFacts, type RunRounds } from './run-facts';
 
 type ReadRun = { run: ItemRun; workflow: string | null; facts: RunFacts };
@@ -74,6 +75,18 @@ export function viewWorkflow(
   const stage = pack.stages.find(entry => entry.name === run.workflow);
   if (stage !== undefined) return stage.workflow;
   return retiredRun(pack.stages, retiredOf(pack.view), run.workflow)?.workflow ?? null;
+}
+
+/**
+ * A run's stage as a person reads it: the view workflow it is, by `stageLabel` in its pack's
+ * words. A run no pack places is of no stage, so it names its workflow.
+ */
+export function runStageName(
+  pack: CardPack | null,
+  run: Pick<ItemRun, 'workflow' | 'pack'>
+): string {
+  const workflow = pack === null ? (run.pack?.workflow ?? null) : viewWorkflow(pack, run);
+  return workflow === null ? run.workflow : stageLabel(pack?.view, workflow);
 }
 
 /**
@@ -305,8 +318,9 @@ function readRuns(read: ItemRead, pack: CardPack | null, reads: CardReads): Read
 
 /**
  * The newest running run's stage and step in the view's words. Only a pack with a view reads
- * records, so with none there is no running line. A stage or step the view gives no words
- * reads as its workflow name or its cleaned step id.
+ * records, so with none there is no running line. The stage is named by `stageLabel`, so one
+ * the view gives no label reads as its id in words, never the raw id; a step the view gives no
+ * words reads as its cleaned step id.
  */
 function runningField(view: FactoryView, runs: readonly ReadRun[]): CardProgress['running'] {
   const running = [...runs].reverse().find(entry => entry.run.status === 'running');
@@ -314,7 +328,7 @@ function runningField(view: FactoryView, runs: readonly ReadRun[]): CardProgress
   const words = running.workflow === null ? undefined : view.stages[running.workflow];
   const step = running.facts.active;
   return {
-    stage: words?.label ?? running.workflow ?? running.run.workflow,
+    stage: stageLabel(view, running.workflow ?? running.run.workflow),
     step: step === null ? null : (words?.steps?.[step] ?? cleanedId(step)),
     stepId: step,
     workflow: running.workflow,

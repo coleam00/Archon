@@ -131,4 +131,13 @@ describe('the structure the pack graph gives', () => {
       { label: 'done', to: 'link', toLabel: 'Link' },
     ]);
   });
+
+  test('a hand-off to a stage the view does not name reads as its id in words, never the id (#261)', () => {
+    const arrows = [{ from: 'plan', to: 'stage-host', label: 'done' }] as Parameters<
+      typeof stageHandOffs
+    >[1];
+    expect(stageHandOffs({ stages: [] }, arrows, 'plan')).toEqual([
+      { label: 'done', to: 'stage-host', toLabel: 'Stage host' },
+    ]);
+  });
 });
