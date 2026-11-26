@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The forge can assign one user to an issue and unassign one with `workitem.assignee.add` and `workitem.assignee.remove`, keeping the issue's other assignees. A user the forge would not assign, such as a GitHub user without access to the repository, is refused with the reason and nothing is written. `actor.self` says which account the forge plugin acts as for a repository, so a caller can assign that account without typing its login. The installed GitHub plugin answers them after `archon plugin update coleam00/Archon/plugins/forge-github` installs a release that includes them.
+
 ### Changed
 
 - Commands no longer print `[archon] stripped N keys from <cwd> …` on every run in a repository with a `.env`. The keys are still stripped. `archon doctor` now names them ("N keys from <repo>/.env are kept out of runs …"), and every command that loads its env logs them as `env.cwd_keys_stripped` at debug, shown with `LOG_LEVEL=debug`. (#6362)

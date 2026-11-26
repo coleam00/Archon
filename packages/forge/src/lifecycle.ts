@@ -166,6 +166,29 @@ export const workItemLabelRemoveRequestSchema = requestBase.extend({
   subject: forgeSubjectRefSchema,
   name: text,
 });
+/**
+ * One user assigned to or unassigned from an issue by login, leaving the issue's other
+ * assignees alone. A user the forge would not assign is refused, never dropped.
+ */
+export const workItemAssigneeAddRequestSchema = requestBase.extend({
+  op: z.literal('workitem.assignee.add'),
+  ref: workItemRefSchema,
+  login: text,
+});
+export const workItemAssigneeRemoveRequestSchema = requestBase.extend({
+  op: z.literal('workitem.assignee.remove'),
+  ref: workItemRefSchema,
+  login: text,
+});
+/** The forge account the plugin's credential acts as for `repo`, such as to assign it. */
+export const actorSelfRequestSchema = requestBase.extend({
+  op: z.literal('actor.self'),
+  repo: repoRefSchema,
+});
+export const actorSelfSchema = z.object({
+  repo: repoRefSchema,
+  actor: sourceActorSchema.extend({ login: text }),
+});
 export const closeReasonSchema = z.enum(['completed', 'not_planned', 'duplicate']);
 /** Close an issue, recording why. An issue already closed for another reason is refused. */
 export const workItemCloseRequestSchema = requestBase.extend({
@@ -494,6 +517,7 @@ export const lifecycleReadRequestSchemas = [
   prMergeStateRequestSchema,
   prFilesRequestSchema,
   repoFileRequestSchema,
+  actorSelfRequestSchema,
 ] as const;
 export const mutationRequestSchemas = [
   prMergeRequestSchema,
@@ -510,6 +534,8 @@ export const mutationRequestSchemas = [
   workItemLabelsSetRequestSchema,
   workItemLabelAddRequestSchema,
   workItemLabelRemoveRequestSchema,
+  workItemAssigneeAddRequestSchema,
+  workItemAssigneeRemoveRequestSchema,
   repoLabelEnsureRequestSchema,
   prThreadReplyRequestSchema,
   prThreadResolveRequestSchema,
@@ -681,6 +707,7 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: prMergeStateRequestSchema.shape.op, value: prMergeStateSchema }),
   z.object({ op: prFilesRequestSchema.shape.op, value: prFilesSchema }),
   z.object({ op: repoFileRequestSchema.shape.op, value: repoFileSchema }),
+  z.object({ op: actorSelfRequestSchema.shape.op, value: actorSelfSchema }),
 ] as const;
 export const mutationResultSchemas = [
   z.object({
@@ -704,6 +731,15 @@ export const mutationResultSchemas = [
   z.object({
     op: workItemLabelRemoveRequestSchema.shape.op,
     value: appliedSchema.extend({ workitem: subjectRecordSchema, labels: labelNamesSchema }),
+  }),
+  // `assignees` is the issue's complete set of assignee logins as read back after the write.
+  z.object({
+    op: workItemAssigneeAddRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: workItemRecordSchema, assignees: z.array(text) }),
+  }),
+  z.object({
+    op: workItemAssigneeRemoveRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: workItemRecordSchema, assignees: z.array(text) }),
   }),
   z.object({
     op: repoLabelEnsureRequestSchema.shape.op,

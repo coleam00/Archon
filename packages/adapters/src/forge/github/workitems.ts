@@ -434,6 +434,115 @@ export async function removeLabel(
     : applied(request, { changed, workitem: observed, labels: labelNames(after) });
 }
 
+// Read only by the assignee writes, so the shared issue shape and its fixtures stay as they are.
+const assignedIssueSchema = issueSchema.extend({
+  assignees: z.array(z.object({ login: z.string().min(1) })),
+});
+type AssignedIssue = z.infer<typeof assignedIssueSchema>;
+async function readAssigned(fetchImpl: Fetch, token: string, ref: PrRef): Promise<AssignedIssue> {
+  const { root, path } = location(ref.repo);
+  return assignedIssueSchema.parse(
+    await githubRequest(fetchImpl, token, `${root}/repos/${path}/issues/${String(ref.number)}`)
+  );
+}
+function assigneeLogins(item: AssignedIssue): string[] {
+  return item.assignees.map(assignee => assignee.login);
+}
+/** GitHub logins are case-insensitive and read back in the case GitHub registered. */
+function isAssigned(item: AssignedIssue, login: string): boolean {
+  return item.assignees.some(assignee => assignee.login.toLowerCase() === login.toLowerCase());
+}
+/** The issue's record; subjectRecord refuses a pull request number before any write. */
+function assignedRecord(ref: PrRef, item: AssignedIssue): ForgeWorkItemRecord {
+  return { ...subjectRecord({ kind: 'issue', ref }, item), kind: 'issue' };
+}
+
+export async function addAssignee(
+  request: Extract<ForgeMutationRequest, { op: 'workitem.assignee.add' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: Submit
+): Promise<ForgeResponse> {
+  const { ref, login } = request;
+  const before = await readAssigned(fetchImpl, token, ref);
+  const workitem = assignedRecord(ref, before);
+  if (isAssigned(before, login))
+    return applied(request, { changed: false, workitem, assignees: assigneeLogins(before) });
+  const { root, path } = location(ref.repo);
+  // GitHub accepts an assignee without access to the repository and silently drops
+  // them, so whether the user can be assigned is asked first: 204 yes, 404 no.
+  try {
+    await githubRequest(
+      fetchImpl,
+      token,
+      `${root}/repos/${path}/assignees/${encodeURIComponent(login)}`,
+      {},
+      undefined,
+      'empty'
+    );
+  } catch (cause) {
+    if (!(cause instanceof GitHubError && cause.detail.status === 404)) throw cause;
+    return refused(request, {
+      kind: 'not_found',
+      message: `${login} cannot be assigned in ${ref.repo.path}: GitHub assigns only users with access to the repository`,
+    });
+  }
+  submit('submitted');
+  await githubRequest(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(ref.number)}/assignees`,
+    { method: 'POST', body: JSON.stringify({ assignees: [login] }) },
+    () => {
+      submit('acknowledged');
+    }
+  );
+  const after = await readAssigned(fetchImpl, token, ref);
+  const observed = assignedRecord(ref, after);
+  return isAssigned(after, login)
+    ? applied(request, { changed: true, workitem: observed, assignees: assigneeLogins(after) })
+    : unverified(
+        request,
+        'Assignee read-back did not include the assigned user',
+        'the user may be assigned',
+        { workitem: observed }
+      );
+}
+export async function removeAssignee(
+  request: Extract<ForgeMutationRequest, { op: 'workitem.assignee.remove' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: Submit
+): Promise<ForgeResponse> {
+  const { ref, login } = request;
+  const before = await readAssigned(fetchImpl, token, ref);
+  const workitem = assignedRecord(ref, before);
+  if (!isAssigned(before, login))
+    return applied(request, { changed: false, workitem, assignees: assigneeLogins(before) });
+  const { root, path } = location(ref.repo);
+  submit('submitted');
+  // GitHub removes only the named logins and keeps the issue's other assignees.
+  await githubRequest(
+    fetchImpl,
+    token,
+    `${root}/repos/${path}/issues/${String(ref.number)}/assignees`,
+    { method: 'DELETE', body: JSON.stringify({ assignees: [login] }) },
+    () => {
+      submit('acknowledged');
+    }
+  );
+  const after = await readAssigned(fetchImpl, token, ref);
+  const observed = assignedRecord(ref, after);
+  return isAssigned(after, login)
+    ? unverified(
+        request,
+        'Assignee read-back still included the unassigned user',
+        'the user may have been unassigned',
+        { workitem: observed }
+      )
+    : applied(request, { changed: true, workitem: observed, assignees: assigneeLogins(after) });
+}
+
 export async function closeWorkItem(
   request: Extract<ForgeMutationRequest, { op: 'workitem.close' }>,
   fetchImpl: Fetch,

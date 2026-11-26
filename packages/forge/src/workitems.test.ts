@@ -443,6 +443,37 @@ test('close proof verifies the issue, its closed state and the requested reason'
     expect(matches(close, response(close.op, ref, wrong))).toBe(false);
 });
 
+test('assignee proof verifies the issue and the one login, compared case-insensitively', () => {
+  const add = {
+    operationId: 'assign',
+    op: 'workitem.assignee.add',
+    ref,
+    login: 'Octo',
+  } satisfies ForgeRequest;
+  const remove = { ...add, operationId: 'unassign', op: 'workitem.assignee.remove' } as const;
+  const result = (op: string, assignees: string[], workitem: object = item) =>
+    response(op, ref, { workitem, assignees });
+  expect(matches(add, result(add.op, ['other', 'octo']))).toBe(true);
+  expect(matches(add, result(add.op, ['other']))).toBe(false);
+  expect(matches(add, result(add.op, ['octo'], { ...item, ref: { ...ref, number: 4 } }))).toBe(
+    false
+  );
+  expect(matches(remove, result(remove.op, ['other']))).toBe(true);
+  expect(matches(remove, result(remove.op, ['other', 'OCTO']))).toBe(false);
+});
+
+test('the acting account answers on the requested repository and host', () => {
+  const request = { operationId: 'self', op: 'actor.self', repo } satisfies ForgeRequest;
+  const self = { host: repo.host, id: '7', login: 'octo', type: 'user' };
+  expect(matches(request, read('actor.self', { repo, actor: self }))).toBe(true);
+  expect(
+    matches(request, read('actor.self', { repo, actor: { ...self, host: 'other.example' } }))
+  ).toBe(false);
+  expect(
+    matches(request, read('actor.self', { repo: { ...repo, path: 'a/b' }, actor: self }))
+  ).toBe(false);
+});
+
 const read = (op: string, value: object): ForgeResponse =>
   forgeResponseSchema.parse({ operationId: 'read', ok: true, result: { op, value } });
 
