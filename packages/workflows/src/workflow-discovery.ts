@@ -152,8 +152,12 @@ async function finishDiscovery(
   const sourcePack = context.sourcePack;
   const ofSourcePack = ({ workflow, source }: WorkflowWithSource): boolean =>
     source === 'project' && sourcePack !== undefined && workflow.pack?.key === sourcePack.key;
-  const isSourceSupport = (entry: WorkflowWithSource): boolean =>
-    ofSourcePack(entry) && sourcePack?.entrypoints.has(entry.workflow.name) !== true;
+  const supportOfSource = new Set(
+    [...legacy.byFile]
+      .filter(([filename, entry]) => ofSourcePack(entry) && !sourcePack?.entrypoints.has(filename))
+      .map(([, entry]) => entry)
+  );
+  const isSourceSupport = (entry: WorkflowWithSource): boolean => supportOfSource.has(entry);
   const support = [...legacy.workflows.filter(isSourceSupport), ...installed.support];
   const workflows = [
     ...legacy.workflows.filter(entry => !isSourceSupport(entry)),

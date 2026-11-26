@@ -22,11 +22,17 @@ import { validateNamedScripts } from './named-scripts';
  * precedence already applied to `files`), then swaps each workflow for
  * its flattened, namespaced form. A workflow that fails to expand is dropped and
  * its errors returned to the catalog. Only `.workflow` changes — `source` is kept.
+ * `byFile` holds each surviving workflow under its scope filename, which says what file
+ * it came from when two files declared one name and only one survived.
  */
 export async function expandScope(
   context: DiscoveryContext,
   files: Map<string, ScopeFile>
-): Promise<{ workflows: WorkflowWithSource[]; errors: WorkflowLoadError[] }> {
+): Promise<{
+  workflows: WorkflowWithSource[];
+  byFile: Map<string, WorkflowWithSource>;
+  errors: WorkflowLoadError[];
+}> {
   const errors: ParsedWorkflowLoadError[] = [];
   const namedScripts = await validateNamedScripts(context, files, errors);
   const duplicateNames = reportDuplicateNames(files, errors);
@@ -65,13 +71,16 @@ export async function expandScope(
   );
 
   const result: WorkflowWithSource[] = [];
-  for (const file of files.values()) {
+  const byFile = new Map<string, WorkflowWithSource>();
+  for (const [filename, file] of files) {
     if (duplicateNames.has(file.workflow.name)) continue; // dropped as a duplicate-name collision
     const expanded = expandedByName.get(file.workflow.name);
     if (!expanded) continue; // expansion failed for this workflow — drop it
-    result.push(expandedWorkflow(file, expanded));
+    const entry = expandedWorkflow(file, expanded);
+    result.push(entry);
+    byFile.set(filename, entry);
   }
-  return { workflows: result, errors };
+  return { workflows: result, byFile, errors };
 }
 
 /**

@@ -757,6 +757,10 @@ describe('a pack folder given as the source', () => {
         gone: 'gone/gone.yaml',
         // Its filename exists, but in another folder: the path decides, not the filename.
         elsewhere: 'elsewhere/helper.yaml',
+        // Dropped later, at named-script validation, beside an unlisted file of its name.
+        scripted: 'scripted/scripted.yaml',
+        // In a folder the scan skips: never read, so it did not load.
+        sample: 'fixtures/sample.yaml',
       },
     });
     await mkdir(join(folder, 'launch'), { recursive: true });
@@ -769,12 +773,25 @@ describe('a pack folder given as the source', () => {
     for (const [path, content] of [
       ['old/old.yaml', 'name: launch\ndescription: d\nnodes:\n  - id: a\n    bash: echo old\n'],
       ['broken/gone.yaml', 'name: [unclosed\n'],
+      [
+        'scripted/scripted.yaml',
+        'name: scripted\ndescription: d\nnodes:\n  - id: s\n    script: absent\n    runtime: bun\n',
+      ],
+      [
+        'stale/stale.yaml',
+        'name: scripted\ndescription: d\nnodes:\n  - id: a\n    bash: echo old\n',
+      ],
+      [
+        'fixtures/sample.yaml',
+        'name: sample\ndescription: d\nnodes:\n  - id: a\n    bash: echo s\n',
+      ],
     ]) {
       await mkdir(dirname(join(folder, path)), { recursive: true });
       await writeFile(join(folder, path), content);
     }
     const live = await discoverFrom(folder);
     expect(names(live.workflows)).not.toContain('launch');
+    expect(names(live.workflows)).not.toContain('scripted');
     expect(names(live.workflows)).not.toContain('helper');
     const messages = live.errors.map(error => error.error);
     expect(messages).toContainEqual(
@@ -782,6 +799,9 @@ describe('a pack folder given as the source', () => {
     );
     const gone = "Entrypoint 'gone' of pack folder review-kit did not load from gone/gone.yaml.";
     expect(messages.filter(message => message === gone)).toHaveLength(1);
+    expect(messages).toContainEqual(
+      "Entrypoint 'sample' of pack folder review-kit did not load from fixtures/sample.yaml."
+    );
   });
 
   /** A pack folder holding `files`, with a manifest naming it `name`. */

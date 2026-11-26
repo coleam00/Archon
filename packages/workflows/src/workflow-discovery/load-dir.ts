@@ -223,16 +223,23 @@ async function loadDirEntry(
  * The pack's settings declaration is read once. An invalid one fails every workflow of
  * the pack, each under its own file: a workflow whose settings cannot be known must not
  * run with a guess at them. A valid one is returned as `pack` too, even when no workflow
- * file loads, so its bindings can still be checked.
+ * file loads, so its bindings can still be checked. `read` is every `<folder>/<file>` and
+ * failed `<folder>` the listing reached: a load error explains a file there.
  */
 export async function loadPackWorkflows(
   pack: PackLoad,
   packPath: string
-): Promise<{ files: PackWorkflowFile[]; errors: WorkflowLoadError[]; pack?: WorkflowPack }> {
+): Promise<{
+  files: PackWorkflowFile[];
+  errors: WorkflowLoadError[];
+  read: Set<string>;
+  pack?: WorkflowPack;
+}> {
   const files: PackWorkflowFile[] = [];
   const errors: WorkflowLoadError[] = [];
+  const read = new Set<string>();
   const listing = await readPackWorkflowFolders(packPath, pack.label);
-  if ('error' in listing) return { files, errors: [listing.error] };
+  if ('error' in listing) return { files, errors: [listing.error], read };
   let workflowPack: WorkflowPack | PackSettingsError;
   let declarationWarnings: readonly string[] = [];
   try {
@@ -247,17 +254,19 @@ export async function loadPackWorkflows(
   for (const entry of listing.folders) {
     if (entry.kind === 'empty') continue;
     if (entry.kind === 'error') {
+      read.add(entry.folder);
       errors.push(entry.error);
       continue;
     }
+    read.add(`${entry.folder}/${entry.filename}`);
     const loaded = await loadPackWorkflowFile(pack, workflowPack, declarationWarnings, entry);
     if ('parsed' in loaded) files.push(loaded);
     else errors.push(loaded);
   }
 
   return workflowPack instanceof PackSettingsError
-    ? { files, errors }
-    : { files, errors, pack: workflowPack };
+    ? { files, errors, read }
+    : { files, errors, read, pack: workflowPack };
 }
 
 /** The one workflow file of a pack's `<workflow>/` folder: its workflow or its load error. */

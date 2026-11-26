@@ -1,5 +1,5 @@
 import { readdir, access } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
 import * as archonPaths from '@archon/paths';
 import type { WorkflowLoadError } from '../schemas';
 import {
@@ -379,14 +379,9 @@ async function addSourcePack(
     return refusal === undefined;
   });
   for (const [entry, path] of unloadedEntrypoints(naming)) {
-    // A listed file that exists was read, and its own load error says why it did not load;
-    // that error is keyed by bare filename, which resume matches, so it cannot be told apart
-    // from another folder's file of that name. Only a missing file is reported here.
-    const present = await access(join(pack.dir, path)).then(
-      () => true,
-      () => false
-    );
-    if (!present)
+    // A listed file the listing read failed with its own load error, which says why; one
+    // it never reached (missing, or in a folder the scan skips) is reported here.
+    if (!loaded.read.has(path) && !loaded.read.has(dirname(path)))
       errors.push({
         filename: path,
         workflowName: entry,
@@ -394,15 +389,15 @@ async function addSourcePack(
         errorType: 'validation_error',
       });
   }
-  // Dispatch follows the listed file that survived, by path: an unlisted file that shares
-  // its authored name never stands in for a listed file that was refused.
+  // Dispatch follows the listed files by their scope filename, which expansion carries:
+  // an unlisted file that shares a dropped entrypoint's name never stands in for it.
   const listed = files.filter(file =>
     naming.entrypointByPath.has(`${file.folder}/${file.filename}`)
   );
   context.sourcePack = {
     key: pack.name,
     bindings: loaded.pack?.bindings,
-    entrypoints: new Set(listed.map(file => file.parsed.workflow.name)),
+    entrypoints: new Set(listed.map(file => file.filename)),
   };
   const packaged: DirLoadResult = { workflows: new Map(), errors: [] };
   mergePackFiles(packaged, new Set(), { files, errors });

@@ -563,15 +563,23 @@ describe('validateWorkflowsCommand', () => {
   });
 
   test("checks a pack folder's support workflows, which its workflows compose", async () => {
-    const helper = (source: 'project' | 'installed', name: string) =>
-      makeTestWorkflowWithSource(
-        { name, nodes: [{ id: 'step', command: 'absent-command' }] },
+    const member = (source: 'project' | 'installed', key: string, name: string, bash = false) => {
+      const entry = makeTestWorkflowWithSource(
+        { name, nodes: [bash ? { id: 'run', bash: 'true' } : { id: 'step', command: 'absent' }] },
         source
       );
+      entry.workflow.pack = { key, workflow: name, source };
+      return entry;
+    };
+    // As discovery reports a pack folder: its listed `plan`, and `helper` as its support.
     mockDiscoverWorkflowsWithConfig.mockResolvedValue({
-      workflows: [],
-      support: [helper('project', 'helper'), helper('installed', 'acme/kit:helper')],
+      workflows: [member('project', 'kit', 'plan', true)],
+      support: [
+        member('project', 'kit', 'helper'),
+        member('installed', 'acme.kit', 'acme/kit:helper'),
+      ],
       errors: [],
+      sourcePack: { key: 'kit', workflows: ['plan'] },
     });
     const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
     try {
@@ -580,7 +588,8 @@ describe('validateWorkflowsCommand', () => {
         results: validator.WorkflowValidationResult[];
       };
       // An installed pack's support was never checked here and still is not.
-      expect(results.map(r => r.workflowName)).toEqual(['helper']);
+      expect(results.map(r => r.workflowName)).toEqual(['helper', 'plan']);
+      expect(results[0]?.valid).toBe(false);
     } finally {
       write.mockRestore();
     }
