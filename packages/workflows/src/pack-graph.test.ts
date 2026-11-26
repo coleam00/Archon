@@ -2,12 +2,17 @@ import { describe, expect, test } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
 import { mapOf, wf } from './include-expander.fixtures';
 import {
+  bindingWorkflowNames,
   buildPackGraph,
   type InstalledArrow,
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
-import { packAsksSettledBindingSchema, packRunEndedBindingSchema } from './schemas/pack-bindings';
+import {
+  packAsksSettledBindingSchema,
+  packEventBindingSchema,
+  packRunEndedBindingSchema,
+} from './schemas/pack-bindings';
 
 function decide(values: string[]) {
   return {
@@ -552,5 +557,26 @@ describe('a pack graph', () => {
       stages: graph.stages.map(s => ({ ...s, laterField: true })),
     };
     expect(packGraphSchema.safeParse(newer).success).toBe(true);
+  });
+});
+
+describe('bindingWorkflowNames', () => {
+  test('lists every workflow a binding names, as pack bindings resolves them', () => {
+    const event = packEventBindingSchema.parse({
+      workflow: 'build',
+      resource: 'build',
+      overlap: 'queue',
+      event: { kind: 'issue.comment' },
+      limit: { starts: 2, reset_on: 'plan' },
+      wake: { workflow: 'review', wait: 'answer', about: 'subject.number' },
+    });
+    expect(bindingWorkflowNames(event)).toEqual(['build', 'plan', 'review']);
+    const settled = packAsksSettledBindingSchema.parse({
+      workflow: 'build',
+      resource: 'build',
+      overlap: 'queue',
+      asks_settled: { workflow: 'triage', settled: 'answered' },
+    });
+    expect(bindingWorkflowNames(settled)).toEqual(['build', 'triage']);
   });
 });

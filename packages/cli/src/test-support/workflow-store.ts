@@ -277,6 +277,8 @@ export function createInMemoryWorkflowStore(
     ),
     failStartBindingPreparation: admit(admission.failStartBindingPreparation.bind(admission)),
     resetStartBindingPreparation: admit(admission.resetStartBindingPreparation.bind(admission)),
+    replaceStartBindingIntent: admit(admission.replaceStartBindingIntent.bind(admission)),
+    returnQueuedStartToPreparation: admit(admission.returnQueuedStartToPreparation.bind(admission)),
     setResourceCapacity: admit(admission.setResourceCapacity.bind(admission)),
     backdate: (id, dates) =>
       serialize(async () => {
@@ -423,7 +425,7 @@ export function createInMemoryWorkflowStore(
     listItemAsks: async () => [],
     getItemAsk: async () => null,
     listOpenItemWaits: async () => [],
-    listStoppedItemRuns: async () => [],
+    listStoppedItemRuns: () => write(view => view.listStoppedItemRuns()),
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),

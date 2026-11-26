@@ -1,7 +1,7 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createHash, randomUUID } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import {
@@ -11,10 +11,11 @@ import {
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
 import type { StartedExecutor } from '@archon/core/workflows/start-executor';
-import { getTriggersPath } from '@archon/core/workflows/run-ended';
+import { getTriggersPath, triggerRevision } from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
+import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import {
   awaitingExecution,
   SourceReceiptDigestConflictError,
@@ -30,7 +31,8 @@ import {
   type SourceReceiptInput,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
-import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
+import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
+import { releaseQueuedLaunchSource } from '@archon/core/workflows/queued-launch-source';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { drainFailureReasons } from '../utils/install-hosts';
@@ -86,6 +88,7 @@ type TriggerOptions = {
   limit?: string;
   deliveryId?: string;
   inputs?: string;
+  input?: readonly string[];
   item?: string;
   noItem?: boolean;
 };
@@ -240,8 +243,8 @@ function assertItemOptions(options: TriggerOptions): void {
 
 /**
  * The item a fire's start is on: `--item` first, none with `--no-item`, then the
- * binding's `item` mapping read from `--inputs`, then the calling run's item, read through
- * `inherited` only when nothing before it decides. A binding that maps its item never
+ * binding's `item` mapping read from the event inputs (`--inputs` and `--input`), then
+ * the calling run's item, read through `inherited` only when nothing before it decides. A binding that maps its item never
  * inherits one, and a fire whose inputs cannot name the item is refused before anything
  * is recorded. A recorded delivery keeps its first acceptance's item, so only `--item` and
  * `--no-item` are read for it.
@@ -265,9 +268,42 @@ export async function fireItemKey(fire: {
   );
   if (!mapped.ok)
     throw new Error(
-      `Binding '${config.binding.bindingId}' names its item from the fire's --inputs, but its ${mapped.reason}. Nothing was recorded or started.`
+      `Binding '${config.binding.bindingId}' names its item from the fire's --inputs or --input, but its ${mapped.reason}. Nothing was recorded or started.`
     );
   return mapped.key;
+}
+
+/**
+ * A fire's event inputs: the `--inputs` JSON file and each `--input name=value`, in the
+ * grammar `workflow run --input` speaks, so their values are text. A name given by both is
+ * refused rather than merged, as `workflow run` refuses one given by `--input` and
+ * `--input-file`. Neither flag reads as undefined, not `{}`, so a fire without inputs
+ * records the intent it always has and a redelivery of it still replays.
+ *
+ * @throws on an unreadable or invalid file, a malformed assignment, or a name given twice.
+ */
+async function readEventInputs(
+  options: Pick<TriggerOptions, 'inputs' | 'input'>
+): Promise<z.infer<typeof resourceStartBindingIntentSchema>['eventInputs']> {
+  let fromFile: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];
+  if (options.inputs !== undefined) {
+    try {
+      fromFile = z
+        .record(z.string().min(1), jsonValueSchema)
+        .parse(JSON.parse(await readFile(options.inputs, 'utf8')) as unknown);
+    } catch (error) {
+      throw new Error(
+        '--inputs must name a readable file containing a JSON object with non-empty input names.',
+        { cause: error }
+      );
+    }
+  }
+  if (!options.input?.length) return fromFile;
+  const assigned = parseInputAssignments(options.input);
+  for (const name of Object.keys(assigned))
+    if (fromFile && Object.hasOwn(fromFile, name))
+      throw new Error(`Input '${name}' is given by both --inputs and --input: supply it once.`);
+  return { ...fromFile, ...assigned };
 }
 
 async function triggerFire(
@@ -280,19 +316,7 @@ async function triggerFire(
   if (!options.config) throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
   if (options.deliveryId !== undefined && options.deliveryId.length === 0)
     throw new Error('--delivery-id must not be empty.');
-  let eventInputs: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];
-  if (options.inputs !== undefined) {
-    try {
-      eventInputs = z
-        .record(z.string().min(1), jsonValueSchema)
-        .parse(JSON.parse(await readFile(options.inputs, 'utf8')) as unknown);
-    } catch (error) {
-      throw new Error(
-        '--inputs must name a readable file containing a JSON object with non-empty input names.',
-        { cause: error }
-      );
-    }
-  }
+  const eventInputs = await readEventInputs(options);
   assertItemOptions(options);
   const config = await loadFireConfig(options.config);
   // A fire has no ended or asking run to take the checkout from; starting the stage anyway would
@@ -326,7 +350,7 @@ async function triggerFire(
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
-    bindingRevision: createHash('sha256').update(JSON.stringify(config.binding)).digest('hex'),
+    bindingRevision: triggerRevision(config),
   };
   const receipt = await host.deps.store
     .acceptStartReceipt({
@@ -641,12 +665,11 @@ async function withdrawTrigger(host: WorkflowHost, args: string[]): Promise<void
     await writeJsonLine({ requestId: args[0], withdrawn: true, launch: 'unreadable' });
     return;
   }
-  const source = readWorkflowSourceState(launch.run.metadata);
-  if (source.kind === 'recorded') await rm(source.record.root, { recursive: true, force: true });
-  if (source.kind === 'unreadable')
-    throw new Error(
-      'Request withdrawn, but its source record is unreadable; inspect storage before cleanup.'
-    );
+  try {
+    await releaseQueuedLaunchSource(launch);
+  } catch (error) {
+    throw new Error(`Request withdrawn, but ${(error as Error).message}`, { cause: error });
+  }
   await writeJsonLine({ requestId: args[0], withdrawn: true });
 }
 

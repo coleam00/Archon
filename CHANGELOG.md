@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Run results, settled result cards, `workflow get --json` (`usage`) and run-detail API responses (`run.usage`) report recorded cost and gross-token totals with executed AI-node contributor counts, named measurement gaps and read limitations. Complete coverage replaces the unconditional completeness warning; missing amounts stay missing. Item reads add `spend.coverage` per own run and aggregate `spend` across those runs without adding child totals twice. Coverage is read-only and also applies to historical runs; provider reporting and persisted shapes are unchanged. (Refs #5793)
 
+### Changed
+
+- Commands no longer print `[archon] stripped N keys from <cwd> …` on every run in a repository with a `.env`. The keys are still stripped. `archon doctor` now names them ("N keys from <repo>/.env are kept out of runs …"), and every command logs them as `env.cwd_keys_stripped` at debug, shown with `LOG_LEVEL=debug`. (#6362)
+- A start a run's end or settled asks caused follows its trigger file while it waits. Registering the file again with another mapping rebuilds a start not yet prepared with the new inputs, and a queued one leaves its queue and is prepared again; a file that no longer binds the start refuses it on its item. A queued start whose workflow alone changed runs as prepared. Re-registering bindings no longer needs the install hold. (#6225)
+
 ## [0.15.0] - 2026-11-25
 
 Runs belong to items, a stage hands off to the next through a binding instead of pausing, and an install with no server or webhooks can run the whole loop.

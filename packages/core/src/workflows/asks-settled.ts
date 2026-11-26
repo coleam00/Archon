@@ -19,7 +19,11 @@
  * run-ended hand-off, which refuses a branch that moved off the recorded commit.
  */
 import { existsSync } from 'node:fs';
-import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import {
+  isAttentionDegraded,
+  type AttentionRead,
+} from '@archon/workflows/schemas/attention-degraded';
+import type { StartReceiptInspection } from '@archon/workflows/resource-start-store';
 import { chosenAskOption, type StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import {
   ASKS_SETTLED_SOURCE_ACTOR,
@@ -27,6 +31,7 @@ import {
   type AsksCheckout,
   type AsksSettledTrigger,
   type EndedCheckout,
+  type ResourceStartBindingIntent,
   type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -40,7 +45,11 @@ import {
   declaredInputNames,
   mappedInputs,
   readAsksSettledBindings,
+  rebuiltStart,
   type AsksSettledBinding,
+  type MappedSources,
+  type RebuildReads,
+  type RebuiltStart,
   type RunEndedStartsDependencies,
 } from './run-ended';
 import {
@@ -110,28 +119,10 @@ export function createAsksSettledStarts(
     return (rows, run, itemAsks) => {
       const runId = rows[0]?.runId;
       if (runId === undefined) return [];
-      const settledAs = rows.some(row => row.closed?.as === 'answered') ? 'answered' : 'withdrawn';
-      const answers = rows.map(settledAnswer);
-      const onItem = itemAnswers(itemAsks);
-      const from =
-        run === null
-          ? {
-              gone: `run '${runId}', which left the asks, no longer exists`,
-              answers,
-              itemAnswers: onItem,
-            }
-          : {
-              inputs: readSubrunMetadata(run.metadata).inputs ?? {},
-              result: readAsksResult(run.metadata),
-              answers,
-              itemAnswers: onItem,
-            };
+      const settledAs = settlement(rows);
+      const from = settledSources(runId, rows, run, itemAsks);
       return candidates
-        .filter(({ asksSettled: { settled, option } }) =>
-          option === undefined
-            ? settled === 'any' || settled === settledAs
-            : choseOption(rows, option)
-        )
+        .filter(({ asksSettled }) => bindsSettlement(asksSettled, rows))
         .map(candidate =>
           bindingReceipt(
             candidate,
@@ -149,6 +140,86 @@ export function createAsksSettledStarts(
         );
     };
   };
+}
+
+/** How a settled set settled: answered when any ask of it was answered. */
+function settlement(rows: readonly StoredItemAsk[]): 'answered' | 'withdrawn' {
+  return rows.some(row => row.closed?.as === 'answered') ? 'answered' : 'withdrawn';
+}
+
+/**
+ * Whether an asks-settled binding starts on this settled set: a run of its workflow left
+ * it, and it settled as `settled` says, or with `option`, every answer chose that option.
+ * The matcher's rule, which the rebuild of a waiting start applies again.
+ */
+function bindsSettlement(
+  { workflowName, settled, option }: AsksSettledTrigger,
+  rows: readonly StoredItemAsk[]
+): boolean {
+  if (rows[0]?.workflowName !== workflowName) return false;
+  return option === undefined
+    ? settled === 'any' || settled === settlement(rows)
+    : choseOption(rows, option);
+}
+
+/** What an asks-settled binding maps from: the set, the item's answers, and the asking run while it exists. */
+function settledSources(
+  runId: string,
+  rows: readonly StoredItemAsk[],
+  run: AskingRunRow | null,
+  itemAsks: readonly AttentionRead<StoredItemAsk>[]
+): MappedSources {
+  const answers = rows.map(settledAnswer);
+  const itemAnswersRead = itemAnswers(itemAsks);
+  return run === null
+    ? {
+        gone: `run '${runId}', which left the asks, no longer exists`,
+        answers,
+        itemAnswers: itemAnswersRead,
+      }
+    : {
+        inputs: readSubrunMetadata(run.metadata).inputs ?? {},
+        result: readAsksResult(run.metadata),
+        answers,
+        itemAnswers: itemAnswersRead,
+      };
+}
+
+/**
+ * A waiting asks-settled start rebuilt from `file` and the set its receipt records: the
+ * asks the run left on the started item, which outlive the run, read in the file's
+ * project. Refused when that item is not there or the file no longer starts on the set.
+ */
+export async function rebuildAsksSettledStart(
+  file: AsksSettledBinding,
+  receipt: Pick<StartReceiptInspection, 'sourceActor' | 'itemKey'>,
+  stored: ResourceStartBindingIntent,
+  reads: RebuildReads
+): Promise<RebuiltStart> {
+  const runId = receipt.sourceActor?.id ?? '';
+  const project = await bindingProjectKey(file, reads);
+  const found =
+    project === null || receipt.itemKey === null
+      ? null
+      : await reads.store.getItemRuns(project, receipt.itemKey);
+  const itemAsks = found ? await reads.store.listItemAsks(found.item.id) : [];
+  const rows: StoredItemAsk[] = [];
+  for (const row of itemAsks) {
+    if (row.runId !== runId) continue;
+    // Thrown: this binary cannot read the set, so the start waits for one that can.
+    if (isAttentionDegraded(row)) throw new Error(`An ask run '${runId}' left cannot be read`);
+    rows.push(row);
+  }
+  if (!bindsSettlement(file.asksSettled, rows))
+    return {
+      refused: {
+        reason: 'launch_preparation_failed',
+        detail: `${file.file} no longer starts on the asks run '${runId}' left on item '${receipt.itemKey}'`,
+      },
+    };
+  const run = await reads.store.getWorkflowRun(runId);
+  const mapped = mappedInputs(file.asksSettled.inputs, settledSources(runId, rows, run, itemAsks));
+  return rebuiltStart(file, receipt, mapped, stored, reads.now);
 }
 
 /**

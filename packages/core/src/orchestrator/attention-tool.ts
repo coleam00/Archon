@@ -174,7 +174,7 @@ const HOW_TO_ANSWER = [
   '- kind attention: choose=<JSON array of option ids> (one id, several only for form multi_select), or recommended=true; form message takes text only.',
   '- kind awaiting_response: choose=<JSON array with one decision id>, e.g. ["approve"] or ["reject"].',
   '- kind usage_limit continues by itself at resetAt; kind unreadable needs someone to look at the run. Neither takes an answer.',
-  '- kind stopped is an item whose last run (stoppedIn) left nothing to move it: an outcome nothing starts from, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new run on the item moves it on.',
+  '- kind stopped is an item whose last run (stoppedIn) left nothing to move it: an outcome nothing starts from, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new run on the item moves it on. One whose failed.outcomeUnknown is set (any failed run, on an item or not, whose named nodes may or may not have done their write) is different: check what they did, then resume or abandon that run; a new run or ending the item does not clear it.',
 ].join('\n');
 
 const chooseSchema = z.array(z.string().min(1)).min(1);
@@ -219,11 +219,25 @@ function withText(chosen: string, said: string | undefined): string {
   return said === undefined ? chosen : `${chosen} and the text "${said}"`;
 }
 
+/** A failed run's stop: its error and what moves it on, resume or abandon for an unknown outcome. */
+function failedStopText(
+  ref: string,
+  item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
+  failed: NonNullable<Extract<AttentionQueueItem, { kind: 'stopped' }>['failed']>
+): string {
+  const { runId, workflow } = item.stoppedIn;
+  const unknown = failed.outcomeUnknown;
+  const next =
+    unknown === undefined
+      ? `start it again with archon workflow run --supersedes ${runId}, which closes this`
+      : `${unknown.length === 0 ? 'its outcome is' : `the outcome of ${unknown.join(', ')} is`} unknown, so check what it did, then resume it with archon workflow resume ${runId} or abandon it with archon workflow abandon ${runId}`;
+  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${failed.error === null ? '' : `: ${failed.error}`}. It takes no answer: ${next}.`;
+}
+
 /** What the tool says of a stopped item: how its run ended, what was refused, what moves it. */
 function stoppedText(ref: string, item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string {
   const { runId, workflow, outcome } = item.stoppedIn;
-  if (item.failed !== undefined)
-    return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${item.failed.error === null ? '' : `: ${item.failed.error}`}. It takes no answer: start it again with archon workflow run --supersedes ${runId}, which closes this.`;
+  if (item.failed !== undefined) return failedStopText(ref, item, item.failed);
   const count = item.refused?.length ?? 0;
   // A refusal says only what was refused: other starts the run's end caused may have started.
   const after =

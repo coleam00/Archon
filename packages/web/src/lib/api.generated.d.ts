@@ -5572,7 +5572,8 @@ export interface components {
                 | 'max_iterations'
                 | 'child_failed'
                 | 'cancelled'
-                | 'config';
+                | 'config'
+                | 'outcome_unknown';
               providerFailure?: {
                 /** @enum {string} */
                 class:
@@ -7329,7 +7330,8 @@ export interface components {
                   | 'max_iterations'
                   | 'child_failed'
                   | 'cancelled'
-                  | 'config';
+                  | 'config'
+                  | 'outcome_unknown';
                 providerFailure?: {
                   /** @enum {string} */
                   class:
@@ -7692,7 +7694,8 @@ export interface components {
         | 'not_finalized'
         | 'process_terminated'
         | 'launch_failed'
-        | 'run_not_created';
+        | 'run_not_created'
+        | 'outcome_unknown';
       /** @enum {string} */
       signal?: 'SIGINT' | 'SIGTERM';
     };
@@ -7845,6 +7848,7 @@ export interface components {
           };
           /** Format: date-time */
           resetAt: string;
+          provider?: string;
         }
       | {
           /** @enum {string} */
@@ -8026,6 +8030,7 @@ export interface components {
           }[];
           failed?: {
             error: string | null;
+            outcomeUnknown?: string[];
           };
           checkout: string | null;
         }
@@ -8342,6 +8347,7 @@ export interface components {
             };
             /** Format: date-time */
             resetAt: string;
+            provider?: string;
           }
         | {
             /** @enum {string} */
@@ -8523,6 +8529,7 @@ export interface components {
             }[];
             failed?: {
               error: string | null;
+              outcomeUnknown?: string[];
             };
             checkout: string | null;
           }
@@ -10113,6 +10120,7 @@ export interface components {
             };
             /** Format: date-time */
             resetAt: string;
+            provider?: string;
           }
         | {
             /** @enum {string} */
@@ -10294,6 +10302,7 @@ export interface components {
             }[];
             failed?: {
               error: string | null;
+              outcomeUnknown?: string[];
             };
             checkout: string | null;
           }
@@ -10629,6 +10638,19 @@ export interface components {
           nodePath: string;
         } | null;
       } | null;
+      workOrder: {
+        /** @enum {string} */
+        state: 'open' | 'done' | 'unknown';
+        members: {
+          item: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
+          /** @enum {string} */
+          state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+        }[];
+      } | null;
       degraded: (
         | {
             /** @enum {string} */
@@ -10671,6 +10693,39 @@ export interface components {
             /** @enum {string} */
             reason: 'end_unreadable';
             endId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'member_unreadable';
+            member: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            report:
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'merge_unreadable';
+                  itemId: string;
+                }
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'end_unreadable';
+                  endId: string;
+                }
+              | {
+                  /** @enum {string} */
+                  type: 'degraded';
+                  /** @enum {string} */
+                  reason: 'link_unreadable';
+                  linkId: string;
+                };
           }
       )[];
     };
@@ -12152,6 +12207,7 @@ export interface components {
               };
               /** Format: date-time */
               resetAt: string;
+              provider?: string;
             }
           | {
               /** @enum {string} */
@@ -12339,6 +12395,7 @@ export interface components {
               }[];
               failed?: {
                 error: string | null;
+                outcomeUnknown?: string[];
               };
               checkout: string | null;
             }
@@ -12674,6 +12731,19 @@ export interface components {
             nodePath: string;
           } | null;
         } | null;
+        workOrder: {
+          /** @enum {string} */
+          state: 'open' | 'done' | 'unknown';
+          members: {
+            item: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
+            /** @enum {string} */
+            state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
+          }[];
+        } | null;
         degraded: (
           | {
               /** @enum {string} */
@@ -12716,6 +12786,39 @@ export interface components {
               /** @enum {string} */
               reason: 'end_unreadable';
               endId: string;
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'member_unreadable';
+              member: {
+                id: string;
+                projectKey: string;
+                key: string;
+              };
+              report:
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'merge_unreadable';
+                    itemId: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'end_unreadable';
+                    endId: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    type: 'degraded';
+                    /** @enum {string} */
+                    reason: 'link_unreadable';
+                    linkId: string;
+                  };
             }
         )[];
       }[];
@@ -12989,6 +13092,7 @@ export interface components {
                 };
                 /** Format: date-time */
                 resetAt: string;
+                provider?: string;
               }
             | {
                 /** @enum {string} */
@@ -13176,6 +13280,7 @@ export interface components {
                 }[];
                 failed?: {
                   error: string | null;
+                  outcomeUnknown?: string[];
                 };
                 checkout: string | null;
               }
@@ -13412,6 +13517,7 @@ export interface components {
               | 'child_failed'
               | 'cancelled'
               | 'config'
+              | 'outcome_unknown'
               | null;
           } | null;
           reason?: string[];
@@ -13739,7 +13845,8 @@ export interface components {
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'
-              | 'config';
+              | 'config'
+              | 'outcome_unknown';
             /** @enum {string} */
             reason?:
               | 'prior_success'
@@ -14536,7 +14643,8 @@ export interface components {
             | 'max_iterations'
             | 'child_failed'
             | 'cancelled'
-            | 'config';
+            | 'config'
+            | 'outcome_unknown';
           /** @enum {string} */
           reason?:
             | 'prior_success'
@@ -14666,7 +14774,8 @@ export interface components {
               | 'max_iterations'
               | 'child_failed'
               | 'cancelled'
-              | 'config';
+              | 'config'
+              | 'outcome_unknown';
             /** @enum {string} */
             reason?:
               | 'prior_success'

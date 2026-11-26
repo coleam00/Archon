@@ -9,6 +9,7 @@ import {
   type WorkflowRun,
 } from '../schemas/workflow-run';
 import { executionClaim } from './run-writes';
+import { isApprovalContext, isRunBlockedOnChild } from '../schemas/approval-context';
 
 /** Exact persisted cursor expected by an automatic continuation claim. */
 export type WorkflowResumeCursor =
@@ -53,8 +54,17 @@ export interface OwnerlessResumeCursor extends OwnerlessResumeCheck {
   lease: RunOwnerLease;
 }
 
+/**
+ * A paused parent continued by itself because its blocking child, or every child it waits
+ * on (`childRunId` absent), released it (`continueBlockedRun`). Never persisted.
+ */
+export interface ChildResumeCursor {
+  kind: 'child';
+  childRunId?: string;
+}
+
 /** Every cursor `IWorkflowStore.resumeWorkflowRun` accepts. */
-export type ResumeClaimCursor = WorkflowResumeCursor | OwnerlessResumeCursor;
+export type ResumeClaimCursor = WorkflowResumeCursor | OwnerlessResumeCursor | ChildResumeCursor;
 
 /** A cursor a caller carries to a resume before it holds the run's live-owner lease. */
 export type ResumeRequestCursor = WorkflowResumeCursor | OwnerlessResumeCheck;
@@ -129,6 +139,15 @@ export function resumeCursorMatches(
     }
     case 'ownerless':
       return run.status === 'running' && executionClaim(run.metadata) === cursor.executionClaim;
+    case 'child': {
+      if (cursor.childRunId !== undefined) return isRunBlockedOnChild(run, cursor.childRunId);
+      const gate = run.metadata.approval;
+      return (
+        run.status === 'paused' &&
+        isApprovalContext(gate) &&
+        (gate.type === 'child_workflow' || gate.type === 'fan_out')
+      );
+    }
   }
 }
 

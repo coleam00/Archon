@@ -6,7 +6,8 @@
  * nothing; the set stays open until an event meets it, a newer run of its workflow replaces
  * it, or it is withdrawn by its `wait:` ref. A completed run that stopped its item (see
  * `readItemStopped`), or a failed top-level run, is listed while it is the newest run on the
- * item and the item's end does not hold (`item-end.ts`); it takes no answer.
+ * item, the item's end does not hold (`item-end.ts`) and no merge is recorded on it
+ * (`getItemMerge`); it takes no answer.
  */
 import { createLogger } from '@archon/paths';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
@@ -38,6 +39,12 @@ import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
+import type { TerminalRecord } from './schemas/terminal-record';
+import {
+  isOutcomeUnknownRun,
+  liveUnknownOutcomes,
+  UNKNOWN_OUTCOME_EVENT_TYPES,
+} from './unknown-outcome';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { StoredItemAsk } from './schemas/item-ask';
 import type { StoredItemWait } from './schemas/item-wait';
@@ -180,30 +187,33 @@ export async function overdueWaitItems(
 /** The store reads a stopped item's queue item needs. */
 export type StoppedItemStore = Pick<
   IWorkflowStore,
-  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase'
+  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase' | 'getItemMerge'
 > &
   ItemEndStore;
 
 /**
  * The queue item of an item `run` stopped, or null when the run has no item, or completed
  * and recorded no stop. A failed run stopped its item by failing: nothing moves it on by
- * itself. A run that settled asks may have no outcome; a refused start's stop dates from its
- * latest refusal. Nothing here changes the item. Each surface spells the commands that
+ * itself. A run that failed with stop reason `outcome_unknown` is listed with no item and as
+ * a child too. A run that settled asks may have no outcome; a refused start's stop dates from
+ * its latest refusal. Nothing here changes the item. Each surface spells the commands that
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
-  store: Omit<StoppedItemStore, 'listStoppedItemRuns' | 'listEventsForRuns'>,
+  store: Pick<StoppedItemStore, 'getItem' | 'getCodebase'>,
   run: WorkflowRun,
   codebases: CodebaseCache = new Map(),
   /** A failed run's `workflow_failed` events, which carry what failed first. */
-  failedEvents: readonly WorkflowEventRow[] = []
+  failedEvents: readonly WorkflowEventRow[] = [],
+  /** For a run that failed with an unknown outcome, its live ones (`liveUnknownOutcomes`). */
+  unknownNodes: readonly string[] = []
 ): Promise<StoppedQueueItem | null> {
   const failed = run.status === 'failed';
   const stopped: ItemStopped | undefined = failed
     ? { summary: null }
     : readItemStopped(run.metadata);
-  if (stopped === undefined || run.item_id === null) return null;
-  const item = await store.getItem(run.item_id);
+  if (stopped === undefined || (run.item_id === null && !isOutcomeUnknownRun(run))) return null;
+  const item = run.item_id === null ? null : await store.getItem(run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
   if (run.codebase_id !== null) {
     const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
@@ -222,7 +232,7 @@ export async function stoppedQueueItem(
     summary: stopped.summary,
     ...(stopped.limit === undefined ? {} : { limit: stopped.limit }),
     ...(stopped.refused === undefined ? {} : { refused: stopped.refused }),
-    ...(failed ? { failed: { error: failureReason(run, failedEvents) } } : {}),
+    ...(failed ? { failed: failedStop(run, failedEvents, unknownNodes) } : {}),
     checkout: codebase?.default_cwd ?? null,
   };
 }
@@ -231,26 +241,39 @@ export async function stoppedQueueItem(
  * Why a failed run failed, as `workflow get` says it: the first failed node's error from the
  * terminal record. A run whose record is missing or unreadable falls back to the error the
  * run recorded (`metadata.error`), which `workflow get` shows too; null when it has neither.
+ * A run that failed with stop reason `outcome_unknown` also names its live unknown outcomes
+ * (`liveUnknownOutcomes`): an instance's or loop body's own step path.
  */
-function failureReason(run: WorkflowRun, events: readonly WorkflowEventRow[]): string | null {
-  let reason: string | undefined;
+function failedStop(
+  run: WorkflowRun,
+  events: readonly WorkflowEventRow[],
+  unknownNodes: readonly string[]
+): NonNullable<StoppedQueueItem['failed']> {
+  let record: TerminalRecord | null = null;
   try {
-    reason = terminalReason(getTerminalRecord('failed', events))[0];
+    record = getTerminalRecord('failed', events);
   } catch (error) {
-    reason = undefined;
     createLogger('workflow.attention_queue').warn(
       { err: error as Error, runId: run.id },
       'workflow.stopped_item_terminal_record_unreadable'
     );
   }
-  const error = run.metadata.error;
-  if (reason !== undefined && reason.trim() !== '') return reason;
-  return typeof error === 'string' && error.trim() !== '' ? error : null;
+  const reason = terminalReason(record)[0];
+  const recorded = run.metadata.error;
+  const error =
+    reason !== undefined && reason.trim() !== ''
+      ? reason
+      : typeof recorded === 'string' && recorded.trim() !== ''
+        ? recorded
+        : null;
+  return isOutcomeUnknownRun(run) ? { error, outcomeUnknown: [...unknownNodes] } : { error };
 }
 
 /**
  * The items runs stopped, for `AttentionQueueSource.itemsWithoutRun`, but for an item whose
- * end holds (`readHoldingItemEnd`): an operator said nothing more happens on it.
+ * end holds (`readHoldingItemEnd`), where an operator said nothing more happens on it, or
+ * whose merge is recorded (`getItemMerge`), where its change landed. Neither compares times:
+ * a run that failed after the merge leaves the item done.
  */
 export async function stoppedItems(
   store: StoppedItemStore
@@ -265,17 +288,48 @@ export async function stoppedItems(
     failedIds.length === 0
       ? new Map<string, WorkflowEventRow[]>()
       : await store.listEventsForRuns(failedIds, ['workflow_failed']);
+  const unknownRuns = runs.filter(
+    (run): run is WorkflowRun => !isAttentionDegraded(run) && isOutcomeUnknownRun(run)
+  );
+  const unknownEvents =
+    unknownRuns.length === 0
+      ? new Map<string, WorkflowEventRow[]>()
+      : await store.listEventsForRuns(
+          unknownRuns.map(run => run.id),
+          UNKNOWN_OUTCOME_EVENT_TYPES
+        );
   for (const run of runs) {
     if (isAttentionDegraded(run)) {
       items.push(run);
       continue;
     }
-    const end = run.item_id === null ? null : await readHoldingItemEnd(store, run.item_id);
-    if (end !== null && !('type' in end)) continue;
-    const item = await stoppedQueueItem(store, run, codebases, failedEvents.get(run.id));
+    // A run whose outcome is unknown stays until resumed or abandoned, even past an item end.
+    if (!isOutcomeUnknownRun(run) && (await isItemDone(store, run.item_id))) continue;
+    const unknownNodes = isOutcomeUnknownRun(run)
+      ? liveUnknownOutcomes(run, unknownEvents.get(run.id) ?? [])
+      : [];
+    const item = await stoppedQueueItem(
+      store,
+      run,
+      codebases,
+      failedEvents.get(run.id),
+      unknownNodes
+    );
     if (item !== null) items.push(item);
   }
   return items;
+}
+
+/**
+ * Whether item `itemId` needs nothing more: its end holds or its merge is recorded. An
+ * unreadable end or merge row reads as not done, so it does not hide the stop.
+ */
+async function isItemDone(store: StoppedItemStore, itemId: string | null): Promise<boolean> {
+  if (itemId === null) return false;
+  const end = await readHoldingItemEnd(store, itemId);
+  if (end !== null && !('type' in end)) return true;
+  const merge = await store.getItemMerge(itemId);
+  return merge !== null && !('type' in merge);
 }
 
 /** The store reads a lost preparation's queue item needs. */
