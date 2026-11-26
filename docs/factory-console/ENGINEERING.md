@@ -92,8 +92,9 @@ The factory building this repository runs Archon from another checkout, on the h
   `routes/board/ItemCard.tsx` and its test, and the project's Needs you tab,
   `routes/ProjectNeedsYouPage.tsx` (the board read, and the board's item key, title and option
   words) and its mounted test, `routes/ProjectNeedsYouPage.dom.test.tsx` (the folder's
-  mounted-DOM helper). `ProjectRail.tsx` carries the sidebar Factory entry
-  without importing the folder. No lint checks this on `combined` (`scripts/check-factory-imports.ts`
+  mounted-DOM helper), and the project tab row, `components/ProjectViewTabs.tsx` (the Needs you
+  tab's count, through `factory/lib/item-asks.ts`). `ProjectRail.tsx` carries the sidebar
+  Factory entry without importing the folder. No lint checks this on `combined` (`scripts/check-factory-imports.ts`
   is not ported); keep the list true when a change adds a mount point. The curated map, How it
   works and the stage modal are drawn whenever the pack ships a view file the server could
   read, with its problems listed above them (`ViewProblems.tsx`); `factory/lib/map-source.ts` is

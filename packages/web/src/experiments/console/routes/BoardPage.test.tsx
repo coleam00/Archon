@@ -335,6 +335,8 @@ test('the board page hands its headers the asks as unread until the attention li
   expect(column?.querySelector('[data-header-chip="needs_you"]')).toBeNull();
   // Still read, not failed: nothing says the asks could not be read.
   expect(page.querySelector('[data-asks-unread]')).toBeNull();
+  // The tab row's Needs you count waits too: no badge, neither a number nor "?" (#263).
+  expect(page.querySelector('[data-needs-count]')).toBeNull();
 });
 
 /** An active `part_of` link from an item to work order `key`. */
@@ -529,6 +531,24 @@ test('only a project with an item on a pack stage gets the board tab', () => {
     '/console/p/docs/chat',
     '/console/p/docs/metrics',
   ]);
+});
+
+test("the Needs you tab counts the project's open asks, not another project's (#263)", () => {
+  set(K.projects, [project('web', ['flow'])]);
+  set(K.runsAttention, {
+    runs: [],
+    ownerLost: [],
+    asks: [
+      askOn('issue-a'),
+      askOn('issue-b'),
+      { ...askOn('issue-c'), project: { key: 'acme/docs', codebaseId: 'docs', name: 'docs' } },
+    ],
+    answerRefusals: {},
+    itemIds: new Set(),
+    degraded: [],
+  });
+  const page = render('/console/p/web', <ProjectViewTabs projectId="web" active="runs" />);
+  expect(page.querySelector('a[href$="/needs-you"] [data-needs-count]')?.textContent).toBe('2');
 });
 
 const untitled = (key: string, stage: string): ItemRead => {
@@ -985,6 +1005,10 @@ test('a board whose asks could not be read says so once, and claims no needs-you
     expect(page.querySelector('[data-header-chip="needs_you"]')).toBeNull();
     expect(page.querySelector('[data-needs-you-link]')).toBeNull();
     expect(page.querySelector('[data-chip-reading]')).toBeNull();
+    // The tab row's Needs you count is unknown, and says why, rather than drawing as none (#263).
+    const tabCount = page.querySelector('a[href$="/needs-you"] [data-needs-count]');
+    expect(tabCount?.textContent).toBe('?');
+    expect(tabCount?.getAttribute('title')).toContain('attention store unavailable');
     // What was drawn stays drawn: the column, its cards and their other chips.
     const column = page.querySelector('[data-pack="flow"] [data-stage="build"]');
     if (column === null) throw new Error('Expected the build column');
@@ -1021,6 +1045,8 @@ test('a failed re-read of the asks keeps the asks read before, with no alert (#2
     expect(page.querySelector('[data-asks-unread]')).toBeNull();
     expect(page.querySelector('[data-item="issue-2"] [data-needs-you-link]')).not.toBeNull();
     expect(page.querySelector('[data-header-chip="needs_you"]')).not.toBeNull();
+    // The tab row keeps the count read before (#263).
+    expect(page.querySelector('a[href$="/needs-you"] [data-needs-count]')?.textContent).toBe('1');
   } finally {
     await board.unmount();
   }

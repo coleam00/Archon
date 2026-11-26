@@ -971,7 +971,8 @@ panel). Port the logic and ideas, not the styling: Mission Control used its own 
    be read and none were read before, the line's place says so, with the error and a Retry
    (`factory/AsksUnread.tsx`), and the need-you tile shows "?" rather than a skeleton; the Board
    says the same once, above its columns, where its cards show no Needs you button and its
-   headers no needs-you chip (#258).
+   headers no needs-you chip (#258). The project tab row's Needs you badge shows "?" too, titled
+   with the error, on every page that draws the row (#263).
 4. **The map.**
 
 ## The map
