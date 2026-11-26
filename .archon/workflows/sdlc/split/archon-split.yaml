@@ -39,6 +39,10 @@ inputs:
 # False only when a run that claimed nothing found stored items no pickup can act on.
 returns: { node: publish, outcome: healthy }
 
+# The run claims its own item from the queue, and `healthy` is about the queue: it is no
+# step of an item it is started on.
+observes: true
+
 # Reads the checkout and writes only to the tracker and the state store: runs in the
 # launch checkout beside any other run, and creates no worktree.
 worktree:

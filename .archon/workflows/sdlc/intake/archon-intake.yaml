@@ -48,8 +48,10 @@ inputs:
 
 # The run completes with where it left its item: the stage intake recorded on the work
 # item. A pass that claimed no item completes `idle`; one that also found stored items
-# no pickup can act on fails at the outcome node, naming them.
-returns: { node: outcome, outcome: outcome }
+# no pickup can act on fails at the outcome node, naming them. `close` ends the item: triage
+# found no work owed. A build route starts the build queue through the `build-after-intake`
+# binding; every other stage stops the item, for the split queue or a person to take.
+returns: { node: outcome, outcome: outcome, ends: [close] }
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
