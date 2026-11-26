@@ -17,6 +17,7 @@ import { INSTALL_HOLD_ID, lockAdmission, readInstallHold } from './resource-slot
 import { readRunLimitWaiting } from './run-room';
 import { parseStoredJson, storedWorkflowName } from './resource-starts';
 import { toHydratedTimestamp } from './timestamps';
+import { PRIORITY_ITEMS_CTE, queueOrderSql } from './item-priorities';
 import { storedStartCause } from './item-step';
 import { parseProcessOwner, type ProcessOwner } from '@archon/paths/process-owner';
 import { loadRunLimit } from '../config/concurrency-config';
@@ -214,8 +215,10 @@ export async function listHeldStarts(): Promise<HeldStart[]> {
     launch: unknown;
     created_at: string | Date;
   }>(
-    `SELECT id, host_id, resource_key, launch, created_at
-       FROM remote_agent_resource_start_requests WHERE status = 'queued' ORDER BY queue_position`
+    `WITH RECURSIVE ${PRIORITY_ITEMS_CTE}
+     SELECT r.id, r.host_id, r.resource_key, r.launch, r.created_at
+       FROM remote_agent_resource_start_requests r WHERE r.status = 'queued'
+      ORDER BY ${queueOrderSql('r')}`
   );
   return [
     ...bindings.rows.map((row): HeldStart => {

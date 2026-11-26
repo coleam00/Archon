@@ -40,6 +40,7 @@ function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
     answers: [],
     links: [],
     landing: null,
+    priority: null,
     ended: null,
     workOrder: null,
     dependsOn: [],

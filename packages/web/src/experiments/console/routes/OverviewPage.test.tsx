@@ -45,6 +45,7 @@ const ask = (ref: string, message: string, project = 'p1'): ItemAsk => ({
   ref,
   project: { key: `acme/${project}`, codebaseId: project, name: project },
   item: { id: `item-${ref}`, projectKey: 'acme/p', key: `issue-${ref}` },
+  priority: false,
   revision: 1,
   labels: {},
   pausedAt: null,

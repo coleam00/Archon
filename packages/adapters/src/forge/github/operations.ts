@@ -11,6 +11,7 @@ import {
   mutationAttempt,
 } from '@archon/forge/operations';
 import { githubErrorDetail, parseRemote, parseSubjectUrl, type Fetch, type Sleep } from './api';
+import { handleGithubActorSelf } from './actor';
 import { handleGithubChecksLogs } from './check-logs';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
@@ -47,6 +48,8 @@ export const githubPluginMetadata = {
     'workitem.labels.set',
     'workitem.label.add',
     'workitem.label.remove',
+    'workitem.assignee.add',
+    'workitem.assignee.remove',
     'workitem.comment.upsert',
     'workitem.close',
     'workitem.edit-body',
@@ -75,6 +78,7 @@ export const githubPluginMetadata = {
     'pr.thread.resolve',
     'pr.review.submit',
     'attachment.put',
+    'actor.self',
   ],
   mutationConditions: { 'pr.merge': ['head'] },
   token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
@@ -127,6 +131,7 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'checks.state': handleGithubChecksState,
   'checks.commit': handleGithubChecksCommit,
   'checks.logs': handleGithubChecksLogs,
+  'actor.self': handleGithubActorSelf,
 };
 
 type ResolveValue = Extract<

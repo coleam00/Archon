@@ -32,7 +32,7 @@ settle:
   brief: ""
   asks: []
   waits:
-    - { event: checks, about: "1111111111111111111111111111111111111111", within_minutes: 60 }
+    - { event: checks, about: "1111111111111111111111111111111111111111", subject: null, within_minutes: 60 }
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed

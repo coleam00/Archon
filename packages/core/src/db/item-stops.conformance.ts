@@ -351,7 +351,7 @@ export function describeSqlItemStopConformance(makeHarness: () => Promise<Harnes
         (await listAttentionQueue(deps.queue)).filter(
           item => 'kind' in item && item.kind === 'stopped'
         );
-      const wait = { event: 'checks', about: 'a'.repeat(40), within_minutes: 60 };
+      const wait = { event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 60 };
       const leaving = async (stop: Record<string, unknown>) => {
         const id = await createOnItem(harness, 'host');
         await harness.store.claimPendingWorkflowRun(id);

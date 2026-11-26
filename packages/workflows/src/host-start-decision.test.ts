@@ -37,6 +37,7 @@ const slot = (
   heldCheckouts: new Map(),
   foreignHeldCheckouts: new Map(),
   heldItems: new Map(),
+  priorityItems: new Set(),
 });
 
 const reusable = [{ codebaseId: 'codebase', branch: 'feature', workingPath: '/shared' }];

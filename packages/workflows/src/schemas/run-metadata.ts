@@ -794,12 +794,10 @@ export function isContainerRun(run: { metadata?: Record<string, unknown> }): boo
   return run.metadata?.[CONTAINER_ISOLATION_MARKER.key] === CONTAINER_ISOLATION_MARKER.value;
 }
 
-export const ownedWorktreeSchema = z
-  .object({
-    envId: z.string().min(1),
-    creationId: z.string().uuid(),
-  })
-  .strict();
+export const ownedWorktreeSchema = z.object({
+  envId: z.string().min(1),
+  creationId: z.string().uuid(),
+});
 export type OwnedWorktree = z.infer<typeof ownedWorktreeSchema>;
 
 export function readOwnedWorktree(

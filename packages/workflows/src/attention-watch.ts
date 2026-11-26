@@ -236,6 +236,7 @@ export type AttentionWatchStore = Pick<
   | 'getWorkflowRunForAttention'
   | 'getCodebase'
   | 'getItem'
+  | 'getItemPriority'
   | 'getItemAsk'
   | 'listWorkflowRuns'
   | 'listEventsForRuns'
@@ -699,6 +700,20 @@ export async function watchAttentionQueue(
       if (!isDeepStrictEqual(open.get(item.ref), item)) await emitOpen(item, cursor, false);
   };
 
+  /**
+   * Setting or clearing an item's priority commits no event, so each paused run's open item
+   * on an item is read for its priority each time the tail reaches the head, and sent again
+   * when it changed. Items no run holds are read whole by `reconcileItemsWithoutRun`.
+   */
+  const refreshPriorities = async (): Promise<void> => {
+    const cursor = position();
+    for (const item of [...open.values()]) {
+      if (!isHeldByRun(item) || item.item === undefined) continue;
+      const priority = (await store.getItemPriority(item.item.id)) !== null;
+      if (priority !== item.priority) await emitOpen({ ...item, priority }, cursor, false);
+    }
+  };
+
   // Only the events before the delivered terminal event count, so a replayed line keeps
   // its cause after the run resumed and failed again. A read failure fails the delivery,
   // which the follower retries.
@@ -812,6 +827,7 @@ export async function watchAttentionQueue(
         // still reaches the follower, after the scan ran.
         try {
           await reconcileItemsWithoutRun();
+          await refreshPriorities();
         } finally {
           await armRunning(true);
         }

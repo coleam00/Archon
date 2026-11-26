@@ -22,6 +22,7 @@ function ask(ref: string, key: string): ItemAsk {
     ref,
     project: { key: 'acme/web', codebaseId: 'web', name: 'web' },
     item: { id: `id-${key}`, projectKey: 'acme/web', key },
+    priority: false,
     revision: 1,
     labels: {},
     pausedAt: null,

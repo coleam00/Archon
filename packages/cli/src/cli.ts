@@ -420,7 +420,7 @@ const NO_GIT_COMMANDS = [
 ];
 
 /** Item reads and writes that take their item and project from `--item-of <run-id>`. */
-const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing', 'title'];
+const ITEM_OF_SUBCOMMANDS = ['runs', 'link', 'merged', 'landing', 'title', 'priority'];
 
 /**
  * Reads of one run by id. A full run id names one run in the whole store, and
@@ -600,6 +600,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowLanding(route);
         case 'title':
           return await workflowRoutes.runWorkflowTitle(route);
+        case 'priority':
+          return await workflowRoutes.runWorkflowPriority(route);
         case 'link':
           return await workflowRoutes.runWorkflowLink(route);
         default:

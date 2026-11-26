@@ -32,6 +32,7 @@ import * as itemRulingsDb from '../db/item-rulings';
 import * as itemEndsDb from '../db/item-ends';
 import * as itemMergesDb from '../db/item-merges';
 import * as itemLandingsDb from '../db/item-landings';
+import * as itemPrioritiesDb from '../db/item-priorities';
 import * as itemAsksDb from '../db/item-asks';
 import * as itemWaitsDb from '../db/item-waits';
 import * as itemStopsDb from '../db/item-stops';
@@ -39,6 +40,7 @@ import * as workflowDb from '../db/workflows';
 import { listUnfinishedRuns } from '../db/unfinished-runs';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
+import { createWakeMapping } from './wake-start';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
 import * as installHold from '../db/install-hold';
 import { queuedItemStarts } from '../db/item-step';
@@ -304,6 +306,8 @@ function onBindingDeps(
 }
 
 export function createWorkflowStore(): IWorkflowStore {
+  // A wake binding's carried inputs are checked against the waiting run's own definitions.
+  const wakes = createWakeMapping({ loadConfig: loadMergedConfig, providers: providerRegistry });
   // The close that settles a set writes the starts its asks-settled bindings cause.
   const asksSettledStarts = createAsksSettledStarts({
     ...onBindingDeps(itemsDb.getItem),
@@ -326,7 +330,7 @@ export function createWorkflowStore(): IWorkflowStore {
     admitPendingRun: resourceStarts.admitPendingRun,
     drainResourceStarts: resourceStarts.drainResourceStarts,
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
-    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf),
+    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf, wakes),
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
@@ -362,6 +366,9 @@ export function createWorkflowStore(): IWorkflowStore {
     getItemLanding: itemLandingsDb.getItemLanding,
     recordItemLanding: itemLandingsDb.recordItemLanding,
     recordItemTitle: itemsDb.recordItemTitle,
+    getItemPriority: itemPrioritiesDb.getItemPriority,
+    setItemPriority: itemPrioritiesDb.setItemPriority,
+    clearItemPriority: itemPrioritiesDb.clearItemPriority,
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,

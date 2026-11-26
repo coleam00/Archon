@@ -13,7 +13,7 @@ reference for anything v1 showed is `main`'s history (tag `console-v1-full`) and
 `title` migration is part of the base; add no new migration.
 
 `combined` also carries Archon `dev` (https://github.com/coleam00/Archon, last merged at
-576d9efdb, #268), so it can go upstream. It reads the pack's dev branch (af6d0b4a, the revision
+3a15fae9d, #280), so it can go upstream. It reads the pack's dev branch (af6d0b4a, the revision
 `docs/factory-console/pack-view/` is written for): the pack's dev tracks Archon `dev` and its
 main the released Archon, and Archon `dev` no longer loads the pack's main (`returns.final` is
 gone). `dev` is brought in as a merge
