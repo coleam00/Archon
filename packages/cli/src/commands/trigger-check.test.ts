@@ -8,10 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 import { mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join, sep } from 'node:path';
-import {
-  triggerCheckFixture as fixture,
-  triggerScheduleFixture as scheduleFixture,
-} from '../test-support/trigger-check-fixture';
+import { triggerCheckFixtures } from '../test-support/trigger-check-fixture';
 import { installNativeSchedule } from '../triggers/native-schedule';
 import {
   wakeLastPassPath,
@@ -19,6 +16,8 @@ import {
   workflowWakeScheduleTarget,
   writeWakeLastPass,
 } from './wake-schedule';
+
+const { fixture, scheduleFixture } = triggerCheckFixtures();
 
 test('reports an installed timer outside the triggers directory that passes an undeclared input', async () => {
   const { root, archonHome, config, installTimer, check, scheduled, timerPrefix } = await fixture();

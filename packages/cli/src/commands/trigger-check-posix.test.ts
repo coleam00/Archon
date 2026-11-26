@@ -3,15 +3,14 @@ import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { rm, symlink, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
-import {
-  triggerCheckFixture as fixture,
-  triggerScheduleFixture as scheduleFixture,
-} from '../test-support/trigger-check-fixture';
+import { triggerCheckFixtures } from '../test-support/trigger-check-fixture';
 import {
   installNativeSchedule,
   scheduleLabel,
   type NativeScheduleOptions,
 } from '../triggers/native-schedule';
+
+const { fixture, scheduleFixture } = triggerCheckFixtures();
 
 test.skipIf(process.platform === 'win32')(
   'reports a corrupted native definition and fails trigger checking',
