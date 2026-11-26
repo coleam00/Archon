@@ -35,13 +35,19 @@ http://127.0.0.1:3195/console). Rules:
 - **The project's Needs you tab** (`routes/ProjectNeedsYouPage.tsx`, the first project tab; owner
   after the 11/25 review). `?item=<key>` shows only that item's asks; the value is the raw key or
   the issue number (`198` and `issue-198` name one item; a parent's number does not take in its
-  split members), repeatable or comma-separated. Each value has a chip "Item #N ×" linking to the
-  page without it, and a filter that matches nothing says so beside its chip. A filtered item
-  with one ask opens that ask's section directly. Rows print the key and title as the board card
-  does (`#171`, members `#199 · board card`, the forge issue's title when the `title` column is
-  empty). The recommendation reads "Suggested: <label>" in `--text-secondary`, never green,
-  because a green line read as if the ask were already answered. Answering stays in Archon's
-  ask section.
+  split members), repeatable or comma-separated. A filter is a bar at the top of the tab in the
+  console's accent: "Showing asks for #N <title>" (the title from the board's read and the forge,
+  so it is named while the asks are still read), each item with its own remove control when
+  there are several, and a "Show all" control that drops the filter and keeps other params; a
+  value that matches nothing says "nothing open" in the bar. A filtered item with one ask opens
+  that ask's section directly. Rows print the key and title as the board card does (`#171`,
+  members `#199 · board card`, the forge issue's title when the `title` column is empty). A row
+  is a framed disclosure with a chevron, a pointer and a hover state; opened, Archon's ask
+  section sits inside the row's frame, indented under its header, and the row carries an accent
+  marker on its left edge. The recommendation reads "Suggested: <label>" in the console's
+  accent, never green, because a green line read as if the ask were already answered. While the
+  asks are still read the body shows skeleton rows and never says nothing needs you (#222).
+  Answering stays in Archon's ask section.
 - **Keep, all required:** the stage modal ("What this stage does" curated cards, "Items here
   now", "The real workflow" step list); rich board cards; work orders "N of N merged" with split
   parents resolved when their pieces merged and run-less work orders listed; the Merged column
@@ -244,7 +250,7 @@ not polish: reshape a page when restyling it would not make it read well.
 
 From the owner's review of the finished work order #64. The section is close; these make it presentable.
 
-1. **Less purple and pink, more green.** The brand magenta is an accent, not the page's colour. In the factory section, purple and pink are for one thing each (the running state, the active tab), not for card borders, headings or chips; a recommended option the factory names is green (`--success`), never the accent. Archon's ask card keeps its own look (v2 direction).
+1. **Less purple and pink, more green.** The brand magenta is an accent, not the page's colour. In the factory section, purple and pink are for one thing each (the running state, the active tab), not for card borders, headings or chips; a recommended option the factory names is green (`--success`), never the accent. Archon's ask card keeps its own look (v2 direction). *On `combined`, the project's Needs you tab writes its suggestion in the accent (COMBINED direction, Needs you tab, owner 11/26).*
 2. **Text never leaves its box.** Every card, tile, chip and heading in the section wraps long unbroken text (paths, URLs, ids: `overflow-wrap: anywhere`, `min-width: 0` on flex and grid children) and clamps where the standard says; checked in the browser with a long unbroken path.
 3. **The Factory tab has two pages: Overview and Board.** Its sub-navigation has no How it works (the sidebar Factory entry is that page). Old links keep redirecting.
 4. **The board is tall enough to use.** At 1440x900 every column shows at least two full cards without scrolling the page; the work-order strip collapses to one line (expand on click) and the found-by panel stays one line.

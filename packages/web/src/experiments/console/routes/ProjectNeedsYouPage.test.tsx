@@ -97,24 +97,42 @@ const rowsIn = (doc: Document): string[] =>
 
 const TWO_ITEMS = [ask('ask:a', 'issue-198'), ask('ask:b', 'issue-198'), ask('ask:c', 'issue-200')];
 
-test('a filter shows only that item, with a chip that links back to every item', () => {
-  seed(TWO_ITEMS);
+const TITLE_198 = {
+  issues: [{ number: 198, title: 'Asks show in full', state: 'open', url: null, pending: false }],
+  changes: [],
+} as const;
+
+test('a filter shows only that item under a bar naming it, with Show all back to every item', () => {
+  seed(TWO_ITEMS, [read('issue-198')]);
+  set(K.forgeTitles('web', [198]), TITLE_198);
   const doc = render('/console/p/web/needs-you?item=198');
   expect(rowsIn(doc)).toEqual(['issue-198']);
-  const chip = doc.querySelector('[data-item-filter="198"]');
-  expect(chip?.getAttribute('href')).toBe('/console/p/web/needs-you');
-  expect(chip?.textContent).toContain('#198');
+  const bar = doc.querySelector('[data-filter-bar]');
+  expect(bar?.textContent).toContain('Showing asks for');
+  expect(bar?.querySelector('[data-item-filter="198"]')?.textContent).toContain('#198');
+  expect(bar?.textContent).toContain('Asks show in full');
+  expect(bar?.querySelector('[data-filter-clear]')?.getAttribute('href')).toBe(
+    '/console/p/web/needs-you'
+  );
   expect(doc.querySelector('[role="status"]')?.textContent).toBe('2 open asks');
 });
 
-test('with the filter cleared every item shows, and no chip', () => {
+test('Show all keeps the params other than the filter', () => {
+  seed(TWO_ITEMS);
+  const doc = render('/console/p/web/needs-you?item=198&view=x');
+  expect(doc.querySelector('[data-filter-clear]')?.getAttribute('href')).toBe(
+    '/console/p/web/needs-you?view=x'
+  );
+});
+
+test('with no filter every item shows, and no filter bar', () => {
   seed(TWO_ITEMS);
   const doc = render('/console/p/web/needs-you');
   expect(rowsIn(doc).sort()).toEqual(['issue-198', 'issue-200']);
-  expect(doc.querySelector('[data-item-filter]')).toBeNull();
+  expect(doc.querySelector('[data-filter-bar]')).toBeNull();
 });
 
-test('the filter takes comma-separated and repeated values; each chip drops only its own', () => {
+test('the filter takes comma-separated and repeated values; each remove link drops only its own', () => {
   seed(TWO_ITEMS);
   for (const path of [
     '/console/p/web/needs-you?item=198,200',
@@ -122,18 +140,52 @@ test('the filter takes comma-separated and repeated values; each chip drops only
   ]) {
     const doc = render(path);
     expect(rowsIn(doc).sort()).toEqual(['issue-198', 'issue-200']);
-    expect(doc.querySelector('[data-item-filter="198"]')?.getAttribute('href')).toBe(
-      '/console/p/web/needs-you?item=200'
-    );
+    const remove = doc.querySelector('[data-item-filter="198"] a');
+    expect(remove?.getAttribute('aria-label')).toBe('Remove the filter for #198');
+    expect(remove?.getAttribute('href')).toBe('/console/p/web/needs-you?item=200');
   }
 });
 
-test('a filtered item with one ask opens that ask; unfiltered it stays closed', () => {
+/** Everything but the attention read, which is still pending. */
+function seedPending(reads: ItemRead[] = []): void {
+  set(K.projects, []);
+  set(K.boardOrders('web'), reads);
+}
+
+test('while the asks are read the tab says so and makes no claim about what needs you (#222)', () => {
+  seedPending();
+  const doc = render('/console/p/web/needs-you');
+  expect(doc.querySelector('[role="status"]')?.textContent).toBe('Reading asks…');
+  expect(doc.body.textContent).not.toContain('Nothing needs you');
+  expect(doc.querySelector('[data-needs-loading]')).not.toBeNull();
+  expect(doc.querySelector('[data-needs-row]')).toBeNull();
+});
+
+test('while the asks are read a filtered tab names the item and its title (#222)', () => {
+  seedPending([read('issue-198')]);
+  set(K.forgeTitles('web', [198]), TITLE_198);
+  const doc = render('/console/p/web/needs-you?item=198');
+  expect(doc.querySelector('[role="status"]')?.textContent).toBe('Reading asks…');
+  expect(doc.body.textContent).not.toContain('Nothing needs you');
+  expect(doc.querySelector('[data-needs-loading]')).not.toBeNull();
+  const bar = doc.querySelector('[data-filter-bar]');
+  expect(bar?.textContent).toContain('#198');
+  expect(bar?.textContent).toContain('Asks show in full');
+  expect(bar?.textContent).not.toContain('nothing open');
+});
+
+test('a filtered item with one ask opens that ask as the row child; unfiltered rows stay closed', () => {
   seed(TWO_ITEMS);
   const filtered = render('/console/p/web/needs-you?item=issue-200');
-  expect(filtered.querySelector('[data-ask-ref="ask:c"]')).not.toBeNull();
+  const row = filtered.querySelector('[data-item-key="issue-200"]');
+  expect(row?.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('true');
+  expect(row?.querySelector('[data-needs-child] [data-ask-ref="ask:c"]')).not.toBeNull();
   const unfiltered = render('/console/p/web/needs-you');
   expect(unfiltered.querySelector('[data-ask-ref]')).toBeNull();
+  expect(unfiltered.querySelector('[data-needs-child]')).toBeNull();
+  for (const header of unfiltered.querySelectorAll('[data-needs-row] > button')) {
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+  }
   // An item with two asks shows its row closed even when filtered.
   const two = render('/console/p/web/needs-you?item=198');
   expect(two.querySelector('[data-ask-ref]')).toBeNull();
@@ -157,7 +209,7 @@ test('rows carry the issue title and the key as the board prints it', () => {
   expect(row('issue-199-board-card')?.textContent).toContain('#199 · board card');
 });
 
-test('the recommendation reads as a muted suggestion by its label, never green', () => {
+test('the recommendation reads as a suggestion by its label', () => {
   seed([
     ask('ask:a', 'issue-198'),
     ask('ask:c', 'issue-200', [{ id: 'send-back', does: 'Returns it.', cost: 'A round.' }]),
@@ -169,16 +221,14 @@ test('the recommendation reads as a muted suggestion by its label, never green',
   expect(doc.querySelector('[data-item-key="issue-200"] [data-suggested]')?.textContent).toBe(
     'Suggested: Send back'
   );
-  for (const line of doc.querySelectorAll('[data-suggested]')) {
-    expect(line.className).not.toContain('success');
-  }
 });
 
-test('a filter that matches nothing keeps its chip and says so', () => {
+test('a filter that matches nothing stays in the bar and says so', () => {
   seed(TWO_ITEMS);
   const doc = render('/console/p/web/needs-you?item=999');
   expect(rowsIn(doc)).toEqual([]);
-  expect(doc.querySelector('[data-item-filter="999"]')?.getAttribute('href')).toBe(
+  expect(doc.querySelector('[data-item-filter="999"]')?.textContent).toContain('nothing open');
+  expect(doc.querySelector('[data-filter-clear]')?.getAttribute('href')).toBe(
     '/console/p/web/needs-you'
   );
   expect(doc.body.textContent).toContain('Nothing needs you on #999.');
