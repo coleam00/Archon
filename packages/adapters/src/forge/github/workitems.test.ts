@@ -864,8 +864,9 @@ test('issue comments and closes pass conformance for applied and verification fa
 /**
  * `ignore` answers an assignee write with the issue unchanged, as GitHub does for a caller
  * without push access. `lose` answers as if the write landed while the issue stays as it was.
+ * `cut` applies the write and breaks the response body after its success status.
  */
-function assigneeForge(options: { kind?: 'issue' | 'pr'; mode?: 'ignore' | 'lose' } = {}) {
+function assigneeForge(options: { kind?: 'issue' | 'pr'; mode?: 'ignore' | 'lose' | 'cut' } = {}) {
   const item = {
     number: 1,
     repository_url: root,
@@ -907,6 +908,15 @@ function assigneeForge(options: { kind?: 'issue' | 'pr'; mode?: 'ignore' | 'lose
       if (options.mode === 'ignore') return Response.json(item, { status });
       if (options.mode === 'lose') return Response.json({ ...item, assignees: next }, { status });
       item.assignees = next;
+      if (options.mode === 'cut')
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new Error('connection reset'));
+            },
+          }),
+          { status }
+        );
       return Response.json(item, { status });
     }
     throw new Error(`unexpected ${method} ${path}`);
@@ -968,22 +978,37 @@ test('a user GitHub would not assign is refused with the reason and nothing is w
     mutation: { outcome: 'refused' },
   });
   expect(!response.ok && response.error.message).toContain('stranger cannot be assigned');
+  expect(!response.ok && response.error.message).toContain('access to the repository');
   expect(fake.writes()).toBe(0);
   expect(fake.assigned()).toEqual(['Other']);
 });
 
-test('an assignee write GitHub answers with the issue unchanged is refused with the reason', async () => {
+test('an assignee write GitHub answers with the login unchanged is refused with what it showed', async () => {
   const fake = assigneeForge({ mode: 'ignore' });
-  for (const request of [assign('octo'), unassign('other')]) {
+  for (const [request, state] of [
+    [assign('octo'), 'left octo unassigned'],
+    [unassign('other'), 'left other assigned'],
+  ] as const) {
     const response = await runOn(request, fake);
     expect(response).toMatchObject({
       ok: false,
-      error: { kind: 'authorization' },
+      error: { kind: 'conflict' },
       mutation: { outcome: 'refused' },
     });
-    expect(!response.ok && response.error.message).toContain('push access');
+    expect(!response.ok && response.error.message).toContain(state);
   }
   expect(fake.assigned()).toEqual(['Other']);
+});
+
+test('an acknowledged assignee write whose response body breaks is decided by reading the issue', async () => {
+  for (const [request, assignees] of [
+    [assign('octo'), ['Other', 'octo']],
+    [unassign('other'), []],
+  ] as const)
+    expect(await runOn(request, assigneeForge({ mode: 'cut' }))).toMatchObject({
+      ok: true,
+      result: { value: { outcome: 'applied', changed: true, assignees } },
+    });
 });
 
 test('unassigning removes only that user, and an absent user is already unassigned', async () => {

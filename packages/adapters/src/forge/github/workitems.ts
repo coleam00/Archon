@@ -457,23 +457,64 @@ function assignedRecord(ref: PrRef, item: AssignedIssue): ForgeWorkItemRecord {
   return { ...subjectRecord({ kind: 'issue', ref }, item), kind: 'issue' };
 }
 
+type AssigneeRequest = Extract<
+  ForgeMutationRequest,
+  { op: 'workitem.assignee.add' | 'workitem.assignee.remove' }
+>;
+
 /**
- * GitHub answers an assignee write with success even when it changed nothing: it ignores
- * the change from an account without push access. The write's own response shows the
- * issue as it left it, so an unchanged set is a refusal with that reason, not a write
- * whose fate is unknown.
+ * One assignee write and what it established, shared by add and remove.
+ *
+ * GitHub can answer an assignee write with success and leave the user as they were: it
+ * ignores the change from a credential without push access, and an add past its limit of
+ * ten assignees. A write response that shows the login unchanged is therefore a refusal
+ * stating that observation; the response does not say which cause applied. Any other
+ * acknowledged write, including one whose response body could not be read, is decided by
+ * a separate read of the issue.
  */
-function ignoredAssignee(
-  request: Extract<
-    ForgeMutationRequest,
-    { op: 'workitem.assignee.add' | 'workitem.assignee.remove' }
-  >
-): ForgeResponse {
-  const change = request.op === 'workitem.assignee.add' ? 'assign' : 'unassign';
-  return refused(request, {
-    kind: 'authorization',
-    message: `GitHub did not ${change} ${request.login} on issue ${String(request.ref.number)}: it ignores assignee changes from an account without push access to ${request.ref.repo.path}`,
-  });
+async function writeAssignee(
+  request: AssigneeRequest,
+  fetchImpl: Fetch,
+  token: string,
+  submit: Submit
+): Promise<ForgeResponse> {
+  const { ref, login } = request;
+  const adding = request.op === 'workitem.assignee.add';
+  const { root, path } = location(ref.repo);
+  submit('submitted');
+  let acknowledged = false;
+  let written: AssignedIssue | undefined;
+  try {
+    written = assignedIssueSchema.safeParse(
+      await githubRequest(
+        fetchImpl,
+        token,
+        `${root}/repos/${path}/issues/${String(ref.number)}/assignees`,
+        { method: adding ? 'POST' : 'DELETE', body: JSON.stringify({ assignees: [login] }) },
+        () => {
+          acknowledged = true;
+          submit('acknowledged');
+        }
+      )
+    ).data;
+  } catch (cause) {
+    if (!acknowledged) throw cause;
+  }
+  if (written && isAssigned(written, login) !== adding)
+    return refused(request, {
+      kind: 'conflict',
+      message: `GitHub accepted the request but left ${login} ${adding ? 'unassigned' : 'assigned'} on issue ${String(ref.number)} in ${ref.repo.path}. GitHub ignores assignee changes from a credential without push access to the repository, and adds beyond ten assignees; check which applies.`,
+    });
+  const after = await readAssigned(fetchImpl, token, ref);
+  const observed = assignedRecord(ref, after);
+  return isAssigned(after, login) === adding
+    ? applied(request, { changed: true, workitem: observed, assignees: assigneeLogins(after) })
+    : unverified(
+        request,
+        `Assignee read-back ${adding ? 'did not include the assigned' : 'still included the unassigned'} user`,
+        adding ? 'the user may be assigned' : 'the user may have been unassigned',
+        { workitem: observed }
+      );
 }
 
 export async function addAssignee(
@@ -488,7 +529,6 @@ export async function addAssignee(
   if (isAssigned(before, login))
     return applied(request, { changed: false, workitem, assignees: assigneeLogins(before) });
   const { root, path } = location(ref.repo);
-  const issue = `${root}/repos/${path}/issues/${String(ref.number)}`;
   // GitHub accepts an assignee it would not assign and silently drops them, so whether
   // the user can be assigned on this issue is asked first: 204 yes, 404 no. The issue's
   // own check also admits users the repository's does not, such as a commenter.
@@ -496,7 +536,7 @@ export async function addAssignee(
     await githubRequest(
       fetchImpl,
       token,
-      `${issue}/assignees/${encodeURIComponent(login)}`,
+      `${root}/repos/${path}/issues/${String(ref.number)}/assignees/${encodeURIComponent(login)}`,
       {},
       undefined,
       'empty'
@@ -505,32 +545,10 @@ export async function addAssignee(
     if (!(cause instanceof GitHubError && cause.detail.status === 404)) throw cause;
     return refused(request, {
       kind: 'not_found',
-      message: `${login} cannot be assigned to issue ${String(ref.number)} in ${ref.repo.path}: GitHub assigns only users who can be assigned on that issue`,
+      message: `GitHub reports ${login} cannot be assigned to issue ${String(ref.number)} in ${ref.repo.path}, and does not say why. Check that the login is spelled right and that the user has access to the repository or has taken part in the issue.`,
     });
   }
-  submit('submitted');
-  const written = assignedIssueSchema.parse(
-    await githubRequest(
-      fetchImpl,
-      token,
-      `${issue}/assignees`,
-      { method: 'POST', body: JSON.stringify({ assignees: [login] }) },
-      () => {
-        submit('acknowledged');
-      }
-    )
-  );
-  if (!isAssigned(written, login)) return ignoredAssignee(request);
-  const after = await readAssigned(fetchImpl, token, ref);
-  const observed = assignedRecord(ref, after);
-  return isAssigned(after, login)
-    ? applied(request, { changed: true, workitem: observed, assignees: assigneeLogins(after) })
-    : unverified(
-        request,
-        'Assignee read-back did not include the assigned user',
-        'the user may be assigned',
-        { workitem: observed }
-      );
+  return writeAssignee(request, fetchImpl, token, submit);
 }
 export async function removeAssignee(
   request: Extract<ForgeMutationRequest, { op: 'workitem.assignee.remove' }>,
@@ -538,36 +556,12 @@ export async function removeAssignee(
   token: string,
   submit: Submit
 ): Promise<ForgeResponse> {
-  const { ref, login } = request;
-  const before = await readAssigned(fetchImpl, token, ref);
-  const workitem = assignedRecord(ref, before);
-  if (!isAssigned(before, login))
+  const before = await readAssigned(fetchImpl, token, request.ref);
+  const workitem = assignedRecord(request.ref, before);
+  if (!isAssigned(before, request.login))
     return applied(request, { changed: false, workitem, assignees: assigneeLogins(before) });
-  const { root, path } = location(ref.repo);
-  submit('submitted');
   // GitHub removes only the named logins and keeps the issue's other assignees.
-  const written = assignedIssueSchema.parse(
-    await githubRequest(
-      fetchImpl,
-      token,
-      `${root}/repos/${path}/issues/${String(ref.number)}/assignees`,
-      { method: 'DELETE', body: JSON.stringify({ assignees: [login] }) },
-      () => {
-        submit('acknowledged');
-      }
-    )
-  );
-  if (isAssigned(written, login)) return ignoredAssignee(request);
-  const after = await readAssigned(fetchImpl, token, ref);
-  const observed = assignedRecord(ref, after);
-  return isAssigned(after, login)
-    ? unverified(
-        request,
-        'Assignee read-back still included the unassigned user',
-        'the user may have been unassigned',
-        { workitem: observed }
-      )
-    : applied(request, { changed: true, workitem: observed, assignees: assigneeLogins(after) });
+  return writeAssignee(request, fetchImpl, token, submit);
 }
 
 export async function closeWorkItem(
