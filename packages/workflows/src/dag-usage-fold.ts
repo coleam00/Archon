@@ -285,6 +285,7 @@ function addUsage(
     fold.usageContributions.push(contribution);
     return contribution;
   }
+  return undefined;
 }
 
 export function foldDeferredUsage(fold: DagUsageFold, row: DagUsageRow): void {
