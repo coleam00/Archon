@@ -32,6 +32,7 @@ import {
   describeSqlItemEndConformance,
 } from './item-ends.conformance';
 import { describeSqlStartLimitConformance } from './start-limits.conformance';
+import { describeSqlLaunchRecordConformance } from './launch-records.conformance';
 import {
   HEAD,
   accept,
@@ -417,6 +418,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   describeSqlItemAskStartConformance(makeHarness);
   describeSqlRunDeleteConformance(makeHarness);
   describeSqlStartLimitConformance(makeHarness);
+  describeSqlLaunchRecordConformance(makeHarness);
   test('age cleanup does not delete a run that resumes while cleanup selects it', async () => {
     const harness = await makeHarness();
     const gate = new Pool({ connectionString: harness.url, max: 1 });
