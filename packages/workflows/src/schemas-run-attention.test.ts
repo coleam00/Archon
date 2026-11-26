@@ -439,3 +439,26 @@ describe('continuablePause', () => {
     ).toBeUndefined();
   });
 });
+
+describe('replaceStreamToolCallAttention', () => {
+  test("replaces one stream's calls and keeps the other streams' entries as stored", async () => {
+    const { replaceStreamToolCallAttention } = await import('./schemas/run-attention');
+    const call = (streamId: string) => ({
+      streamId,
+      nodeId: 'node',
+      provider: 'codex',
+      toolCallId: 'call',
+      name: 'bash',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      lastProgressAt: '2026-01-01T00:00:00.000Z',
+      raisedAt: '2026-01-01T00:00:00.000Z',
+      thresholdMs: 1,
+    });
+    // A newer writer's key on another stream's entry survives this stream's write.
+    const other = { ...call('other'), later: 1 };
+    const stored = [other, call('own')];
+    expect(replaceStreamToolCallAttention(stored, 'own', [call('own')])).toBeUndefined();
+    expect(replaceStreamToolCallAttention(stored, 'own', [])).toEqual([other]);
+    expect(replaceStreamToolCallAttention(undefined, 'own', [call('own')])).toEqual([call('own')]);
+  });
+});

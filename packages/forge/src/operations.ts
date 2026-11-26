@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { checkChangedEventSchema, type CheckResult } from './events';
 import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
+  actorSelfRequestSchema,
+  actorSelfSchema,
   mergeConditionSchema,
   prReviewsSchema,
   prThreadsSchema,
@@ -324,6 +326,7 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
         value: workItemLabelAddedSchema,
       }),
       z.object({ op: workItemOpenedRequestSchema.shape.op, value: workItemOpenedSchema }),
+      z.object({ op: actorSelfRequestSchema.shape.op, value: actorSelfSchema }),
       z.object({
         op: workItemSearchRequestSchema.shape.op,
         value: workItemSearchSchema.omit({ text: true }).extend({

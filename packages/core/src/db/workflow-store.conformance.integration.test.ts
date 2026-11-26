@@ -19,6 +19,7 @@ import { describeSqlRunDeleteConformance } from './workflow-run-delete.conforman
 import { describeSqlItemStopConformance } from './item-stops.conformance';
 import { describeSqlItemEndConformance } from './item-ends.conformance';
 import { describeSqlStartLimitConformance } from './start-limits.conformance';
+import { describeSqlLaunchRecordConformance } from './launch-records.conformance';
 import { describeSqlItemWaitConformance } from './item-waits.conformance';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
@@ -53,6 +54,7 @@ describeSqlItemEndConformance(makeHarness);
 describeSqlItemAskStartConformance(makeHarness);
 describeSqlRunDeleteConformance(makeHarness);
 describeSqlStartLimitConformance(makeHarness);
+describeSqlLaunchRecordConformance(makeHarness);
 
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();

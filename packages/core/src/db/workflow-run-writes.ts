@@ -11,6 +11,7 @@ import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-obs
 import {
   TERMINAL_WORKFLOW_STATUSES,
   TOOL_CALL_ATTENTION_METADATA_KEY,
+  replaceStreamToolCallAttention,
   toolCallAttentionArraySchema,
   validateWorkflowWaitMetadata,
   type ToolCallAttention,
@@ -65,12 +66,12 @@ export async function setToolCallAttention(
     const row = await lockedRunRow(query, runId);
     if (row?.status !== 'running') return false;
     const metadata = normalizeMetadata(row.metadata);
-    const previous = toolCallAttentionArraySchema.parse(
-      metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []
+    const combined = replaceStreamToolCallAttention(
+      metadata[TOOL_CALL_ATTENTION_METADATA_KEY],
+      streamId,
+      snapshot
     );
-    const own = previous.filter(call => call.streamId === streamId);
-    if (JSON.stringify(own) === JSON.stringify(snapshot)) return false;
-    const combined = [...previous.filter(call => call.streamId !== streamId), ...snapshot];
+    if (!combined) return false;
     await query(
       `UPDATE remote_agent_workflow_runs SET metadata = ${dialect.jsonMerge('metadata', 2)} WHERE id = $1`,
       [
