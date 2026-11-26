@@ -686,7 +686,9 @@ describe('trigger CLI durable execution', () => {
     expect(both.stderr).toContain("Input 'key' is given by both --inputs and --input");
     const malformed = await fire(mappedConfig, ['--input', 'oops'], false);
     expect(malformed.exitCode).not.toBe(0);
-    expect(malformed.stderr).toContain("'oops'");
+    // Reported by position: with no '=' the entry may be a secret value.
+    expect(malformed.stderr).toContain("Input assignment 1 has no '='");
+    expect(malformed.stderr).not.toContain('oops');
     expect(receipts()).toBe(recorded);
 
     // An --input value is an event input, not a launch literal: a workflow that declares no
