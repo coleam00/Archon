@@ -485,8 +485,9 @@ The engine-written records read this way:
 - the top-level keys of `metadata.wait`. Its nested options, recommendation and answer
   stay strict (see the table below).
 
-Only the records marked above keep an unknown key on write-back. Everywhere else a key
-the reader does not know is dropped when the record is written again:
+Only the records marked above are held to keeping an unknown key on write-back. For any
+other record, do not rely on a key the reader does not know surviving a write. Two places
+where it is known to be dropped:
 
 - The SQL run row's `origin` column is written from the known origin fields, so an
   unknown key in a launch's `run.origin` does not reach the run it starts.
@@ -520,9 +521,9 @@ absent, goes one of two other ways. Each has a limit:
   read on every admission on its resource, so one the older binary cannot read blocks that
   resource until the run ends.
 
-Binaries released before this rule refuse unknown keys in every record above except the
-top-level keys of `metadata.wait`, which they already ignored. A new field in the other
-records is safe only once every binary that opens the database reads them this way.
+A binary released before this rule (0.16.0 and earlier) may refuse a record above that
+carries a key it does not know. A new field in one of them is safe only once every binary
+that opens the database reads them this way.
 
 These records stay strict, each for the invariant it protects:
 
