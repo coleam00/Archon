@@ -639,6 +639,7 @@ test.serial(
     expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([
       { item: { key: 'item-blocker' }, state: 'open' },
     ]);
+    expect((await readItemJson('item-waiting')).standing).toMatchObject({ state: 'waiting' });
     expect(await stoppedRefs()).not.toContain(`stopped:${waiting}`);
     expect(await stoppedRefs()).toContain(`stopped:${refused}`);
 
@@ -664,6 +665,9 @@ test.serial(
     expect((await readItemJson('item-blocker')).workOrder).toMatchObject({ state: 'open' });
     expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([{ state: 'ended' }]);
     expect(await stoppedRefs()).toContain(`stopped:${waiting}`);
+    // Standing's rule is stricter than attention's: an operator's end says nothing more happens
+    // on the blocker, not that it delivered, so the board keeps the item waiting (`item-parts.ts`).
+    expect((await readItemJson('item-waiting')).standing).toMatchObject({ state: 'waiting' });
   }
 );
 
