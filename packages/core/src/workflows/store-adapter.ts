@@ -289,12 +289,8 @@ function onBindingDeps(
 }
 
 export function createWorkflowStore(): IWorkflowStore {
-  // A wake binding's carried inputs are checked against the definitions a start would read.
-  const wakes = createWakeMapping({
-    loadConfig: loadMergedConfig,
-    providers: providerRegistry,
-    projectOf: launchProjectOf,
-  });
+  // A wake binding's carried inputs are checked against the waiting run's own definitions.
+  const wakes = createWakeMapping({ loadConfig: loadMergedConfig, providers: providerRegistry });
   // The close that settles a set writes the starts its asks-settled bindings cause.
   const asksSettledStarts = createAsksSettledStarts({
     ...onBindingDeps(itemsDb.getItem),

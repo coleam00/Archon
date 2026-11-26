@@ -5,13 +5,14 @@ import type {
   SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import { getDatabase } from './connection';
-import { resolveWakes, type PreparedWake, type WakeMapping } from './item-waits';
+import { openWaitingRuns, resolveWakes, type PreparedWake, type WakeMapping } from './item-waits';
 import type { TransactionQuery as Query } from './resource-slots';
 
 /**
  * Record a receipt. A binding that wakes a wait is resolved against the open waits in the
  * same transaction (`resolveWakes`), with its launch's project from `projectKeyOf`, and,
- * for one that carries inputs, the problems `wakes.inputProblems` finds, both read first.
+ * for one that carries `{ input }` reads, the problems `wakes.inputProblems` finds for each
+ * run it could wake, both read first.
  * The resolution runs only after this transaction has claimed the delivery by writing the
  * receipt's row: a concurrent delivery with the same identity waits on that row and then
  * replays, so it can never close a wait (one opened since, say) for a receipt that is not
@@ -27,14 +28,16 @@ export async function acceptStartReceipt(
   for (const binding of input.bindings) {
     const { wake } = binding;
     if (wake === undefined) continue;
+    const inputProblems = new Map<string, readonly string[]>();
+    // Definitions are read only for a wake that carries an `{ input }` read, and only of the
+    // runs it could meet: one that maps event fields or answers alone reads nothing more.
+    const readsRunInputs = Object.values(wake.inputs ?? {}).some(source => 'input' in source);
+    if (readsRunInputs && wakes !== undefined)
+      for (const waiting of await openWaitingRuns(wake))
+        inputProblems.set(waiting.runId, await wakes.inputProblems({ ...binding, wake }, waiting));
     prepared.set(binding.bindingId, {
       projectKey: await projectKeyOf(binding.launch.cwd),
-      // Workflows are discovered only for a wake that carries inputs; one that maps event
-      // fields alone reads nothing more.
-      inputProblems:
-        wake.inputs === undefined || wakes === undefined
-          ? []
-          : await wakes.inputProblems({ ...binding, wake }),
+      inputProblems,
     });
   }
   return getDatabase().withTransaction(query =>

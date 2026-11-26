@@ -342,19 +342,24 @@ export function packWorkflowName(names: readonly string[], declared: string): st
 }
 
 /**
- * Whether the workflow's own pack declares a wake binding that starts a stage in the
- * checkout a run of this workflow leaves when it ends waiting (`wake.checkout:
- * waiting-run`). Only then does a completion that leaves waits record that checkout and keep
- * its worktree; a wake that carries only event fields needs neither. A wake binding written
- * into a source plugin's config by hand, outside a pack, is not seen here, so its start is
- * refused naming the checkout the waiting run did not record.
+ * Whether the workflow's own pack declares a wake binding that takes the checkout a run of
+ * this workflow leaves (`wake.checkout: waiting-run`) for one of the waits it leaves, by
+ * name (`events`), as `resolveWake` matches a binding to a wait. Only then does a completion
+ * that leaves waits record that checkout and keep its worktree; a run whose waits only
+ * event-field wakes follow needs neither. A wake binding written into a source plugin's
+ * config by hand, outside a pack, is not seen here, so its start is refused naming the
+ * checkout the waiting run did not record.
  */
-export function packWakeTakesCheckout(workflow: Pick<ResolvedWorkflow, 'name' | 'pack'>): boolean {
+export function packWakeTakesCheckout(
+  workflow: Pick<ResolvedWorkflow, 'name' | 'pack'>,
+  events: readonly string[]
+): boolean {
   return Object.values(workflow.pack?.bindings ?? {}).some(binding => {
     const kinded = kindedPackBinding(binding);
     const wake = kinded.kind === 'event' ? kinded.binding.wake : undefined;
     return (
       wake?.checkout !== undefined &&
+      events.includes(wake.wait) &&
       packWorkflowName([workflow.name], wake.workflow) === workflow.name
     );
   });

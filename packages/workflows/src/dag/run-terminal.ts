@@ -268,9 +268,12 @@ async function readHandOffs(
       outcome === undefined || !deps.runEndedStarts
         ? { receipts: [], linked: [] }
         : await deps.runEndedStarts(runEndedFacts(workflow, workflowRun, outcome, result));
-    // Waits hand on the checkout only when the pack declares a wake that takes it, so a
-    // run whose waits carry event fields alone releases its worktree as before.
-    const waitsHandOn = (waits?.length ?? 0) > 0 && packWakeTakesCheckout(workflow);
+    // Waits hand on the checkout only when the pack declares a wake that takes it for one of
+    // them, so a run whose waits only event-field wakes follow releases its worktree as before.
+    const waitsHandOn = packWakeTakesCheckout(
+      workflow,
+      (waits ?? []).map(wait => wait.event)
+    );
     const asksCheckout =
       asks?.length || waitsHandOn
         ? await deps.asksCheckout?.(workflowRun, { waits: waitsHandOn })

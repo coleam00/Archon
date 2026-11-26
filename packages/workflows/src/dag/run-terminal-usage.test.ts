@@ -2023,6 +2023,10 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     const eventOnly = await leaveWaits({});
     expect(eventOnly.read).toEqual([]);
     expect(eventOnly.recorded).toBeUndefined();
+    // A wake that takes the checkout for a wait this run does not leave: released as well.
+    const otherWait = await leaveWaits({ wait: 'review', checkout: 'waiting-run' });
+    expect(otherWait.read).toEqual([]);
+    expect(otherWait.recorded).toBeUndefined();
 
     // The schema cannot hold "each event once"; the engine's check does.
     mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });

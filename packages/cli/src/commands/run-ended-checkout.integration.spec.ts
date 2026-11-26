@@ -786,6 +786,19 @@ describe('a stage woken by a wait, on the checkout the waiting run left', () => 
     // An answer on the item, then the build the host stage follows.
     await startAskBuild(fixture);
     await answerTheAsk(fixture);
+    // The item, now recorded, lands on its own branch: the build and host read from there.
+    const landing = await fixture.cli([
+      'workflow',
+      'landing',
+      '--item',
+      'issue-1',
+      '--branch',
+      'landing',
+      '--from',
+      'origin/main',
+    ]);
+    if (landing.exitCode !== 0) throw new Error(landing.stderr || landing.stdout);
+
     const built = await fixture.cli([
       'workflow',
       'run',
@@ -806,6 +819,15 @@ describe('a stage woken by a wait, on the checkout the waiting run left', () => 
     };
     expect(worktree).toBe(build?.working_path ?? '');
     expect(fixture.git('log', '-1', '--format=%s', handoff.commit)).toBe('built');
+
+    // The project's default branch drops `land_on` from `host` while the item waits. The
+    // waiting run's own definitions still declare it, and they are what the check reads.
+    writeFileSync(
+      join(pack, 'host', 'host.yaml'),
+      host(fixture.root).replace('  land_on: { required: true }\n', '')
+    );
+    fixture.git('commit', '-qam', 'host drops land_on on main');
+    fixture.git('push', '-q', 'origin', 'main');
 
     // A hand-edited binding that reads an input `host` does not declare is refused when its
     // event arrives, naming the binding and the input, and the wait stays open.
