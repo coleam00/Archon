@@ -1,9 +1,10 @@
 /**
- * The lines a board card adds to Rasmus's card: what runs now, the check rounds, how often the
- * item was sent back and its pull request. Each line comes from `cardProgress`
- * (`lib/item-card.ts`); this file only draws it, in the Visual standard's type and colours
- * (rules 1 and 5). Open asks are not drawn here: the card's one Needs you control
- * (`NeedsYouLink.tsx`) stands in the chip's place. Ported from v1's `BoardCard.tsx` (`origin/main`).
+ * The lines a board card adds to Rasmus's card: what runs now, the check rounds and how often
+ * the item was sent back, and its pull request as a button (`CardPrButton`) for the card's
+ * actions row. Each comes from `cardProgress` (`lib/item-card.ts`); this file only draws it, in
+ * the Visual standard's type and colours (rules 1 and 5). Open asks are not drawn here: the
+ * card's one Needs you button (`NeedsYouLink.tsx`) sits beside the PR in the actions row.
+ * Ported from v1's `BoardCard.tsx` (`origin/main`).
  */
 import type { ReactElement, ReactNode } from 'react';
 import type { CardProgress } from './lib/item-card';
@@ -11,6 +12,9 @@ import type { RoundVerdict } from './lib/run-facts';
 
 /** Above the card-wide link to the run log, so a press here does not open it. */
 export const INNER = 'relative z-10';
+
+/** A secondary button among a card's actions: the PR, a run that waits for an answer. */
+export const CARD_BUTTON = `${INNER} inline-flex shrink-0 cursor-pointer items-center whitespace-nowrap rounded-md border border-border px-2 py-1 text-console-12 text-text-secondary motion-safe:transition-colors hover:bg-surface-hover hover:text-text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-bright`;
 
 const VERDICT_DOT: Record<RoundVerdict, string> = {
   approved: 'bg-success',
@@ -53,33 +57,28 @@ function RoundDots({ round }: { round: NonNullable<CardProgress['round']> }): Re
   );
 }
 
-/** "sent back 2x" with the latest reason on hover, and the pull request. */
-function ReturnsAndPr({ progress }: { progress: CardProgress }): ReactNode {
-  const { returned, pr } = progress;
-  if (returned === null && pr === null) return null;
+/** "sent back 2x", with the latest reason on hover. */
+function Returned({ progress }: { progress: CardProgress }): ReactNode {
+  const { returned } = progress;
+  if (returned === null) return null;
   return (
-    <span className="flex flex-wrap items-center gap-x-2 text-console-13">
-      {returned === null ? null : (
-        <span
-          data-card-returned
-          title={returned.reason ?? undefined}
-          className={`${INNER} text-text-secondary`}
-        >
-          {returned.text}
-        </span>
-      )}
-      {pr === null ? null : (
-        <a
-          data-card-pr
-          href={pr.url}
-          target="_blank"
-          rel="noreferrer"
-          className={`${INNER} text-accent-bright hover:underline`}
-        >
-          {pr.number === null ? 'Pull request' : `PR #${String(pr.number)}`}
-        </a>
-      )}
+    <span
+      data-card-returned
+      title={returned.reason ?? undefined}
+      className={`${INNER} self-start text-console-13 text-text-secondary`}
+    >
+      {returned.text}
     </span>
+  );
+}
+
+/** The item's pull request, as a button among the card's actions; nothing when it has none. */
+export function CardPrButton({ pr }: { pr: CardProgress['pr'] }): ReactNode {
+  if (pr === null) return null;
+  return (
+    <a data-card-pr href={pr.url} target="_blank" rel="noreferrer" className={CARD_BUTTON}>
+      {pr.number === null ? 'Pull request' : `PR #${String(pr.number)}`}
+    </a>
   );
 }
 
@@ -99,7 +98,7 @@ export function BoardCardProgress({ progress }: { progress: CardProgress }): Rea
         </span>
       )}
       {progress.round === null ? null : <RoundDots round={progress.round} />}
-      <ReturnsAndPr progress={progress} />
+      <Returned progress={progress} />
       {progress.unread ? (
         <span data-card-unread className="text-console-12 text-text-tertiary">
           Progress could not be read

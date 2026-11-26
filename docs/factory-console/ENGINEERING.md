@@ -60,14 +60,16 @@ The factory building this repository runs Archon from another checkout, on the h
   served by `GET /api/packs/{pack}/view`. It is presentation only: words, layout, drill-down
   cards and story wording, and where a console finds an item's check rounds, returns and change
   in its runs' records (`retired`, `rounds`, `returns`, `approves`, `change`, in
-  `factory-view-progress.ts`; operator ruling of 2026-11-25, declare-in-view). The engine reads
-  none of those; the web counts rounds and returns from generic run records with them. It holds no step lists, outcome lists, arrows, ask flags, shadow flags,
+  `factory-view-progress.ts`; operator ruling of 2026-11-25, declare-in-view), and the stage a
+  retired workflow's items stand at on the board (a `retired` entry `{ workflow, stage }`; a bare
+  name places them at none, so they are set aside). The engine reads none of those; the web
+  counts rounds and returns, and places those items, from generic run records with them. It holds no step lists, outcome lists, arrows, ask flags, shadow flags,
   settings or stage-group enum; it names the graph's stages, steps, outcomes and groups, and
   `checkFactoryView` (`factory-view-check.ts`) fails a name the graph lacks and warns on an
   in-flow stage it leaves unplaced, when the file is read and in
   `bun run check:factory-view <pack dir>`. The progress declarations are checked too: a
-  workflow is a graph stage or one the file lists as `retired`, a step or loop is one the stage
-  has, and a stage's `returns` agree with its outcomes that read `returned`. The Wirasm pack's file is kept at
+  workflow is a graph stage or one the file lists as `retired`, a retired workflow's `stage` is
+  one of the graph's flow, a step or loop is one the stage has, and a stage's `returns` agree with its outcomes that read `returned`. The Wirasm pack's file is kept at
   `docs/factory-console/pack-view/` until the owner's pack ships it.
 - Factory web code stays under `packages/web/src/experiments/console/factory/` (components, pure
   `lib/`, the page routes). On `combined` it holds the curated map, How it works and the stage
@@ -78,7 +80,8 @@ The factory building this repository runs Archon from another checkout, on the h
   `factory/PackMap.tsx`), Rasmus's board, `routes/BoardPage.tsx` and its test,
   `routes/board/ItemCard.tsx` and its test, and the project's Needs you tab,
   `routes/ProjectNeedsYouPage.tsx` (the board read, and the board's item key, title and option
-  words). `ProjectRail.tsx` carries the sidebar Factory entry
+  words) and its mounted test, `routes/ProjectNeedsYouPage.dom.test.tsx` (the folder's
+  mounted-DOM helper). `ProjectRail.tsx` carries the sidebar Factory entry
   without importing the folder. No lint checks this on `combined` (`scripts/check-factory-imports.ts`
   is not ported); keep the list true when a change adds a mount point. The curated map, How it
   works and the stage modal are drawn only when the pack ships a view file the server read

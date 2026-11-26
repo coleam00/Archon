@@ -11,6 +11,7 @@ import type { ItemRead } from '../../skills/items';
 import type { ItemAsk } from '../../primitives/run';
 import type { FactoryView, ForgeSubjects, RunRecord } from '../api';
 import { displayItemKey, issueNumber } from '../../lib/item-key';
+import { retiredRun, type Retired } from '../../routes/board/standing';
 import { listOf, runFacts, type RoundVerdict, type RunFacts, type RunRounds } from './run-facts';
 
 type ReadRun = { run: ItemRun; workflow: string | null; facts: RunFacts };
@@ -19,7 +20,8 @@ type ItemRun = ItemRead['runs'][number];
 
 const byStart = (a: ItemRun, b: ItemRun): number =>
   Date.parse(a.startedAt) - Date.parse(b.startedAt);
-export type PackGraphStage = { name: string; workflow: string };
+/** A graph stage as cards read it: its published name, its workflow and whether it is in flow. */
+export type PackGraphStage = { name: string; workflow: string; inFlow: boolean };
 
 /** The pack the board reads an item under: its graph's stages and its view, when it ships one. */
 export interface CardPack {
@@ -71,13 +73,17 @@ export function viewWorkflow(
   if (run.pack !== null) return run.pack.workflow;
   const stage = pack.stages.find(entry => entry.name === run.workflow);
   if (stage !== undefined) return stage.workflow;
-  for (const retired of pack.view?.retired ?? [])
-    for (const entry of pack.stages)
-      if (entry.name.endsWith(`:${entry.workflow}`)) {
-        const prefix = entry.name.slice(0, entry.name.length - entry.workflow.length);
-        if (run.workflow === `${prefix}${retired}`) return retired;
-      }
-  return null;
+  return retiredRun(pack.stages, retiredOf(pack.view), run.workflow)?.workflow ?? null;
+}
+
+/**
+ * The view's `retired` entries in one shape: a bare name places nowhere, `{ workflow, stage }`
+ * at that stage. Every reader of `retired` goes through this.
+ */
+export function retiredOf(view: Pick<FactoryView, 'retired'> | null | undefined): Retired[] {
+  return (view?.retired ?? []).map(entry =>
+    typeof entry === 'string' ? { workflow: entry, stage: null } : entry
+  );
 }
 
 /**

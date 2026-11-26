@@ -3,7 +3,8 @@
  * with the pack graph. `checkFactoryView` runs this with the rest of the view's check.
  *
  * - A declaration's `workflow` is a graph stage, or one the view lists in `retired`.
- * - A `retired` entry the graph has is an error, as is a duplicate.
+ * - A `retired` entry the graph has is an error, as is a duplicate, and so is a `stage` it
+ *   places at that the graph lacks or has outside its flow.
  * - For a graph stage, a decision point's `node` is one of the stage's step ids and a loop-form
  *   rounds source's `loop` is one of its loop groups. A retired workflow's steps cannot be
  *   compared with a graph that lacks them, so they are not checked.
@@ -14,7 +15,11 @@
  */
 import type { PackGraph } from './pack-graph';
 import type { FactoryView, FactoryViewProblem } from './schemas/factory-view';
-import { sourcesOf, type FactoryDecisionPoint } from './schemas/factory-view-progress';
+import {
+  retiredEntries,
+  sourcesOf,
+  type FactoryDecisionPoint,
+} from './schemas/factory-view-progress';
 
 type ProblemPath = FactoryViewProblem['path'];
 type GraphStage = PackGraph['stages'][number];
@@ -25,15 +30,27 @@ const error = (path: ProblemPath, message: string): FactoryViewProblem => ({
   message,
 });
 
-/** `retired` names only workflows the graph lacks, each once. */
+/**
+ * `retired` names only workflows the graph lacks, each once, and places each at a stage of the
+ * graph's flow.
+ */
 function retiredErrors(view: FactoryView, stages: ReadonlyMap<string, GraphStage>) {
   const errors: FactoryViewProblem[] = [];
   const seen = new Set<string>();
-  view.retired?.forEach((name, r) => {
+  retiredEntries(view).forEach(({ workflow: name, stage }, r) => {
     if (seen.has(name)) errors.push(error(['retired', r], `retires "${name}" twice`));
     seen.add(name);
     if (stages.has(name))
       errors.push(error(['retired', r], `retires "${name}", which the pack graph has`));
+    if (stage !== null && stages.get(stage)?.inFlow !== true)
+      errors.push(
+        error(
+          ['retired', r, 'stage'],
+          stages.has(stage)
+            ? `places "${name}" at stage "${stage}", which is not in the pack's flow`
+            : `places "${name}" at stage "${stage}", which the pack graph does not have`
+        )
+      );
   });
   return errors;
 }
@@ -49,7 +66,7 @@ function stageOrRetired(
 ): GraphStage | 'retired' | undefined {
   const stage = stages.get(workflow);
   if (stage !== undefined) return stage;
-  if (view.retired?.includes(workflow) === true) return 'retired';
+  if (retiredEntries(view).some(entry => entry.workflow === workflow)) return 'retired';
   errors.push(
     error(
       path,

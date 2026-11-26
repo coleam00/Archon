@@ -15,6 +15,7 @@ import { DerivedFlow, flowCounts, stageCounts } from './DerivedFlow';
 import { FactoryCardsProvider } from './FactoryCards';
 import { GraphSkeleton } from './GraphSkeleton';
 import { curatedView } from './lib/curated-view';
+import { retiredOf } from './lib/item-card';
 import { mapSource } from './lib/map-source';
 import type { PackBoardGroups } from './lib/board-numbers';
 import { stageLive, type MapLive, type Unread } from './lib/map-live';
@@ -63,15 +64,17 @@ interface PackMapProps {
 const HEADING = 'text-console-12 font-medium uppercase tracking-console-label text-text-tertiary';
 
 export function PackMap({ projectId, pack, board, itemsError }: PackMapProps): ReactElement {
-  const source = mapSource(usePackView(projectId, pack));
+  const viewRead = usePackView(projectId, pack);
+  const source = mapSource(viewRead);
   const graph = usePackGraph(projectId, pack);
+  const retired = retiredOf(viewRead.data?.view);
   const [full, choose] = useFullWorkflow();
   const boardPath = `/console/p/${encodeURIComponent(projectId)}/board`;
   const derived = (
     <DerivedFlow
-      flow={flowCounts(columnsOf(graph.data), board?.moving ?? [], graph.data?.stages)}
+      flow={flowCounts(columnsOf(graph.data), board?.moving ?? [], graph.data?.stages, retired)}
       graph={graph.data}
-      counts={stageCounts(board?.moving ?? [], graph.data?.stages)}
+      counts={stageCounts(board?.moving ?? [], graph.data?.stages, retired)}
       live={{ board: boardPath, numbers: board?.numbers, failed: itemsError !== undefined }}
     />
   );
@@ -169,8 +172,8 @@ function Curated({
     if (view === undefined || board === undefined)
       return itemsError === undefined ? 'loading' : 'failed';
     // The Merged card is the Board's Merged column: the items it lists, so the same count.
-    return stageLive(view, board.moving, board.merged.recent, graph.data?.stages);
-  }, [view, board, itemsError, graph.data]);
+    return stageLive(view, board.moving, board.merged.recent, graph.data?.stages, retiredOf(file));
+  }, [view, board, itemsError, graph.data, file]);
   if (view === undefined)
     return graph.error === undefined ? (
       <GraphSkeleton label="Loading the map" />

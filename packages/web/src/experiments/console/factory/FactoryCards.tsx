@@ -19,7 +19,7 @@ import {
   type RunRecords,
 } from './api';
 import { CardsContext, useFactoryCards, type FactoryCards } from './cards-context';
-import { issueNumber } from '../lib/item-key';
+import { issueNumber, openAsksOf } from '../lib/item-key';
 import {
   cardProgress,
   OUTPUT_KEYS,
@@ -30,8 +30,12 @@ import {
   type CardProgress,
 } from './lib/item-card';
 
-/** What one pack's reads gave: its graph's stages and its view, or that a read failed. */
-type PackReadResult = CardPack | 'error';
+/**
+ * What one pack's reads gave: its graph's stages and its view, or that its graph could not be
+ * read. A view that could not be read still gives the stages, so the board places by them, and
+ * marks the cards unread.
+ */
+type PackReadResult = (CardPack & { viewFailed: boolean }) | 'error';
 
 /**
  * One pack's graph and factory view, reported to the provider. The graph is read through the
@@ -54,14 +58,16 @@ function PackRead({
     stages === undefined ? 'pack-view:none' : K.packView(projectId, pack),
     () => (stages === undefined ? Promise.resolve(null) : getPackViewRead(projectId, pack))
   );
-  const failed = graph.error !== undefined || (stages !== undefined && view.error !== undefined);
+  const failed = graph.error !== undefined;
+  const viewFailed = stages !== undefined && view.error !== undefined;
   const viewRead = stages !== undefined && view.data !== undefined;
   // The map reads the whole view read under this key; a card reads only its view.
   const viewData = view.data?.view ?? null;
   useEffect(() => {
     if (failed) onRead(pack, 'error');
-    else if (stages !== undefined && viewRead) onRead(pack, { stages, view: viewData ?? null });
-  }, [failed, onRead, pack, stages, viewData, viewRead]);
+    else if (stages !== undefined && (viewRead || viewFailed))
+      onRead(pack, { stages, view: viewFailed ? null : viewData, viewFailed });
+  }, [failed, onRead, pack, stages, viewData, viewRead, viewFailed]);
   return null;
 }
 
@@ -90,7 +96,7 @@ export function FactoryCardsProvider({
     // Cards read records once every pack has answered, so a card is never read under a pack
     // whose stages are still unknown and then read again.
     packs: packs !== null && packs.every(pack => read.has(pack)) ? readPacks : null,
-    packsError: [...read.values()].includes('error'),
+    packsError: [...read.values()].some(result => result === 'error' || result.viewFailed),
     itemAsks,
   };
   return (
@@ -267,10 +273,10 @@ export function useCardList(reads: readonly ItemRead[]): (read: ItemRead) => Car
     recordsAsk(packs, reads)
   );
   const progressOf = (read: ItemRead, forge: ForgeSubjects | null): CardProgress => {
-    const answered = new Set(cards?.itemAsks?.answered.map(record => record.ask.ref) ?? []);
-    const asks = (cards?.itemAsks?.asks ?? []).filter(
-      entry => entry.item?.id === read.item.id && !answered.has(entry.ref)
-    );
+    // Counted as the Needs you tab counts the `?item=` its link carries (#225).
+    const asks = openAsksOf(cards?.itemAsks?.asks ?? [], cards?.itemAsks?.answered ?? [], [
+      read.item.key,
+    ]);
     const progress = cardProgress(read, packOf(packs, read), { records, asked, forge }, asks);
     return cards?.packsError === true ? { ...progress, unread: true } : progress;
   };

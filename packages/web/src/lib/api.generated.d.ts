@@ -13405,7 +13405,13 @@ export interface components {
           workOrder?: string;
           workOrders?: string;
         };
-        retired?: string[];
+        retired?: (
+          | string
+          | {
+              workflow: string;
+              stage: string;
+            }
+        )[];
         rounds?:
           | {
               workflow: string;

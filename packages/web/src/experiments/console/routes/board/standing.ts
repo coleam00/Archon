@@ -43,17 +43,57 @@ export function standingRun(read: ItemRead): ItemRead['runs'][number] | undefine
 }
 
 /**
+ * A workflow the pack no longer has whose runs still count, and the stage (by workflow name)
+ * an item standing on one of its runs is placed at; null places it nowhere. The factory view's
+ * `retired`, as `retiredOf` (`factory/lib/item-card.ts`) reads it.
+ */
+export interface Retired {
+  workflow: string;
+  stage: string | null;
+}
+
+type StageNames = readonly { name: string; workflow: string }[];
+
+/**
+ * The retired workflow a run is, by its published name: `<the graph's stage name prefix><retired>`
+ * (a run from an older build recorded no workflow name). Structural names, never prose.
+ */
+export function retiredRun(
+  stages: StageNames,
+  retired: readonly Retired[],
+  runWorkflow: string
+): Retired | undefined {
+  for (const entry of retired)
+    for (const stage of stages)
+      if (stage.name.endsWith(`:${stage.workflow}`)) {
+        const prefix = stage.name.slice(0, stage.name.length - stage.workflow.length);
+        if (runWorkflow === `${prefix}${entry.workflow}`) return entry;
+      }
+  return undefined;
+}
+
+/**
  * The stage an item stands at: the workflow its run recorded in its pack, else the graph stage
  * whose published name the run carries (a run from an older build recorded no workflow name).
- * The board's columns and the overview's flow both place by it.
+ * A run of a retired workflow stands at the stage `retired` maps it to, else at none. The
+ * board's columns, its Set aside strip and the overview's flow all place by it.
  */
 export function stageAt(
   read: ItemRead,
-  stages: readonly { name: string; workflow: string }[] | undefined
+  stages: StageNames | undefined,
+  retired: readonly Retired[] = []
 ): string | undefined {
   const run = standingRun(read);
   if (run === undefined) return undefined;
-  return run.pack?.workflow ?? stages?.find(stage => stage.name === run.workflow)?.workflow;
+  const mapped = (entry: Retired | undefined): string | undefined => entry?.stage ?? undefined;
+  if (run.pack !== null) {
+    const recorded = run.pack.workflow;
+    const old = retired.find(entry => entry.workflow === recorded);
+    return old === undefined ? recorded : mapped(old);
+  }
+  const stage = stages?.find(entry => entry.name === run.workflow);
+  if (stage !== undefined) return stage.workflow;
+  return stages === undefined ? undefined : mapped(retiredRun(stages, retired, run.workflow));
 }
 
 /** The run a card or a row opens: the one the item stands at, else its newest. */

@@ -58,6 +58,7 @@ const VIEW = {
 const STAGES = ['plan', 'stage-build', 'stage-check', 'stage-host'].map(workflow => ({
   name: `${PREFIX}${workflow}`,
   workflow,
+  inFlow: true,
 }));
 const PACK: CardPack = { stages: STAGES, view: VIEW };
 

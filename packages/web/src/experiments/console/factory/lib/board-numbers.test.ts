@@ -128,3 +128,22 @@ test('an item ended without merging or at rest is set aside, with why; a failed 
     ['no-outcome', 'Ended with no outcome'],
   ]);
 });
+
+test('with a placement, a moving item at no stage is set aside and on no count', () => {
+  const placed = item('placed', 'running');
+  const lost = item('lost', 'waiting');
+  const place = (read: ItemRead): string | undefined =>
+    read.item.key === 'placed' ? 'build' : undefined;
+  const board = packBoard([placed, lost], 'flow', NOW, place);
+  expect(board.moving.map(read => read.item.key)).toEqual(['placed']);
+  expect(board.unplaced.map(read => read.item.key)).toEqual(['lost']);
+  expect(board.onBoard.map(read => read.item.key)).toEqual(['placed']);
+  expect(board.numbers.inFlight).toBe(1);
+  expect(board.numbers.total).toBe(1);
+  // Until the pack is read there is no placement, and every moving item counts.
+  expect(packBoard([placed, lost], 'flow', NOW).moving.length).toBe(2);
+  // Set aside says why, since its run started.
+  expect(projectSetAside([placed, lost], [{ read: lost, why: 'On no stage' }])).toEqual([
+    { read: lost, why: 'On no stage', since: '2026-11-20 10:00:00' },
+  ]);
+});

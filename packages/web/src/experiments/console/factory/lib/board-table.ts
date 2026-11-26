@@ -60,7 +60,7 @@ function sortValue(
     case 'column':
       return row.columnOrder;
     case 'state':
-      // As the cell shows it: open asks read Needs you whatever the chip says.
+      // An item with open asks, whose cell carries its Needs you button, sorts as Needs you.
       return CHIP_ORDER.indexOf(progress.asks === null ? chipOf(read) : 'needs_you');
     case 'round':
       return progress.round?.dots.length ?? 0;

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { displayItemKey, issueNumber } from './item-key';
+import { displayItemKey, issueNumber, openAsksOf } from './item-key';
 
 test('an issue key reads #N, in either spelling, and any other key reads as it is', () => {
   expect(
@@ -38,4 +38,23 @@ test('the issue number of a key in either form, none for any other', () => {
     null,
     null,
   ]);
+});
+
+test('openAsksOf counts the asks the tab lists for an item: either key spelling, none answered', () => {
+  const on = (ref: string, key: string) => ({ ref, item: { key } });
+  const asks = [on('a1', '198'), on('a2', 'issue-198'), on('a3', 'issue-198-split'), on('a4', '7')];
+  const refs = (wanted: string[], answered: string[] = []): string[] =>
+    openAsksOf(
+      asks,
+      answered.map(ref => ({ ask: { ref } })),
+      wanted
+    ).map(ask => ask.ref);
+  // Twins under the two spellings are one item; a split member is not its parent.
+  expect(refs(['198'])).toEqual(['a1', 'a2']);
+  expect(refs(['issue-198'])).toEqual(['a1', 'a2']);
+  expect(refs(['7'])).toEqual(['a4']);
+  // An ask answered here this session drops out of the count everywhere at once.
+  expect(refs(['198'], ['a2'])).toEqual(['a1']);
+  // No filter: every open ask.
+  expect(refs([], ['a4'])).toEqual(['a1', 'a2', 'a3']);
 });

@@ -6,7 +6,7 @@
  * second placement exists. The board's Merged column (`packBoard`'s recent merged items) sits on
  * the map's landed stage (`curated-view.ts`), so every stage's count is the items it lists.
  */
-import { chipOf, stageAt } from '../../routes/board/standing';
+import { chipOf, stageAt, type Retired } from '../../routes/board/standing';
 import type { ItemRead, PackGraph } from '../../skills/items';
 import type { CuratedView } from './curated-view';
 
@@ -57,14 +57,16 @@ export function stageLive(
   moving: readonly ItemRead[],
   merged: readonly ItemRead[],
   /** The graph's stages, which place a run that recorded no workflow name (`stageAt`). */
-  graphStages: PackGraph['stages'] | undefined
+  graphStages: PackGraph['stages'] | undefined,
+  /** The view's retired workflows, which place their runs' items (`stageAt`). */
+  retired: readonly Retired[] = []
 ): MapLive {
   const stages = new Map<string, StageLive>(
     view.stages.map(stage => [stage.id, { ...EMPTY_STAGE_LIVE, items: [], needYou: [] }])
   );
   const notOnMap: NotOnMap[] = [];
   for (const read of moving) {
-    const workflow = stageAt(read, graphStages) ?? null;
+    const workflow = stageAt(read, graphStages, retired) ?? null;
     const stage =
       workflow === null ? undefined : view.stages.find(s => s.workflows.includes(workflow));
     const live = stage === undefined ? undefined : stages.get(stage.id);

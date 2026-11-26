@@ -28,3 +28,34 @@ export function displayItemKey(key: string, partOf: string | null = null): strin
   const number = issueNumber(key);
   return number === null ? key : `#${number}`;
 }
+
+/**
+ * Whether an ask (or a board read) is of the item `wanted` names: its raw key, or the same issue
+ * number (`198` and `issue-198` name one issue). Exact: a parent's number does not take in its
+ * split members. Something with no item is of none. The Needs you tab's `?item=` filter and a board card's
+ * "Needs you · N" both match by it, so the card's N is what the tab it opens lists.
+ */
+export function matchesItemFilter(of: { item?: { key: string } }, wanted: string): boolean {
+  const key = of.item?.key;
+  if (key === undefined) return false;
+  if (key === wanted) return true;
+  const number = issueNumber(wanted);
+  return number !== null && number === issueNumber(key);
+}
+
+/**
+ * The open asks of the items `wanted` names (`matchesItemFilter`; every ask when it names none),
+ * without those answered here this session: what a card counts and the tab's status counts.
+ */
+export function openAsksOf<Ask extends { ref: string; item?: { key: string } }>(
+  asks: readonly Ask[],
+  answered: readonly { ask: { ref: string } }[],
+  wanted: readonly string[]
+): Ask[] {
+  const done = new Set(answered.map(record => record.ask.ref));
+  return asks.filter(
+    ask =>
+      !done.has(ask.ref) &&
+      (wanted.length === 0 || wanted.some(value => matchesItemFilter(ask, value)))
+  );
+}

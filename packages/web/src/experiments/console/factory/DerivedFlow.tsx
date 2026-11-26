@@ -10,7 +10,7 @@
 import { useMemo, type ReactElement } from 'react';
 import { Link } from 'react-router';
 import { chipOf, columnsOf, type StageGroup } from '../routes/BoardPage';
-import { stageAt } from '../routes/board/standing';
+import { stageAt, type Retired } from '../routes/board/standing';
 import type { ItemRead, PackGraph } from '../skills/items';
 import {
   BACK,
@@ -36,10 +36,12 @@ import { cardTone, TONES } from './tones';
 export function flowCounts(
   columns: readonly StageGroup[],
   items: readonly ItemRead[],
-  stages: PackGraph['stages'] | undefined
+  stages: PackGraph['stages'] | undefined,
+  /** The view's retired workflows, which place their runs' items (`stageAt`). */
+  retired: readonly Retired[] = []
 ): { name: string; stages: string[]; count: number; needYou: number }[] {
   return columns.map(column => {
-    const here = items.filter(read => column.stages.includes(stageAt(read, stages) ?? ''));
+    const here = items.filter(read => column.stages.includes(stageAt(read, stages, retired) ?? ''));
     return {
       ...column,
       count: here.length,
@@ -51,11 +53,12 @@ export function flowCounts(
 /** How many items sit at each stage (by workflow), and how many of those wait on the operator. */
 export function stageCounts(
   items: readonly ItemRead[],
-  stages: PackGraph['stages'] | undefined
+  stages: PackGraph['stages'] | undefined,
+  retired: readonly Retired[] = []
 ): Map<string, { count: number; needYou: number }> {
   const counts = new Map<string, { count: number; needYou: number }>();
   for (const read of items) {
-    const at = stageAt(read, stages);
+    const at = stageAt(read, stages, retired);
     if (at === undefined) continue;
     const entry = counts.get(at) ?? { count: 0, needYou: 0 };
     entry.count += 1;

@@ -268,6 +268,10 @@ describe('progress declarations are checked against the graph', () => {
     expect(checked(() => undefined)).toEqual([]);
   });
 
+  test('a retired workflow placed at a stage of the flow passes', () => {
+    expect(checked(v => void (v.retired = [{ workflow: 'deliver', stage: 'make' }]))).toEqual([]);
+  });
+
   test.each<[string, (v: FactoryView) => void, string[]]>([
     [
       'an unknown workflow',
@@ -276,6 +280,21 @@ describe('progress declarations are checked against the graph', () => {
     ],
     ['a retired workflow the graph has', v => void v.retired?.push('land'), ['error retired.1']],
     ['a workflow retired twice', v => void v.retired?.push('deliver'), ['error retired.1']],
+    [
+      'a workflow retired twice, once with a stage',
+      v => void v.retired?.push({ workflow: 'deliver', stage: 'make' }),
+      ['error retired.1'],
+    ],
+    [
+      'a retired workflow placed at a stage the graph lacks',
+      v => void (v.retired = [{ workflow: 'deliver', stage: 'ship' }]),
+      ['error retired.0.stage'],
+    ],
+    [
+      'a retired workflow placed at a stage outside the flow',
+      v => void (v.retired = [{ workflow: 'deliver', stage: 'helper' }]),
+      ['error retired.0.stage'],
+    ],
     [
       'an unknown step',
       v => void (v.approves = [{ workflow: 'check', node: 'judge', outcome: 'pass' }]),

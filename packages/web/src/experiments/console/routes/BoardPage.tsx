@@ -3,15 +3,16 @@
  * stage each is on, a last column of the items merged in the last week, the ones that need a
  * decision, the ones set aside, and the asks that wait. A Table view lists the same items.
  *
- * It decides nothing. Where an item is and whether it is open is the item read's
- * `standing`, the stages and their order are the pack graph's, and an ask is drawn and
- * answered by the component the runs page uses. How stages are grouped into columns is the
- * pack's to say, in its own document: the graph read carries the groups and the board names
- * none itself. Which items go in which group, and the numbers the Overview shows, are
- * `packBoard`'s (`factory/lib/board-numbers.ts`).
+ * It decides nothing. Whether an item is open is the item read's `standing`, the stages and
+ * their order are the pack graph's, and the stage an item stands at is `placeFor`'s: its run's
+ * stage, or the one the factory view maps a retired workflow's runs to. An open item at no stage
+ * of the flow is set aside with that reason; there is no column for it. How stages are grouped
+ * into columns is the pack's to say, in its own document: the graph read carries the groups and
+ * the board names none itself. Which items go in which group, and the numbers the Overview
+ * shows, are `packBoard`'s (`factory/lib/board-numbers.ts`).
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { useParams, useSearchParams } from 'react-router';
 import { useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { BoardTable } from '../factory/BoardTable';
@@ -19,12 +20,21 @@ import { BoardToolbar, useBoardView, type BoardView } from '../factory/BoardTool
 import { ColumnHeader } from '../factory/ColumnHeader';
 import { TONES } from '../factory/tones';
 import type { ColumnTone } from '../factory/lib/map-columns';
+import { useFactoryCards } from '../factory/cards-context';
 import { FactoryCardsProvider, useForgeTitles } from '../factory/FactoryCards';
 import { MergedColumn } from '../factory/MergedColumn';
 import { SetAsideStrip } from '../factory/SetAsideStrip';
 import { useBoardItems } from '../factory/useBoardItems';
 import { WorkOrdersStrip } from '../factory/WorkOrdersStrip';
-import { packBoard, projectSetAside, type PackBoardGroups } from '../factory/lib/board-numbers';
+import {
+  ON_NO_PACK,
+  ON_NO_STAGE,
+  packBoard,
+  placeFor,
+  projectSetAside,
+  type PackBoardGroups,
+  type Place,
+} from '../factory/lib/board-numbers';
 import type { TableRow } from '../factory/lib/board-table';
 import { itemMatches } from '../factory/lib/item-card';
 import { workOrders } from '../factory/lib/work-orders';
@@ -68,10 +78,7 @@ export function columnsOf(graph: PackGraph | undefined): StageGroup[] {
   ].filter(column => column.stages.length > 0);
 }
 
-/**
- * One column with its items. An empty column collapses to a narrow heading, so the pack's
- * order still shows and the occupied ones stay on screen.
- */
+/** One column with its items. Every column of a row is the same width, an empty one too. */
 function Column({
   name,
   stages,
@@ -105,10 +112,12 @@ function Column({
       ref={column}
       data-stage={name}
       data-empty={empty ? '' : undefined}
-      className={`flex flex-col md:min-h-0 ${empty ? 'md:w-28 md:shrink-0' : 'md:w-0 md:min-w-44 md:flex-1'}`}
+      className="flex flex-col md:min-h-0 md:w-0 md:min-w-44 md:flex-1"
     >
       <ColumnHeader label={name} subtitle={stages.join(', ')} items={items} bar={accent} />
-      {empty ? null : (
+      {empty ? (
+        <p className="mt-3 text-console-12 text-text-tertiary">Nothing here</p>
+      ) : (
         <CardList
           reads={items}
           projectId={projectId}
@@ -249,7 +258,7 @@ function tableRows(
   columns: readonly StageGroup[],
   columnOf: (read: ItemRead) => number
 ): { rows: TableRow[]; earlier: TableRow[] } {
-  const names = [...columns.map(column => column.name), 'Not on a stage'];
+  const names = columns.map(column => column.name);
   const merged = (read: ItemRead): TableRow => ({
     read,
     column: 'Merged',
@@ -274,12 +283,15 @@ function tableRows(
 /**
  * A pack's columns, each with the open items standing at it, then Merged; or the same items
  * as a Table. A column is a group the pack's document declares (the graph read carries them),
- * or a stage of the graph that no group holds, in the graph's order.
+ * or a stage of the graph that no group holds, in the graph's order. `place` puts each item at
+ * its stage; until the pack's view is read the graph alone places, and an item it cannot place
+ * is drawn nowhere until `place` sets it aside.
  */
 export function PackBoard({
   projectId,
   pack,
   board,
+  place,
   counted,
   view = 'pipeline',
   earlier = false,
@@ -289,6 +301,8 @@ export function PackBoard({
   projectId: string;
   pack: string;
   board: PackBoardGroups;
+  /** The stage each item is at (`placeFor`); absent until the pack's graph and view are read. */
+  place?: Place;
   /** Every item is read, so Merged and the Table are whole. */
   counted: boolean;
   view?: BoardView;
@@ -302,44 +316,32 @@ export function PackBoard({
   const { data: graph, error } = useEntity<PackGraph>(K.packGraph(projectId, pack), () =>
     getPackGraph(projectId, pack)
   );
-  const stageOf = (read: ItemRead): string | undefined => stageAt(read, graph?.stages);
+  const stageOf = place ?? ((read: ItemRead): string | undefined => stageAt(read, graph?.stages));
   const columns = columnsOf(graph);
-  const stages = columns.flatMap(column => column.stages);
   const focus = useSearchParams()[0].get('group');
   const items = board.moving;
-  // An item whose stage the pack no longer has, or whose pack could not be read, stays visible.
-  const offStage = items.filter(read => !stages.includes(stageOf(read) ?? ''));
   // A pack with nothing on its board has nothing to show.
   if (counted && board.onBoard.length === 0) return <></>;
-  const columnOf = (read: ItemRead): number => {
-    const at = columns.findIndex(column => column.stages.includes(stageOf(read) ?? ''));
-    return at === -1 ? columns.length : at;
-  };
+  const columnOf = (read: ItemRead): number =>
+    columns.findIndex(column => column.stages.includes(stageOf(read) ?? ''));
   const table = tableRows(board, columns, columnOf);
   return (
     <section data-pack={pack} className="mb-4 flex flex-col md:min-h-80 md:flex-1">
-      <h2 className="flex flex-wrap items-baseline gap-x-3 text-sm font-medium text-text-primary">
-        {pack}
-        <span data-pack-links className="text-console-11 font-normal text-text-tertiary">
-          <Link
-            className="underline hover:text-text-primary"
-            to={`/console/p/${encodeURIComponent(projectId)}/packs/${encodeURIComponent(pack)}/setup`}
-          >
-            Setup
-          </Link>
-          {' · '}
-          <Link
-            className="underline hover:text-text-primary"
-            to={`/console/p/${encodeURIComponent(projectId)}/packs/${encodeURIComponent(pack)}/settings`}
-          >
-            Settings
-          </Link>
-        </span>
-      </h2>
+      <h2 className="text-sm font-medium text-text-primary">{pack}</h2>
       {error !== undefined ? (
-        <p className="mt-1 text-console-12 text-error">{error.message}</p>
-      ) : null}
-      {graph === undefined && error === undefined ? (
+        // With no stages there are no columns: the open items stay in sight under the reason.
+        <div data-stages-unread>
+          <p className="mt-1 text-console-12 text-error">
+            The pack's stages could not be read, so its open items are on no column: {error.message}
+          </p>
+          <CardList
+            reads={items}
+            projectId={projectId}
+            lit={lit}
+            className="mt-3 grid gap-2 md:grid-cols-3"
+          />
+        </div>
+      ) : graph === undefined ? (
         <p className="mt-2 text-console-12 text-text-tertiary">Loading stages…</p>
       ) : view === 'table' ? (
         <BoardTable
@@ -366,15 +368,6 @@ export function PackBoard({
               accent={TONES[STAGE_TONES[position] ?? 'other'].color}
             />
           ))}
-          {offStage.length > 0 ? (
-            <Column
-              name="Not on a stage"
-              stages={[]}
-              items={offStage}
-              projectId={projectId}
-              lit={lit}
-            />
-          ) : null}
           <MergedColumn
             projectId={projectId}
             recent={board.merged.recent}
@@ -389,36 +382,125 @@ export function PackBoard({
   );
 }
 
-/** The items open on no pack's stage, behind a toggle. */
-function OutsidePacks({
+/**
+ * Each pack's placement (`placeFor`), from the graph and view the board cards read for it
+ * (`FactoryCardsProvider`). Absent for a pack while those reads are out, or when its graph
+ * could not be read; a pack whose view could not be read places by its graph alone.
+ */
+function usePlaces(packs: readonly string[]): ReadonlyMap<string, Place> {
+  const read = useFactoryCards()?.packs;
+  const places = new Map<string, Place>();
+  for (const pack of packs) {
+    const cardPack = read?.get(pack);
+    if (cardPack !== undefined) places.set(pack, placeFor(cardPack.stages, cardPack.view));
+  }
+  return places;
+}
+
+/** "N on a stage": the open items a pack's stage holds, once the packs are read. */
+function OnStageStatus({
+  open,
+  packs,
+}: {
+  open: { data: ItemRead[] | undefined; error: Error | undefined };
+  packs: readonly string[];
+}): ReactElement {
+  const places = usePlaces(packs);
+  const now = new Date();
+  const onStage = (reads: readonly ItemRead[]): number =>
+    packs.reduce(
+      (sum, pack) => sum + packBoard(reads, pack, now, places.get(pack)).moving.length,
+      0
+    );
+  return (
+    <p role="status" className="text-xs text-text-tertiary">
+      {open.error !== undefined
+        ? open.error.message
+        : open.data === undefined
+          ? 'Reading items…'
+          : `${String(onStage(open.data))} on a stage`}
+    </p>
+  );
+}
+
+/** Each pack's columns, its open items placed at their stages. */
+function PackBoards({
   projectId,
-  outside,
+  packs,
+  items,
+  counted,
+  itemsError,
+  view,
+  earlier,
+  lit,
 }: {
   projectId: string;
-  outside: ItemRead[];
-}): ReactElement | null {
-  const [shown, setShown] = useState(false);
-  if (outside.length === 0) return null;
+  packs: readonly string[];
+  /** The items the filter keeps. */
+  items: readonly ItemRead[];
+  counted: boolean;
+  itemsError: Error | undefined;
+  view: BoardView;
+  earlier: boolean;
+  lit: ReadonlySet<string> | null;
+}): ReactElement {
+  const places = usePlaces(packs);
+  const now = new Date();
   return (
-    <section data-outside-pack className="mb-6">
-      <button
-        type="button"
-        aria-expanded={shown}
-        onClick={() => {
-          setShown(was => !was);
-        }}
-        className="rounded border border-border px-3 py-1.5 text-console-12 text-text-secondary hover:bg-surface-hover hover:text-text-primary"
-      >
-        {shown ? 'Hide' : 'Show'} {outside.length} open on no pack stage
-      </button>
-      {shown ? (
-        <CardList
-          reads={outside}
+    <>
+      {packs.map(pack => (
+        <PackBoard
+          key={pack}
           projectId={projectId}
-          className="mt-3 grid gap-2 md:grid-cols-3"
+          pack={pack}
+          board={packBoard(items, pack, now, places.get(pack))}
+          place={places.get(pack)}
+          counted={counted}
+          view={view}
+          earlier={earlier}
+          lit={lit}
+          itemsError={itemsError}
         />
-      ) : null}
-    </section>
+      ))}
+    </>
+  );
+}
+
+/**
+ * The project's items set aside: those that ended without merging or rest, and the open ones
+ * at no stage: a pack's that no stage of its flow holds, and those standing at no pack's run.
+ */
+function BoardSetAside({
+  projectId,
+  packs,
+  every,
+  matches,
+}: {
+  projectId: string;
+  packs: readonly string[];
+  /** Every item of the project; undefined while it is read. */
+  every: ItemRead[] | undefined;
+  matches: (read: ItemRead) => boolean;
+}): ReactElement | null {
+  const places = usePlaces(packs);
+  const now = new Date();
+  const items = every ?? [];
+  const unplaced = [
+    ...packs.flatMap(pack =>
+      packBoard(items, pack, now, places.get(pack)).unplaced.map(read => ({
+        read,
+        why: ON_NO_STAGE,
+      }))
+    ),
+    ...items
+      .filter(read => isMoving(read) && read.standing.pack === null)
+      .map(read => ({ read, why: ON_NO_PACK })),
+  ];
+  return (
+    <SetAsideStrip
+      projectId={projectId}
+      entries={projectSetAside(items, unplaced).filter(entry => matches(entry.read))}
+    />
   );
 }
 
@@ -447,38 +529,33 @@ export function BoardPage(): ReactElement {
   // stage columns' own.
   const wanted = filter.trim().toLowerCase();
   const titles = useForgeTitles(wanted === '' ? null : projectId, all);
-  const items = all.filter(read => itemMatches(read, titles, wanted));
-  const now = new Date();
-  const packOf = (read: ItemRead): string | undefined => read.standing.pack ?? undefined;
-  const moving = items.filter(isMoving);
+  const matches = (read: ItemRead): boolean => itemMatches(read, titles, wanted);
+  const items = all.filter(matches);
   // Every pack with an item in the project, so a pack with nothing open still shows Merged.
   const packs = [
-    ...new Set([...(project?.itemPacks ?? []), ...moving.flatMap(read => packOf(read) ?? [])]),
+    ...new Set([
+      ...(project?.itemPacks ?? []),
+      ...items.filter(isMoving).flatMap(read => read.standing.pack ?? []),
+    ]),
   ].sort();
 
   return (
-    <section className="flex h-full min-h-0 flex-col">
-      <header className="flex flex-col gap-3 border-b border-border px-4 py-4 md:px-6">
-        <div className="min-w-0">
-          <h1 className="truncate text-base font-medium text-text-primary">
-            {project?.name ?? 'Project'}
-          </h1>
-          <p role="status" className="text-xs text-text-tertiary">
-            {open.error !== undefined
-              ? open.error.message
-              : open.data === undefined
-                ? 'Reading items…'
-                : `${String(open.data.length)} on a stage`}
-          </p>
-        </div>
-        <ProjectViewTabs projectId={projectId} active="board" />
-      </header>
-      <FactoryCardsProvider
-        projectId={projectId}
-        // Until the project is read its packs are unknown, and an empty list would read as all read.
-        packs={project === undefined ? null : packs}
-        itemAsks={itemAsks}
-      >
+    <FactoryCardsProvider
+      projectId={projectId}
+      // Until the project is read its packs are unknown, and an empty list would read as all read.
+      packs={project === undefined ? null : packs}
+      itemAsks={itemAsks}
+    >
+      <section className="flex h-full min-h-0 flex-col">
+        <header className="flex flex-col gap-3 border-b border-border px-4 py-4 md:px-6">
+          <div className="min-w-0">
+            <h1 className="truncate text-base font-medium text-text-primary">
+              {project?.name ?? 'Project'}
+            </h1>
+            <OnStageStatus open={open} packs={packs} />
+          </div>
+          <ProjectViewTabs projectId={projectId} active="board" />
+        </header>
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-4 pt-4 md:px-6">
           {/* The board area fills the window's height, so each column scrolls on its own; what
               follows it runs on below, in the page's scroll. */}
@@ -491,33 +568,21 @@ export function BoardPage(): ReactElement {
               lit={lit === undefined ? null : lit.item.id}
               onLight={setOrder}
             />
-            {packs.map(pack => (
-              <PackBoard
-                key={pack}
-                projectId={projectId}
-                pack={pack}
-                board={packBoard(items, pack, now)}
-                counted={every.data !== undefined}
-                view={view}
-                earlier={earlier}
-                lit={litIds}
-                itemsError={every.error}
-              />
-            ))}
+            <PackBoards
+              projectId={projectId}
+              packs={packs}
+              items={items}
+              counted={every.data !== undefined}
+              itemsError={every.error}
+              view={view}
+              earlier={earlier}
+              lit={litIds}
+            />
           </div>
           <DecisionStrip projectId={projectId} />
-          <SetAsideStrip
-            projectId={projectId}
-            entries={projectSetAside(every.data ?? []).filter(entry =>
-              itemMatches(entry.read, titles, wanted)
-            )}
-          />
-          <OutsidePacks
-            projectId={projectId}
-            outside={moving.filter(read => packOf(read) === undefined)}
-          />
+          <BoardSetAside projectId={projectId} packs={packs} every={every.data} matches={matches} />
         </div>
-      </FactoryCardsProvider>
-    </section>
+      </section>
+    </FactoryCardsProvider>
   );
 }

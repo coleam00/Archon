@@ -1,14 +1,15 @@
 /**
- * One item on the board, and a list of them. The card is Rasmus's (its chip, how its run
- * stands, why it needs a decision, the link to a run that waits for an answer) with the
- * iteration detail v1's cards carried (`factory/BoardCardProgress.tsx`). An item with open asks
- * shows one "Needs you · N" control in the chip's place, linking to the project's Needs you tab
- * filtered to it (`factory/NeedsYouLink.tsx`). There is no item page: the rest of the card opens
- * the run log of the run the item stands at, else its newest run.
+ * One item on the board, and a list of them. The card is Rasmus's (how its run stands, why it
+ * needs a decision, the link to a run that waits for an answer) with the iteration detail v1's
+ * cards carried (`factory/BoardCardProgress.tsx`). Top right is the item's state as a label,
+ * never a control. The card's actions are buttons in a row at its bottom (owner, 11/26): its
+ * pull request, and for an item with open asks one "Needs you · N" button linking to the
+ * project's Needs you tab filtered to it (`factory/NeedsYouLink.tsx`). There is no item page:
+ * the rest of the card opens the run log of the run the item stands at, else its newest run.
  */
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
-import { BoardCardProgress, INNER } from '../../factory/BoardCardProgress';
+import { BoardCardProgress, CARD_BUTTON, CardPrButton } from '../../factory/BoardCardProgress';
 import { useCardList } from '../../factory/FactoryCards';
 import type { CardProgress } from '../../factory/lib/item-card';
 import { NeedsYouLink } from '../../factory/NeedsYouLink';
@@ -16,7 +17,6 @@ import { relativeTime } from '../../lib/format';
 import type { ItemRead } from '../../skills/items';
 import {
   CHIP,
-  chipOf,
   decisionReason,
   howItEnded,
   needsDecision,
@@ -58,13 +58,7 @@ export function ItemCard({
 }): ReactElement {
   const run = standingRun(read);
   const open = runToOpen(read);
-  const chip = chipOf(read);
   const shade = litShade(lit, read.item.id);
-  const chipText = chip === 'done' ? howItEnded(read) : CHIP[chip].label;
-  const chipClass = `shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-console-12 font-medium ${CHIP[chip].tone}`;
-  const [heldByRun] = read.questions.flatMap(question =>
-    'run' in question && question.run !== undefined ? [question.run] : []
-  );
   const reason = needsDecision(read) ? decisionReason(read) : undefined;
   const meta = [
     stage,
@@ -99,16 +93,7 @@ export function ItemCard({
         <span data-item-key className="truncate font-mono text-console-12 text-text-tertiary">
           {progress.keyText}
         </span>
-        {/* Open asks take the chip's place whatever the chip says: an item that waits on the
-            operator says so (`chipOf`). Keyed on the asks, not the chip: an item can wait with
-            an open ask its standing names no question for. */}
-        {progress.asks !== null ? (
-          <NeedsYouLink projectId={projectId} itemKey={read.item.key} count={progress.asks.count} />
-        ) : (
-          <span data-chip={chip} className={chipClass}>
-            {chipText}
-          </span>
-        )}
+        <StateLabel read={read} />
       </div>
       {progress.titleIsKey ? null : (
         <p
@@ -127,15 +112,58 @@ export function ItemCard({
           {reason}
         </p>
       )}
-      {heldByRun !== undefined ? (
-        <Link
-          to={runPath(projectId, heldByRun.id)}
-          className={`${INNER} self-start text-console-13 text-warning underline hover:text-text-primary`}
-        >
+      <CardActions read={read} projectId={projectId} progress={progress} />
+    </li>
+  );
+}
+
+/**
+ * The card's actions, a row of buttons at its bottom: the PR, "Needs you · N" for open asks,
+ * and a run that waits for an answer. Nothing when it has none. Keyed on the asks, not the
+ * state: an item can wait with an open ask its standing names no question for. Each button
+ * sits above the card-wide link on its own, so the row's gaps still open the run log.
+ */
+function CardActions({
+  read,
+  projectId,
+  progress,
+}: {
+  read: ItemRead;
+  projectId: string;
+  progress: CardProgress;
+}): ReactElement | null {
+  const [heldByRun] = read.questions.flatMap(question =>
+    'run' in question && question.run !== undefined ? [question.run] : []
+  );
+  if (progress.pr === null && progress.asks === null && heldByRun === undefined) return null;
+  return (
+    <div data-card-actions className="mt-1 flex flex-wrap items-center gap-2">
+      <CardPrButton pr={progress.pr} />
+      {progress.asks === null ? null : (
+        <NeedsYouLink projectId={projectId} itemKey={read.item.key} count={progress.asks.count} />
+      )}
+      {heldByRun === undefined ? null : (
+        <Link to={runPath(projectId, heldByRun.id)} className={CARD_BUTTON}>
           Its run waits for an answer
         </Link>
-      ) : null}
-    </li>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The item's state as a label (Running, Waiting, Merged, Stopped…): drawn so it does not read
+ * as a control. An item's asks are its Needs you button, never this label.
+ */
+export function StateLabel({ read }: { read: ItemRead }): ReactElement {
+  const { state } = read.standing;
+  return (
+    <span
+      data-chip={state}
+      className={`shrink-0 select-none whitespace-nowrap rounded px-1.5 py-0.5 text-console-12 font-medium ${CHIP[state].tone}`}
+    >
+      {state === 'done' ? howItEnded(read) : CHIP[state].label}
+    </span>
   );
 }
 

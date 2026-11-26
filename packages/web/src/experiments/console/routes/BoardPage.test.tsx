@@ -8,6 +8,7 @@ import { packBoard } from '../factory/lib/board-numbers';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import type { Project } from '../primitives/project';
 import type { ItemAsk } from '../primitives/run';
+import type { FactoryView } from '../factory/api';
 import type { ItemRead, PackGraph } from '../skills/items';
 import { invalidate, set } from '../store/cache';
 import { K } from '../store/keys';
@@ -158,7 +159,7 @@ test('each open item is under the stage it stands at, in the order the pack grap
       ],
     },
     { ...item('issue-2', 'plan', 'waiting'), questions: [ask] },
-    // A stage the pack no longer has stays on the board; a run of no pack waits to be asked for.
+    // A stage the pack no longer has and a run of no pack: on no column (set aside, below).
     item('issue-4', 'retired', 'queued'),
     item('issue-5', null, 'running'),
   ]);
@@ -187,16 +188,28 @@ test('each open item is under the stage it stands at, in the order the pack grap
       keysIn(stage),
     ])
   ).toEqual([
-    // `lint`, which only other workflows call, is no stage. The failed item is on none.
+    // `lint`, which only other workflows call, is no stage. The failed item is on none, and
+    // there is no column for an item at no stage.
     ['plan', ['issue-2']],
     ['build', []],
     ['check', ['issue-1']],
-    ['Not on a stage', ['issue-4']],
   ]);
+  expect(page.querySelector('[data-stage="Not on a stage"]')).toBeNull();
+  expect(keysIn(pack)).not.toContain('issue-4');
+  // Every column is the same width, the empty `build` too.
+  const widths = new Set(
+    [...pack.querySelectorAll('[data-stage]')].map(stage => stage.getAttribute('class'))
+  );
+  expect(widths.size).toBe(1);
+  expect([...widths][0]).toContain('md:flex-1');
+  expect([...widths][0]).not.toContain('md:w-28');
+  // The pack's Setup and Settings pages are not linked from the board.
+  expect(page.querySelector('[data-pack-links]')).toBeNull();
+  const hrefs = [...page.querySelectorAll('a')].map(link => link.getAttribute('href') ?? '');
+  expect(hrefs.filter(href => /\/(setup|settings)$/.test(href))).toEqual([]);
   const decide = page.querySelector('[data-needs-decision]');
   expect(decide === null ? [] : keysIn(decide)).toEqual(['issue-3']);
   expect(decide?.querySelector('[data-item-reason]')?.textContent).toContain('check');
-  expect(page.querySelector('[data-outside-pack]')).not.toBeNull();
   expect(keysIn(page)).not.toContain('issue-5');
 
   // An item shows its title, links to its run, and says how it stands.
@@ -204,17 +217,17 @@ test('each open item is under the stage it stands at, in the order the pack grap
   expect(card?.getAttribute('data-state')).toBe('failed');
   expect(card?.querySelector('[data-item-title]')?.textContent).toBe('Title of issue-3');
   expect(card?.querySelector('a')?.getAttribute('href')).toBe('/console/p/web/r/run-issue-3');
-  // An item that waits on the operator says so.
-  expect(page.querySelector('[data-item="issue-2"] [data-chip]')?.getAttribute('data-chip')).toBe(
-    'needs_you'
-  );
+  // The card's chip is its state, a label; that it waits on the operator is its button.
+  expect(page.querySelector('[data-item="issue-2"] [data-chip]')?.textContent).toBe('Waiting');
   // Until every item is read, the work orders are a skeleton: no total that may be wrong.
   expect(page.querySelector('[data-work-orders-loading]')).not.toBeNull();
   expect(page.querySelector('[data-work-order]')).toBeNull();
   // The Board has no Needs you section (that is its own tab); the item that has an ask links to
-  // that tab, filtered to it, from one control on its card.
+  // that tab, filtered to it, from one button in its card's actions.
   expect(page.querySelector('[data-needs-you]')).toBeNull();
-  const links = page.querySelectorAll('[data-item="issue-2"] [data-needs-you-link]');
+  const links = page.querySelectorAll(
+    '[data-item="issue-2"] [data-card-actions] [data-needs-you-link]'
+  );
   expect(links.length).toBe(1);
   expect(links[0]?.textContent).toBe('Needs you · 1');
   expect(links[0]?.getAttribute('href')).toBe('/console/p/web/needs-you?item=issue-2');
@@ -317,7 +330,7 @@ test('a work order with no run of its own is listed from its members, open or me
   expect(keysIn(pack?.querySelector('[data-stage="build"]') ?? page.createElement('div'))).toEqual([
     'issue-7',
   ]);
-  expect(page.querySelector('[data-outside-pack]')).toBeNull();
+  expect(page.querySelector('[data-set-aside]')).toBeNull();
 });
 
 test('stages a pack groups share a column, and each card there says its own stage', () => {
@@ -438,6 +451,86 @@ async function mountBoard(answer: (url: string) => Promise<Response>) {
 
 const nothingFetched = (url: string): Promise<Response> =>
   Promise.reject(new Error(`unexpected fetch ${url}`));
+
+/** An item standing on its only run, of the retired `deliver`, which recorded no pack workflow. */
+function delivered(key: string): ItemRead {
+  const read = item(key, null, 'waiting');
+  return {
+    ...read,
+    standing: { ...read.standing, pack: 'flow' },
+    runs: read.runs.map(run => ({ ...run, workflow: 'acme/flow:deliver' })),
+  };
+}
+
+/** The board mounted with its pack's graph and a view that retires `deliver` as `retired`. */
+async function mountPlaced(reads: ItemRead[], retired: unknown[]) {
+  seedBoard(reads);
+  set(K.packGraph('web', 'flow'), graph);
+  set(K.packView('web', 'flow'), {
+    path: null,
+    view: { retired } as unknown as FactoryView,
+    problems: [],
+  });
+  const board = await mountBoard(nothingFetched);
+  const columns = (): string[][] =>
+    [...board.container.querySelectorAll('[data-pack="flow"] [data-stage]')].map(stage => [
+      stage.getAttribute('data-stage') ?? '',
+      ...keysIn(stage as unknown as ParentNode),
+    ]);
+  const setAside = async (): Promise<string[][]> => {
+    const toggle = board.container.querySelector('[data-set-aside] button');
+    if (toggle !== null && toggle.getAttribute('aria-expanded') !== 'true')
+      await board.act(async () => {
+        (toggle as unknown as HTMLElement).click();
+      });
+    return [...board.container.querySelectorAll('[data-set-aside] [data-item]')].map(row => [
+      row.getAttribute('data-item') ?? '',
+      row.querySelector('[data-set-aside-why]')?.textContent ?? '',
+    ]);
+  };
+  return { ...board, columns, setAside };
+}
+
+test('an item on a retired workflow stands at the stage the view maps it to', async () => {
+  const board = await mountPlaced(
+    [item('issue-1', 'plan', 'running'), delivered('issue-6')],
+    [{ workflow: 'deliver', stage: 'build' }]
+  );
+  try {
+    expect(board.columns()).toEqual([['plan', 'issue-1'], ['build', 'issue-6'], ['check']]);
+    expect(await board.setAside()).toEqual([]);
+  } finally {
+    await board.unmount();
+  }
+});
+
+test('an open item at no stage is set aside with the reason, never in a column', async () => {
+  const board = await mountPlaced(
+    [
+      item('issue-1', 'plan', 'running'),
+      // Retired with no stage to place at.
+      delivered('issue-6'),
+      // A workflow the pack no longer has and the view does not retire.
+      item('issue-4', 'gone', 'queued'),
+      // A run of no pack.
+      item('issue-5', null, 'running'),
+    ],
+    ['deliver']
+  );
+  try {
+    expect(board.columns()).toEqual([['plan', 'issue-1'], ['build'], ['check']]);
+    expect(board.container.querySelector('[data-stage="Not on a stage"]')).toBeNull();
+    expect((await board.setAside()).sort()).toEqual([
+      ['issue-4', 'On no stage'],
+      ['issue-5', "On no pack's stage"],
+      ['issue-6', 'On no stage'],
+    ]);
+    // The header counts what the stages hold.
+    expect(board.container.querySelector('[role="status"]')?.textContent).toBe('1 on a stage');
+  } finally {
+    await board.unmount();
+  }
+});
 
 test('the board filter finds a card by the issue title and the key the card prints', async () => {
   const issue = (number: number, title: string) => ({

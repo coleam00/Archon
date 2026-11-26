@@ -92,14 +92,25 @@ const roundsSourceSchema = z.union([loopRoundsSchema, stageRoundsSchema], {
   error: issue => roundsSourceProblem(issue.input),
 });
 
+/**
+ * A retired workflow, and the graph stage (by its `workflow` name) an item standing on one of
+ * its runs is placed at. A bare name places nowhere: such an item is set aside.
+ */
+const retiredSchema = z.union([
+  workflowNameSchema,
+  z.strictObject({ workflow: workflowNameSchema, stage: workflowNameSchema }),
+]);
+
 /** The progress fields of a factory view; `factory-view.ts` spreads them into its schema. */
 export const progressDeclarations = {
   /**
    * Workflows the pack graph no longer has whose stored runs still count (a pack's older
-   * delivery shape). The check fails a retired workflow the graph has again, and cannot
-   * compare a retired workflow's steps or loops with a graph that lacks them.
+   * delivery shape), each a name or `{ workflow, stage }`. The check fails a retired workflow
+   * the graph has again, and a `stage` the graph has not in its flow, and cannot compare a
+   * retired workflow's steps or loops with a graph that lacks them. Read it through
+   * `retiredEntries`.
    */
-  retired: z.array(workflowNameSchema).optional(),
+  retired: z.array(retiredSchema).optional(),
   /**
    * Where a console counts check rounds: one source, or a list naming each workflow once when
    * items were delivered by more than one shape. An item's rounds are read from the source
@@ -129,6 +140,21 @@ export const progressDeclarations = {
 export type FactoryDecisionPoint = z.infer<typeof decisionPointSchema>;
 export type FactoryRoundsSource = z.infer<typeof roundsSourceSchema>;
 export type FactoryChangeSource = z.infer<typeof changeSourceSchema>;
+
+/** A `retired` entry as one shape: its workflow, and the stage it places at (null: none). */
+export interface FactoryRetired {
+  workflow: string;
+  stage: string | null;
+}
+
+/** The view's `retired` entries, each as `{ workflow, stage }`; empty when absent. */
+export function retiredEntries(view: {
+  retired?: z.infer<typeof retiredSchema>[] | undefined;
+}): FactoryRetired[] {
+  return (view.retired ?? []).map(entry =>
+    typeof entry === 'string' ? { workflow: entry, stage: null } : entry
+  );
+}
 
 /** A declaration given as one source or a list, as a list; empty when absent. */
 export function sourcesOf<T extends object>(declared: T | T[] | undefined): T[] {
