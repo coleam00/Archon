@@ -16,10 +16,9 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { spyOnJsonStdout } from '../test-support/workflow-harness-output';
 import {
   scheduleLabel,
-  scheduledJob,
+  installNativeSchedule,
   type NativeScheduleOptions,
 } from '../triggers/native-schedule';
-import { renderMacosLaunchAgent } from '../triggers/native-schedule-launchd';
 import { isolationCleanupScheduleCommand } from './isolation-schedule';
 import { workflowWakeScheduleCommand } from './wake-schedule';
 
@@ -112,7 +111,7 @@ async function seedJob(
   archonHome: string,
   id: string
 ): Promise<string> {
-  const job = scheduledJob(
+  const { path } = await installNativeSchedule(
     {
       id,
       programArguments: id.startsWith('isolation-cleanup-')
@@ -125,11 +124,8 @@ async function seedJob(
       output: 'discard',
       removeCommand: 'archon workflow wake schedule remove',
     },
-    'darwin'
+    schedules
   );
-  const path = join(schedules.launchAgentsDirectory!, `${job.label}.plist`);
-  await mkdir(schedules.launchAgentsDirectory!, { recursive: true });
-  await writeFile(path, renderMacosLaunchAgent(job));
   return path;
 }
 
@@ -208,7 +204,7 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
     const lastPassPath = join(archonHome, 'schedules', `${legacyId}.last-pass.json`);
     const wake = idPrefix === 'workflow-wake-';
     if (wake) {
-      await mkdir(join(archonHome, 'schedules'));
+      await mkdir(join(archonHome, 'schedules'), { recursive: true });
       await writeFile(lastPassPath, JSON.stringify(lastPass));
     }
     process.env.ARCHON_HOME = recordedHome;
