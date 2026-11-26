@@ -662,7 +662,13 @@ describe('a pack folder given as the source', () => {
     const folder = await packFolder('local');
 
     const live = await discoverFrom(folder);
-    const local = live.workflows.find(entry => entry.workflow.name === 'code-review');
+    // Like the installed copy, only the entrypoint dispatches, under its manifest key; the
+    // workflow it includes is support, and the include still expands.
+    const local = live.workflows.find(entry => entry.workflow.name === 'review');
+    expect(names(live.workflows)).not.toContain('code-review');
+    expect(names(live.workflows)).not.toContain('helper');
+    expect(names(live.support ?? [])).toContain('helper');
+    expect(local?.workflow.nodes.some(node => node.id === 'helper__summarize')).toBe(true);
     expect(local?.source).toBe('project');
     expect(local?.workflow.pack?.key).toBe('review-kit');
     expect(local?.workflow.description).toBe('Review a change (local)');
@@ -700,11 +706,7 @@ describe('a pack folder given as the source', () => {
     });
     await expect(access(join(capture.anchor.root, 'project', '.archon', '.env'))).rejects.toThrow();
     await writeFile(join(folder, 'review', 'commands', 'scope.md'), 'Edited after start.\n');
-    const resumed = await resolveContinuationWorkflow(
-      deps,
-      runWith(capture, 'code-review'),
-      folder
-    );
+    const resumed = await resolveContinuationWorkflow(deps, runWith(capture, 'review'), folder);
     expect(resumed?.workflow.pack).toMatchObject({ key: 'review-kit', source: 'project' });
     expect(
       await loadCommandPrompt(deps, folder, scope.source.name, undefined, resumed?.roots)
@@ -715,9 +717,7 @@ describe('a pack folder given as the source', () => {
     const folder = await packFolder('local', { skills: ['review'] });
     const live = await discoverFrom(folder);
     expect(live.errors).toEqual([]);
-    expect(live.workflows.find(entry => entry.workflow.name === 'code-review')?.source).toBe(
-      'project'
-    );
+    expect(live.workflows.find(entry => entry.workflow.name === 'review')?.source).toBe('project');
   });
 
   test('names the copy it read and the other copy, and how to name each', async () => {
@@ -742,6 +742,58 @@ describe('a pack folder given as the source', () => {
     expect(() => packWorkflows(elsewhere, 'review-kit', project)).toThrow(
       "Pack 'review-kit' is in reach as 'acme.review-kit' (installed); name 'acme.review-kit' to use it."
     );
+  });
+
+  test('refuses a child run of its support workflow and reports a listed file that is missing', async () => {
+    const folder = await packFolder('local', {
+      entrypoints: {
+        review: 'review/code-review.yaml',
+        launch: 'launch/launch.yaml',
+        gone: 'gone/gone.yaml',
+        // Its filename exists, but in another folder: the path decides, not the filename.
+        elsewhere: 'elsewhere/helper.yaml',
+      },
+    });
+    await mkdir(join(folder, 'launch'), { recursive: true });
+    await writeFile(
+      join(folder, 'launch', 'launch.yaml'),
+      'name: launch\ndescription: d\nnodes:\n  - id: child\n    workflow: helper\n'
+    );
+    const live = await discoverFrom(folder);
+    expect(names(live.workflows)).not.toContain('launch');
+    expect(names(live.workflows)).not.toContain('helper');
+    expect(names(live.workflows)).not.toContain('elsewhere');
+    const messages = live.errors.map(error => error.error);
+    expect(messages).toContainEqual(
+      expect.stringContaining("'workflow:' launches support workflow 'helper'")
+    );
+    expect(messages).toContainEqual(
+      "Entrypoint 'gone' of pack folder review-kit did not load from gone/gone.yaml."
+    );
+  });
+
+  test('its entrypoint key takes precedence over a home workflow of that name', async () => {
+    const folder = await packFolder('local');
+    await mkdir(join(home, 'workflows'), { recursive: true });
+    await writeFile(
+      join(home, 'workflows', 'home-review.yaml'),
+      'name: review\ndescription: home\nnodes:\n  - id: a\n    bash: echo home\n'
+    );
+    const live = await discoverFrom(folder);
+    expect(live.workflows.filter(entry => entry.workflow.name === 'review')).toMatchObject([
+      { source: 'project', workflow: { description: 'Review a change (local)' } },
+    ]);
+    expect(live.errors.map(error => error.error).join('\n')).not.toContain('Duplicate');
+  });
+
+  test('a run of a workflow that is now support continues from its capture', async () => {
+    const folder = await packFolder('local');
+    const capture = await captureWorkflowSource({
+      sourceRoot: folder,
+      captureRoot: join(home, 'runs', 'run-support'),
+    });
+    const resumed = await resolveContinuationWorkflow(deps, runWith(capture, 'helper'), folder);
+    expect(resumed?.workflow.name).toBe('helper');
   });
 
   /** A pack folder holding `files`, with a manifest naming it `name`. */

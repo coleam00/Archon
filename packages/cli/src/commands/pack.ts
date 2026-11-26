@@ -51,15 +51,17 @@ import {
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
-  nearestPackBindings,
+  declaredPackCopy,
   type PackCopy,
   packCopies,
   type PackGraph,
   type PackGraphLink,
   packWorkflowName,
   packWorkflows,
+  unprovidedWorkflowRefusal,
 } from '@archon/workflows/pack-graph';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
+import type { WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type {
@@ -413,22 +415,26 @@ async function findPack(
   explicitSource: boolean
 ): Promise<DeclaredPack> {
   const discovered = await loadWorkflows(cwd);
-  const workflows = packWorkflows(discovered, packKey, cwd);
+  // A binding from an explicit source records it as `launch.discoveryCwd`, and a start then
+  // admits only a workflow of the source's own project scope (`selectStartedWorkflow`).
+  const admitted = (entries: readonly WorkflowWithSource[] = []): WorkflowWithSource[] =>
+    explicitSource ? entries.filter(entry => entry.source === 'project') : [...entries];
+  const declared = declaredPackCopy(
+    packKey,
+    admitted(discovered.workflows),
+    admitted(discovered.support)
+  );
   const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
-  const bindings = nearestPackBindings(workflows);
-  if (bindings === undefined)
+  if (declared === undefined) {
+    packWorkflows(discovered, packKey, cwd); // throws, naming what is in reach, when no copy is
     throw new Error(
       [
         `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
         ...copyLines(packKey, copies, cwd, explicitSource),
       ].join('\n')
     );
-  return {
-    key: packKey,
-    copies,
-    bindings,
-    workflowNames: workflows.map(entry => entry.workflow.name),
-  };
+  }
+  return { key: packKey, copies, bindings: declared.bindings, workflowNames: declared.names };
 }
 
 function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
@@ -446,10 +452,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
   const name = packWorkflowName(pack.workflowNames, declared);
-  if (name === undefined)
-    throw new Error(
-      `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
-    );
+  if (name === undefined) throw new Error(unprovidedWorkflowRefusal(id, declared, pack.key));
   return name;
 }
 

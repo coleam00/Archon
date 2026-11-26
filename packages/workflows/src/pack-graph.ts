@@ -323,6 +323,42 @@ export function nearestPackBindings(
 }
 
 /**
+ * Pack `packKey`'s nearest declaration and the names the pack dispatches in `workflows`, a
+ * dispatch catalog, which are all a binding may name. `support` lets the declaration be read
+ * when no dispatchable workflow of the pack loaded, so its bindings are still checked.
+ */
+export function declaredPackCopy(
+  packKey: string,
+  workflows: readonly WorkflowWithSource[],
+  support: readonly WorkflowWithSource[] = []
+): { bindings: Readonly<Record<string, PackBinding>>; names: string[] } | undefined {
+  const ofPack = (entry: WorkflowWithSource): boolean => entry.workflow.pack?.key === packKey;
+  const bindings = nearestPackBindings([...workflows, ...support].filter(ofPack));
+  if (bindings === undefined) return undefined;
+  return { bindings, names: workflows.filter(ofPack).map(entry => entry.workflow.name) };
+}
+
+/**
+ * The refusal of a binding that names a workflow its pack does not dispatch, keyed as the
+ * operator named the pack (`factory` from its folder, `acme.factory` installed).
+ */
+export function unprovidedWorkflowRefusal(id: string, declared: string, packKey: string): string {
+  return `Binding '${id}' names workflow '${declared}', which pack '${packKey}' does not provide.`;
+}
+
+/** The refusal of each workflow name the bindings declare that `names` does not provide. */
+export function packBindingRefusals(
+  packKey: string,
+  copy: { bindings: Readonly<Record<string, PackBinding>>; names: readonly string[] }
+): string[] {
+  return Object.entries(copy.bindings).flatMap(([id, binding]) =>
+    bindingWorkflowNames(binding)
+      .filter(name => packWorkflowName(copy.names, name) === undefined)
+      .map(name => unprovidedWorkflowRefusal(id, name, packKey))
+  );
+}
+
+/**
  * The full name a workflow declared inside the pack has here. A binding names a stage as
  * its pack authored it (`plan`); an installed pack's stages are named `owner/plugin:plan`,
  * so the name gets the pack's own prefix, never another pack's. A name that is a stage, or

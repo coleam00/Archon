@@ -319,10 +319,10 @@ export async function loadPackagedWorkflowsFromDir(
 /**
  * Load one pack into a scope's packaged result. Two workflows of the scope's packs with
  * one filename both fail: a scope keys workflows by filename, so either would silently
- * replace the other. A pack-folder source is loaded through this too, so a pack folder
- * and a pack in `.archon/workflows` fail a filename collision the same way.
+ * replace the other. A pack-folder source is merged through `mergePackFiles` too, so a
+ * pack folder and a pack in `.archon/workflows` fail a filename collision the same way.
  */
-export async function addPackToScope(
+async function addPackToScope(
   context: WorkflowParseContext,
   result: DirLoadResult,
   collided: Set<string>,
@@ -332,6 +332,15 @@ export async function addPackToScope(
     { ...context, pack: pack.name, source: pack.source, label: pack.name },
     pack.path
   );
+  mergePackFiles(result, collided, loaded);
+}
+
+/** Add one loaded pack's files to a scope's packaged result, failing filename collisions. */
+export function mergePackFiles(
+  result: DirLoadResult,
+  collided: Set<string>,
+  loaded: { files: readonly PackWorkflowFile[]; errors: readonly WorkflowLoadError[] }
+): void {
   result.errors.push(...loaded.errors);
   for (const { filename, parsed } of loaded.files) {
     if (result.workflows.has(filename) || collided.has(filename)) {
