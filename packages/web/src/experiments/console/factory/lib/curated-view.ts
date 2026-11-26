@@ -20,6 +20,7 @@
 import type { PackGraph } from '../../skills/items';
 import type { FactoryView } from '../api';
 import { stageLabel } from './stage-words';
+import type { ArrowLabels } from './graph-structure';
 import { groupsOf, type GroupKind, type ViewGroup } from './view-groups';
 
 type Drilldown = NonNullable<FactoryView['stages'][string]['drilldown']>;
@@ -142,6 +143,25 @@ function columnsFor(
   });
 }
 
+/**
+ * The file's words for outcomes and ask options, the ones it labels; none without a file. The
+ * curated map and the full workflow both word their arrows from these (`arrowWords`).
+ */
+export function arrowLabels(view: FactoryView | null): ArrowLabels {
+  return {
+    outcomeLabels: Object.fromEntries(
+      Object.entries(view?.outcomes ?? {}).flatMap(([key, outcome]) =>
+        outcome.label === undefined ? [] : [[key, outcome.label]]
+      )
+    ),
+    answerLabels: Object.fromEntries(
+      Object.entries(view?.answers ?? {}).flatMap(([key, answer]) =>
+        answer.label === undefined ? [] : [[key, answer.label]]
+      )
+    ),
+  };
+}
+
 export function curatedView(view: FactoryView, graph: PackGraph): CuratedView {
   const stages = graph.stages.filter(stage => stage.inFlow).map(stage => stageOf(view, stage));
   const merged = stages.find(stage => stage.id === view.merged)?.id ?? stages.at(-1)?.id;
@@ -158,16 +178,7 @@ export function curatedView(view: FactoryView, graph: PackGraph): CuratedView {
     stageLabels: Object.fromEntries(
       Object.entries(view.stages).map(([workflow, stage]) => [workflow, stage.label])
     ),
-    outcomeLabels: Object.fromEntries(
-      Object.entries(view.outcomes ?? {}).flatMap(([key, outcome]) =>
-        outcome.label === undefined ? [] : [[key, outcome.label]]
-      )
-    ),
-    answerLabels: Object.fromEntries(
-      Object.entries(view.answers ?? {}).flatMap(([key, answer]) =>
-        answer.label === undefined ? [] : [[key, answer.label]]
-      )
-    ),
+    ...arrowLabels(view),
     runNames: Object.fromEntries(graph.stages.map(stage => [stage.workflow, stage.name])),
   };
 }

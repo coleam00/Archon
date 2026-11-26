@@ -37,26 +37,35 @@ export function wordsOf(from: PackGraph['arrows'][number]['from']): string {
   return from.settled === 'any' ? 'asked' : from.settled;
 }
 
+/** The view's arrow words: what `arrowWords` and `outcomeWords` read. */
+export type ArrowLabels = Pick<StructureView, 'outcomeLabels' | 'answerLabels'>;
+
 /**
- * What an arrow says on the map: its outcome's label (the exact `workflow:outcome` entry, then
- * the stage's `workflow:*`) or its ask option's (the exact `workflow:option` entry only, so a
- * new option is never hidden under another's words), else `wordsOf`.
+ * What an outcome of `workflow` says: the file's exact `workflow:outcome` label, then the
+ * stage's `workflow:*`, else the raw value, which `check:factory-view` reports as unworded.
  */
-function arrowWords(
-  view: StructureView,
-  workflowOf: ReadonlyMap<string, string>,
+export function outcomeWords(labels: ArrowLabels, workflow: string, outcome: string): string {
+  return (
+    labels.outcomeLabels[`${workflow}:${outcome}`] ??
+    labels.outcomeLabels[`${workflow}:*`] ??
+    outcome
+  );
+}
+
+/**
+ * What an arrow out of `workflow` says, on the curated map and the full workflow alike: its
+ * outcome's words (`outcomeWords`), or its ask option's label (the exact `workflow:option` entry
+ * only, so a new option is never hidden under another's words), else `wordsOf`.
+ */
+export function arrowWords(
+  labels: ArrowLabels,
+  workflow: string,
   from: PackGraph['arrows'][number]['from']
 ): string {
-  const workflow = workflowOf.get(from.stage) ?? '';
-  if (!('outcome' in from))
-    return (
-      (from.option === undefined ? undefined : view.answerLabels[`${workflow}:${from.option}`]) ??
-      wordsOf(from)
-    );
+  if ('outcome' in from) return outcomeWords(labels, workflow, from.outcome);
   return (
-    view.outcomeLabels[`${workflow}:${from.outcome}`] ??
-    view.outcomeLabels[`${workflow}:*`] ??
-    from.outcome
+    (from.option === undefined ? undefined : labels.answerLabels[`${workflow}:${from.option}`]) ??
+    wordsOf(from)
   );
 }
 
@@ -95,7 +104,7 @@ export function mapArrows(view: StructureView, graph: PackGraph): MapArrow[] {
     if (from === undefined || to === undefined) continue;
     const key = JSON.stringify([from, to]);
     const pair = drawn.get(key) ?? { from, to, words: [] };
-    const word = arrowWords(view, workflowOf, arrow.from);
+    const word = arrowWords(view, workflowOf.get(arrow.from.stage) ?? '', arrow.from);
     if (!pair.words.includes(word)) pair.words.push(word);
     drawn.set(key, pair);
   }

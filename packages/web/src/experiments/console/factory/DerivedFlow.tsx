@@ -2,10 +2,10 @@
  * The map derived from the pack graph (DESIGN.md, COMBINED direction), drawn as a graph: the
  * groups left to right (the view file's when it declares them, else the pack document's,
  * `groupsOf`), a card per flow stage in each, under its group's name, the hand-offs between
- * them as arrows and the send-backs labelled with their outcome. On a project's Overview each
- * card carries the project's counts and opens its board; on How it works, which is the pack's
- * page and names no project (DESIGN.md, owner change 1 of 2026-11-23), the cards are the
- * structure alone. Both draw it when the pack ships no curated view file, and as the curated
+ * them as arrows and the send-backs, each pill worded as on the curated map (`arrowWords`). On
+ * a project's Overview each card carries the project's counts and opens its board; on How it
+ * works, which is the pack's page and names no project (DESIGN.md, owner change 1 of
+ * 2026-11-23), the cards are the structure alone. Both draw it when the pack ships no curated view file, and as the curated
  * map's "Full workflow". It wears the curated map's cards, lines, legend and camera.
  */
 import { useMemo, type ReactElement } from 'react';
@@ -35,6 +35,7 @@ import { ReadFailure } from './ReadFailure';
 import { cardTone, TONES, type Tone } from './tones';
 import { groupsOf } from './lib/view-groups';
 import { stageLabel } from './lib/stage-words';
+import { arrowLabels } from './lib/curated-view';
 import { askedCount, askedOf, type AskRead } from './lib/item-asks';
 
 /**
@@ -109,7 +110,7 @@ const COUNT = 'text-console-13 tabular-nums text-text-primary';
  * The pack's whole workflow as a graph, from its graph and `flow`'s groups: a card per flow
  * stage in a column per group, coloured by the group's kind, the hand-offs between them as
  * arrows, and the send-backs (an arrow into the same or an earlier column) in the lanes under,
- * each labelled with its outcome. It pans and zooms like the curated map. With `live` (a
+ * each pill worded as on the curated map (`arrowWords`). It pans and zooms like the curated map. With `live` (a
  * project's Overview) each card shows its count and who it waits on and opens that group on the
  * board; without it (How it works) it is the structure alone and links nowhere.
  */
@@ -121,15 +122,19 @@ export function DerivedFlow({
   view = null,
 }: {
   flow: readonly FlowColumn[];
-  /** The pack's view, whose labels name its stages (`stageLabel`); null names them by id in words. */
-  view?: Pick<FactoryView, 'stages'> | null;
+  /**
+   * The pack's view, whose labels name its stages (`stageLabel`) and word its pills as the
+   * curated map does (`arrowLabels`); null names stages by id in words and pills by raw value.
+   */
+  view?: FactoryView | null;
   live?: FlowLive;
   graph: PackGraph | undefined;
   counts?: ReadonlyMap<string, StageAt>;
 }): ReactElement {
+  const labels = useMemo(() => arrowLabels(view), [view]);
   const layout = useMemo(
-    () => (graph === undefined ? undefined : fullWorkflowLayout(graph, flow)),
-    [graph, flow]
+    () => (graph === undefined ? undefined : fullWorkflowLayout(graph, flow, labels)),
+    [graph, flow, labels]
   );
   const camera = useMapCamera(layout?.bounds ?? { x: 0, y: 0, w: 1, h: 1 }, null, FULL_FITTING);
   if (graph === undefined || layout === undefined)
