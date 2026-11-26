@@ -150,10 +150,10 @@ export async function triggerCheckFixture() {
         caught => caught
       );
       // The check prints one pretty JSON document; log lines are single-line.
-      const printed =
-        stdout.mock.calls
-          .map(([chunk]: readonly unknown[]) => String(chunk))
-          .findLast(chunk => chunk.startsWith('{\n')) ?? '';
+      const chunks: string[] = stdout.mock.calls.map(([chunk]: readonly unknown[]) =>
+        String(chunk)
+      );
+      const printed = chunks.findLast(chunk => chunk.startsWith('{\n')) ?? '';
       if (printed === '') throw error;
       return {
         ...(JSON.parse(printed) as {
