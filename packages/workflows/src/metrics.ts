@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import {
   meanInterval,
+  median,
   newcombeDifference,
   welchDifference,
   wilsonInterval,
@@ -430,6 +431,7 @@ function instrumentReport(
     instrument: latest.record.instrument ?? null,
     measured_by: [...latest.measuredBy],
     value: aggregate(kind, values),
+    ...(kind === 'score' ? { median: median(values) } : {}),
     n: records.length,
     interval: valueInterval(kind, isRate(values), values),
     cost: costReport(records, context),

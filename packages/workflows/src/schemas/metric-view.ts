@@ -2,13 +2,13 @@
  * Metric views: the overview cards a workflow pack declares in
  * `<pack>/.shared/metric-views.json`, and the listing the server serves.
  *
- * A view only names metrics and labels; it computes nothing. Consoles render the three
+ * A view only names metrics and labels; it computes nothing. Consoles render the
  * shapes from the metrics report, so a pack chooses what its overview shows without any
  * console naming that pack's metrics. Do not grow this into a dashboard language: a new
- * shape must earn its place the way these three did.
+ * shape must earn its place through an operator need.
  */
 import { z } from 'zod';
-import { metricNameSchema } from './metric';
+import { metricNameSchema, metricUnitSchema } from './metric';
 import { workflowSourceSchema } from './workflow';
 
 const labelSchema = z.string().min(1).max(80);
@@ -58,10 +58,20 @@ const costPerViewSchema = z.strictObject({
   cost_of: metricNameSchema.optional(),
 });
 
+/** A score at its headline instrument, shown in the unit the pack recorded. */
+const scoreViewSchema = z.strictObject({
+  shape: z.literal('score'),
+  title: labelSchema,
+  metric: metricNameSchema,
+  statistic: z.enum(['mean', 'median']),
+  unit: metricUnitSchema,
+});
+
 export const metricViewSchema = z.discriminatedUnion('shape', [
   countViewSchema,
   ratioViewSchema,
   costPerViewSchema,
+  scoreViewSchema,
 ]);
 export type MetricView = z.infer<typeof metricViewSchema>;
 

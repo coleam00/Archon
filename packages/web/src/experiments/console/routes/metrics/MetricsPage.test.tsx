@@ -203,6 +203,56 @@ describe('overview', () => {
   });
 });
 
+describe('score cards', () => {
+  const timing = {
+    shape: 'score',
+    title: 'Time per item',
+    metric: 'demo.time',
+    statistic: 'median',
+    unit: 'minutes',
+  } as const;
+  type ScoreView = Extract<MetricViews['packs'][number]['cards'][number], { shape: 'score' }>;
+  function renderCard(view: ScoreView, metrics: Metric[]): string {
+    return render('/console/metrics', {
+      views: { packs: [{ pack: 'demo', source: 'project', names: {}, cards: [view] }], errors: [] },
+      report: report({ metrics }),
+    });
+  }
+
+  test('shows the selected statistic of the headline instrument in hours and minutes', () => {
+    const old = { ...instrument(5, NONE), median: 1 };
+    const headline = { ...instrument(520, JUDGE, 3), median: 120 };
+    const time = metric(timing.metric, [headline, old], { kind: 'score', unit: 'minutes' });
+    time.instruments.reverse();
+
+    const median = renderCard(timing, [time]);
+    expect(median).toContain('2 h</div>');
+    expect(median).toContain('median of 3 records');
+    const mean = renderCard({ ...timing, statistic: 'mean' }, [time]);
+    expect(mean).toContain('8 h 40 min</div>');
+    expect(mean).toContain('mean of 3 records');
+
+    const nearTwoHours = metric(timing.metric, [instrument(119.999, NONE)], {
+      kind: 'score',
+      unit: 'minutes',
+    });
+    expect(renderCard({ ...timing, statistic: 'mean' }, [nearTwoHours])).toContain('2 h</div>');
+  });
+
+  test('distinguishes an empty window, a measured zero and a mismatched unit', () => {
+    const view = { ...timing, metric: 'demo.rounds', unit: 'rounds' } as const;
+    const rounds = metric(view.metric, [{ ...instrument(0, NONE, 1), median: 0 }], {
+      kind: 'score',
+      unit: 'rounds',
+    });
+    expect(renderCard(view, [])).toContain('no records in this window');
+    expect(renderCard(view, [rounds])).toContain('0 rounds');
+    expect(renderCard({ ...view, unit: 'minutes' }, [rounds])).toContain(
+      'expected a score in minutes'
+    );
+  });
+});
+
 describe('cards', () => {
   test('a count whose breakdown metric has no records says so instead of 0', () => {
     const card = countCard(

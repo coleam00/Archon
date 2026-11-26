@@ -83,7 +83,9 @@ const intervalText = (interval: MetricInstrumentReport['interval']): string =>
   interval === null ? '' : `  95% [${figure(interval.low)}, ${figure(interval.high)}]`;
 
 function figures(entry: MetricInstrumentReport): string {
-  return `value ${String(entry.value)}  n ${String(entry.n)}${intervalText(entry.interval)}  ${latestText(entry.latest)}`;
+  const label = entry.median === undefined ? 'value' : 'mean';
+  const median = entry.median === undefined ? '' : `  median ${String(entry.median)}`;
+  return `${label} ${String(entry.value)}  n ${String(entry.n)}${intervalText(entry.interval)}${median}  ${latestText(entry.latest)}`;
 }
 
 const runCount = (n: number, what: string): string =>

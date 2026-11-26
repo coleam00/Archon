@@ -17,6 +17,7 @@ import {
   type CostPerCard,
   type CountCard,
   type RatioCard,
+  type ScoreCard,
 } from './model';
 
 interface MetricsOverviewProps {
@@ -120,6 +121,7 @@ function CardBody({
 }): ReactElement {
   if (card.shape === 'count') return <CountBody card={card} names={names} />;
   if (card.shape === 'ratio') return <RatioBody card={card} />;
+  if (card.shape === 'score') return <ScoreBody card={card} />;
   return <CostPerBody card={card} />;
 }
 
@@ -144,6 +146,19 @@ const NOT_RECORDED = (
     <Line>{NO_RECORDS}</Line>
   </>
 );
+
+function ScoreBody({ card }: { card: ScoreCard }): ReactElement {
+  if (card.state === 'not_recorded') return NOT_RECORDED;
+  if (card.state === 'unavailable') return <Line>{card.reason}</Line>;
+  return (
+    <>
+      <Figure>{card.figure}</Figure>
+      <Line>
+        {card.statistic} of {formatNumber(card.n)} {card.n === 1 ? 'record' : 'records'}
+      </Line>
+    </>
+  );
+}
 
 function CountBody({
   card,

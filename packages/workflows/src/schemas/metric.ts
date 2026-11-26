@@ -15,6 +15,10 @@ export const metricNameSchema = z
   .max(128)
   .regex(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/, 'must be dot-separated lowercase segments of [a-z0-9_]');
 
+export const metricUnitSchema = z
+  .string()
+  .regex(/^[a-z0-9_%/.-]{1,32}$/, 'must be 1-32 characters of [a-z0-9_%/.-]');
+
 const runIdSchema = z.string().regex(RUN_ID_PATTERN, 'must be a run id');
 
 const DIMENSION_KEY_RULE =
@@ -43,7 +47,7 @@ const isoTimeSchema = z
 
 const recordFields = {
   name: metricNameSchema,
-  unit: z.string().regex(/^[a-z0-9_%/.-]{1,32}$/, 'must be 1-32 characters of [a-z0-9_%/.-]'),
+  unit: metricUnitSchema,
   subject: z.string().max(256).nullable(),
   /** When the outcome happened; defaults to the node's completion time. */
   at: isoTimeSchema.optional(),
@@ -324,6 +328,8 @@ const metricInstrumentReportSchema = z.object({
   measured_by: z.array(z.string()),
   /** The sum for a `count`, the mean for a `score`. */
   value: z.number(),
+  /** Median for this instrument across the window, present for scores only. */
+  median: z.number().optional(),
   n: z.number().int(),
   /** Wilson's interval when every value is 0 or 1, otherwise the t interval of the mean. */
   interval: metricIntervalSchema,
