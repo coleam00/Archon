@@ -11,6 +11,7 @@ import {
   attentionQueueSource,
   projectRefForCodebase,
 } from '@archon/core/operations/attention-queue';
+import { readOpenWorkRuns } from '@archon/core/operations/open-work';
 import { readItem, readItemOfRun } from '@archon/workflows/item-read';
 import { itemReadLines } from './workflow-item-text';
 import { attentionItemLines } from './workflow-attention-text';
@@ -552,7 +553,7 @@ export async function workflowRunsCommand(
   }
   const codebase = await findRunsCodebase(host, cwd, opts);
   if (codebase instanceof Error) return refuseRuns(opts, codebase);
-  // The open-work inbox contains terminal failed runs with no adopter or successor.
+  // The open-work inbox contains failed runs with no adopter or holding item end.
   try {
     if (opts.item !== undefined) return await readItemCommand(host, opts.item, opts, codebase);
     if (opts.open) return await listOpenWorkRuns(host, opts, codebase);
@@ -681,7 +682,7 @@ async function listOpenWorkRuns(
   opts: RunsOptions,
   codebase: RunsCodebase
 ): Promise<number> {
-  const runs = await host.deps.store.findOpenWorkRuns({
+  const runs = await readOpenWorkRuns(host.deps.store, {
     codebaseId: codebase?.id,
     limit: opts.limit ?? 20,
   });

@@ -12,6 +12,7 @@ import { ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
 import { itemStoppedMetadata } from '@archon/workflows/schemas/run-metadata';
 import { CONFORMANCE_CODEBASE_ID } from '@archon/workflows/store-conformance';
 import { recordItemEnd } from '../operations/item-ends';
+import { readOpenWorkRuns } from '../operations/open-work';
 import { itemDeps, operator, type Harness } from './item-asks.conformance';
 import { starts } from './start-limits.conformance';
 
@@ -58,6 +59,14 @@ async function stoppedRefs(harness: Harness): Promise<string[]> {
   );
 }
 
+async function openWorkIds(harness: Harness, limit = 50): Promise<string[]> {
+  const runs = await readOpenWorkRuns(harness.store, {
+    codebaseId: CONFORMANCE_CODEBASE_ID,
+    limit,
+  });
+  return runs.map(run => run.id);
+}
+
 async function holding(harness: Harness) {
   const found = await harness.store.getItemRuns(projectKey, 'pr-7');
   if (found === null) throw new Error('No item pr-7');
@@ -74,6 +83,33 @@ async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> 
 }
 
 export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness>): void {
+  test('open work excludes a holding end before its limit and returns when a new run opens the item', async () => {
+    const harness = await makeHarness();
+    try {
+      const withoutItem = await harness.store.createWorkflowRun({
+        workflow_name: 'deliver',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+      });
+      await harness.store.claimPendingWorkflowRun(withoutItem.id);
+      await harness.store.failWorkflowRun(withoutItem.id, 'unrelated failure');
+      await backdate(harness, withoutItem.id, 1);
+      const ended = await startOnItem(harness);
+      await harness.store.failWorkflowRun(ended, 'boom');
+      expect(await openWorkIds(harness, 1)).toEqual([ended]);
+
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      // The ended run is newer: filtering after the store's limit would return no run here.
+      expect(await openWorkIds(harness, 1)).toEqual([withoutItem.id]);
+
+      const reopened = await startOnItem(harness);
+      await harness.store.failWorkflowRun(reopened, 'boom again');
+      expect((await openWorkIds(harness)).sort()).toEqual([reopened, ended, withoutItem.id].sort());
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('an end takes an old stop out of attention and outlasts deleting runs', async () => {
     const harness = await makeHarness();
     try {
@@ -140,8 +176,10 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
   test('a start queued on an ended item opens it before its run exists', async () => {
     const harness = await makeHarness();
     try {
-      await stopOnItem(harness);
+      const failed = await startOnItem(harness);
+      await harness.store.failWorkflowRun(failed, 'boom');
       await recordItemEnd(harness.store, end, operator, 'cli');
+      expect(await openWorkIds(harness)).toEqual([]);
       // A start on another item holds the resource, so the start on this item queues.
       const { start } = starts(harness);
       const holder = (await start('other', {})).result;
@@ -149,6 +187,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       if (holder?.status !== 'admitted' || queued?.status !== 'queued')
         throw new Error('Expected one admitted start and one queued');
       expect(await holding(harness)).toBeNull();
+      expect(await openWorkIds(harness)).toEqual([failed]);
     } finally {
       await harness.close();
     }
@@ -162,10 +201,12 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       await recordItemEnd(harness.store, end, operator, 'cli');
       expect(await holding(harness)).not.toBeNull();
       expect(await harness.store.getWorkflowRunStatus(failed)).toBe('failed');
+      expect(await openWorkIds(harness)).toEqual([]);
       await harness.store.resumeWorkflowRun(failed);
       expect(await holding(harness)).toBeNull();
       await harness.store.failWorkflowRun(failed, 'boom again');
       expect(await holding(harness)).toBeNull();
+      expect(await openWorkIds(harness)).toEqual([failed]);
     } finally {
       await harness.close();
     }

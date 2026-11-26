@@ -706,7 +706,7 @@ While the [install hold](#hold) is set, the text view starts with who set it and
 
 ### `workflow runs`
 
-List recent runs of every execution status for the current project, resolved from `cwd` like [`workflow status`](#workflow-status). A separate clone does not resolve to that project, even after a launch with `workflow run --project`. `--open` lists the open-work inbox: failed runs that no later run has adopted or superseded.
+List recent runs of every execution status for the current project, resolved from `cwd` like [`workflow status`](#workflow-status). A separate clone does not resolve to that project, even after a launch with `workflow run --project`. `--open` lists the open-work inbox: failed runs that no later run has adopted or superseded, leaving out runs on an item whose end still holds.
 
 ```bash
 archon workflow runs
@@ -717,7 +717,7 @@ archon workflow runs --limit 50        # cap rows (default 20)
 archon workflow runs --throughput      # effective output tok/s by run and model
 archon workflow runs --throughput --json --verbose
 archon workflow runs --all             # list across all projects
-archon workflow runs --open            # failed runs nothing has adopted or superseded
+archon workflow runs --open            # failed, unadopted runs; ended items are left out
 archon workflow runs --item issue-42   # one item: its runs, links, open questions, answers and rulings
 archon workflow runs --item-of <run-id> --json  # the item a run belongs to
 ```

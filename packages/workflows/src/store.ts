@@ -203,7 +203,11 @@ export interface IWorkflowStore
   findWorkflowRunsByIdPrefix(prefix: string, codebaseId: string): Promise<WorkflowRun[]>;
   listWorkflowRuns(options?: ListDashboardRunsOptions): Promise<DashboardRunsResult>;
 
-  findOpenWorkRuns(options?: { codebaseId?: string; limit?: number }): Promise<WorkflowRun[]>;
+  /** Failed, unadopted open-work candidates, newest first. A null limit reads every candidate. */
+  findOpenWorkRuns(options?: {
+    codebaseId?: string;
+    limit?: number | null;
+  }): Promise<WorkflowRun[]>;
   findAdoptingRuns(runId: string): Promise<WorkflowRun[]>;
   /**
    * The item `itemKey` names in a project, with every run whose `item_id` is that item, in

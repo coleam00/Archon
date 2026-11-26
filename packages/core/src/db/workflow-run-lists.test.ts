@@ -359,6 +359,20 @@ describe('workflow run lists', () => {
       expect(capturedSql).not.toContain("status IN ('paused')");
     });
 
+    test('findOpenWorkRuns reads every candidate when the limit is null', async () => {
+      let capturedSql = '';
+      mockQuery.mockImplementationOnce((...args: unknown[]) => {
+        const sql = args[0];
+        if (typeof sql !== 'string') throw new Error('Expected a SQL string');
+        capturedSql = sql;
+        return Promise.resolve(createQueryResult([]));
+      });
+
+      await findOpenWorkRuns({ limit: null });
+      expect(capturedSql).not.toContain('LIMIT');
+      expect(mockQuery.mock.calls[0]?.[1]).toEqual([]);
+    });
+
     test('findAdoptingRuns reads the same column in reverse', async () => {
       let capturedSql = '';
       mockQuery.mockImplementationOnce((...args: unknown[]) => {

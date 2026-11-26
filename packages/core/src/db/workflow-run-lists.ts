@@ -16,6 +16,7 @@ import type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
 } from '../schemas/workflow-run';
+import type { IWorkflowStore } from '@archon/workflows/store';
 import type { IDatabase } from './adapters/types';
 import { getDatabaseType, getDialect, pool } from './connection';
 import { listActiveWorkflowNodeIds } from './workflow-events';
@@ -365,26 +366,26 @@ export async function listWorkflowRuns(options?: {
 }
 
 /**
- * The open-work inbox (#2747): runs that ended with work on the table. Status-
- * derived v1 semantics — terminal AND failed AND no run has adopted or
- * superseded it (the NOT EXISTS closes the row behaviorally when a successor
- * claims it). Deletion is hard in this store, so "not deleted" holds by
- * construction. Paused/waiting/cancelled runs are excluded by design: they are
- * live or already judged.
+ * Open-work candidates (#2747): terminal AND failed AND no run has adopted or superseded
+ * the run (the NOT EXISTS closes the row behaviorally when a successor claims it). The shared
+ * inbox read applies item ends before its limit. Paused/waiting/cancelled runs are excluded
+ * by design: they are live or already judged.
  */
-export async function findOpenWorkRuns(options?: {
-  codebaseId?: string;
-  limit?: number;
-}): Promise<WorkflowRun[]> {
+export async function findOpenWorkRuns(
+  options?: Parameters<IWorkflowStore['findOpenWorkRuns']>[0]
+): Promise<WorkflowRun[]> {
   const values: unknown[] = [];
   let codebaseClause = '';
   if (options?.codebaseId) {
     values.push(options.codebaseId);
     codebaseClause = `AND codebase_id = $${String(values.length)}`;
   }
-  const limit = options?.limit ?? 50;
-  values.push(limit);
-  const limitParam = `$${String(values.length)}`;
+  const limit = options?.limit === null ? null : (options?.limit ?? 50);
+  let limitClause = '';
+  if (limit !== null) {
+    values.push(limit);
+    limitClause = `LIMIT $${String(values.length)}`;
+  }
 
   try {
     const result = await pool.query<WorkflowRunRow>(
@@ -396,7 +397,7 @@ export async function findOpenWorkRuns(options?: {
            WHERE a.adopted_from_run_id = r.id
          )
        ORDER BY r.started_at DESC
-       LIMIT ${limitParam}`,
+       ${limitClause}`,
       values
     );
     return result.rows.map(normalizeWorkflowRun);
