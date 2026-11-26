@@ -40,6 +40,7 @@ import {
 import { readDependsOn, waitsOn } from './item-depends-on';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
+import { readOwnClose } from './work-order';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
 import type { TerminalRecord } from './schemas/terminal-record';
@@ -364,11 +365,7 @@ export async function stoppedItems(
  * unreadable end or merge row reads as not done, so it does not hide the stop.
  */
 async function isItemDone(store: StoppedItemStore, itemId: string | null): Promise<boolean> {
-  if (itemId === null) return false;
-  const end = await readHoldingItemEnd(store, itemId);
-  if (end !== null && !('type' in end)) return true;
-  const merge = await store.getItemMerge(itemId);
-  return merge !== null && !('type' in merge);
+  return itemId !== null && (await readOwnClose(store, itemId)) !== null;
 }
 
 /**

@@ -1,6 +1,7 @@
 /**
- * What an item depends on. An active outgoing `depends_on` to an item that is open (by the
- * work-order rule, `readItemState`) means the item waits inside Archon: the stop list leaves
+ * What an item depends on. An active outgoing `depends_on` to an item that is open (no merge
+ * recorded, no end that holds and, for a work order, a member still open: `readItemState`)
+ * means the item waits inside Archon: the stop list leaves
  * a quiet stop of its last step out while that holds (`stoppedItems`), and the item read
  * reports it (`dependsOn`). Once the blocker is merged, ended or done, or the link is ended,
  * the stop shows again. Nothing is stored and no timer runs.
@@ -12,9 +13,9 @@ import { workflowItemSchema, type WorkflowItem } from './schemas/workflow-run';
 import { readItemState, type WorkOrderStore } from './work-order';
 
 /**
- * An item this one depends on through an active `depends_on`, with its state by the
- * work-order member rule (`readItemState`). While one is `open`, the item waits on it, and a
- * completed stop of its last step is not listed in attention.
+ * An item this one depends on through an active `depends_on`, with its state
+ * (`readItemState`). While one is `open`, a completed stop of the item's last step that
+ * names no refused start or limit is not listed in attention.
  */
 export const itemDependencySchema = z.object({
   item: workflowItemSchema,

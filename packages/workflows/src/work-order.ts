@@ -5,8 +5,8 @@
  * or is itself a work order that is done. A work order's own merge or end does not close it:
  * only its members do. The state is derived on every read from the
  * links, merges and ends the store already holds, so it cannot drift from its members:
- * nothing is written, no timer decides, and no stage ends a work order. The same rule gives
- * any item's state (`readItemState`), which is what a `depends_on` waits on.
+ * nothing is written, no timer decides, and no stage ends a work order. An item another
+ * depends on is closed by its own merge or end first (`readItemState`).
  */
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import type { ItemLink, ItemLinkRead } from './schemas/item-link';
@@ -121,13 +121,31 @@ export async function readWorkOrder(
 }
 
 /**
- * The state of `item` by the rule a work order's member has: open, merged, ended, done
- * (a work order whose members are all done) or unknown. What could not be read is not
- * reported here: `unknown` is the report, and the item's own read names its unreadable rows.
+ * Whether item `itemId` closed itself: its merge is recorded (`merged`) or its end holds
+ * (`ended`); null otherwise. An unreadable row reads as not closed.
+ */
+export async function readOwnClose(
+  store: WorkOrderStore,
+  itemId: string
+): Promise<'merged' | 'ended' | null> {
+  const merge = await store.getItemMerge(itemId);
+  if (merge !== null && !('type' in merge)) return 'merged';
+  const end = await readHoldingItemEnd(store, itemId);
+  return end !== null && !('type' in end) ? 'ended' : null;
+}
+
+/**
+ * The state of `item` as an item another one depends on: its own merge or end closes it,
+ * even when it is a work order with an open member; otherwise the member rule decides. What
+ * could not be read is not reported here: `unknown` is the report, and the item's own read
+ * names its unreadable rows.
  */
 export async function readItemState(
   store: WorkOrderStore,
   item: WorkflowItem
 ): Promise<WorkOrderMemberState> {
-  return memberState({ store, walking: new Set(), degraded: new Map() }, item);
+  return (
+    (await readOwnClose(store, item.id)) ??
+    memberState({ store, walking: new Set(), degraded: new Map() }, item)
+  );
 }

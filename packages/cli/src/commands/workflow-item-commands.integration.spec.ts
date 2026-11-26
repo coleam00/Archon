@@ -603,7 +603,7 @@ test.serial(
 );
 
 test.serial(
-  'an item that depends on an open item waits on it, and is listed as stopped once it merges',
+  'an item that depends on an open item waits on it, and is listed as stopped once it ends',
   async () => {
     const stoppedRefs = async () =>
       (
@@ -613,17 +613,9 @@ test.serial(
           )
         ) as { items: { kind: string; ref: string }[] }
       ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
-    const dependsOnBlocker = async (item: string) =>
+    const link = async (request: Parameters<typeof workflowLinkCommand>[2]) =>
       succeeded(
-        await invoke(host =>
-          workflowLinkCommand(
-            host,
-            projectRoot,
-            { item, kind: 'depends_on', to: 'item-blocker' },
-            true,
-            callerEnv
-          )
-        )
+        await invoke(host => workflowLinkCommand(host, projectRoot, request, true, callerEnv))
       );
     const waiting = await seedEnded('item-waiting', 'stopped');
     // A refused start needs someone whatever the item waits on.
@@ -638,31 +630,38 @@ test.serial(
         },
       ],
     });
-    await dependsOnBlocker('item-waiting');
-    await dependsOnBlocker('item-refused');
+    await link({ item: 'item-waiting', kind: 'depends_on', to: 'item-blocker' });
+    await link({ item: 'item-refused', kind: 'depends_on', to: 'item-blocker' });
+    // The blocker is a work order whose member stays open after the blocker ends.
+    await link({ item: 'item-member', kind: 'part_of', to: 'item-blocker' });
 
-    const read = await readItemJson('item-waiting');
-    expect(read.dependsOn).toMatchObject([{ item: { key: 'item-blocker' }, state: 'open' }]);
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([
+      { item: { key: 'item-blocker' }, state: 'open' },
+    ]);
     expect(await stoppedRefs()).not.toContain(`stopped:${waiting}`);
     expect(await stoppedRefs()).toContain(`stopped:${refused}`);
 
-    // The blocker lands and nothing starts on the waiting item: it is stopped again.
+    // The blocker is ended and nothing starts on the waiting item: it is stopped again.
     succeeded(
       await invoke(host =>
-        workflowMergedCommand(
+        runWorkflowEnd({
+          commands: workflowCommands,
           host,
-          projectRoot,
-          {
-            item: 'item-blocker',
-            change: 'https://github.com/acme/web/pull/9',
-            at: '2026-11-26T11:00:00Z',
-          },
-          true,
-          callerEnv
-        )
+          positionals: ['workflow', 'end', 'Nothing more on the blocker.'],
+          values: { item: 'item-blocker', as: 'triage-agent', json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
       )
     );
-    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([{ state: 'merged' }]);
+    expect((await readItemJson('item-blocker')).workOrder).toMatchObject({ state: 'open' });
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([{ state: 'ended' }]);
     expect(await stoppedRefs()).toContain(`stopped:${waiting}`);
   }
 );

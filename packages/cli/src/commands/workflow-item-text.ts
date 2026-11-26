@@ -337,18 +337,14 @@ function workOrderLines(read: ItemRead): string[] {
   return lines;
 }
 
-/** What the item depends on: the open items it waits on, then the rest with their state. */
+/**
+ * The items this one depends on, with their states. It states the links only: whether the
+ * item waits is for attention to say, since a running or ended item depends on them too.
+ */
 function dependsOnLines(read: ItemRead): string[] {
-  const waiting = read.dependsOn.filter(dep => dep.state === 'open');
-  const rest = read.dependsOn.filter(dep => dep.state !== 'open');
-  const lines: string[] = [];
-  if (waiting.length > 0)
-    lines.push(`Waiting on: ${waiting.map(dep => otherItemName(read, dep.item)).join(', ')}`);
-  if (rest.length > 0)
-    lines.push(
-      `Depends on: ${rest.map(dep => `${otherItemName(read, dep.item)} (${dep.state})`).join(', ')}`
-    );
-  return lines;
+  if (read.dependsOn.length === 0) return [];
+  const deps = read.dependsOn.map(dep => `${otherItemName(read, dep.item)} (${dep.state})`);
+  return [`Depends on: ${deps.join(', ')}`];
 }
 
 /**
