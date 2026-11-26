@@ -8,6 +8,7 @@
 import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import { setLogSink } from '@archon/paths';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
 import { readHoldingItemEnd } from '@archon/workflows/item-end';
 import { ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
@@ -112,6 +113,55 @@ async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> 
 }
 
 export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness>): void {
+  test.each(['origin', 'status'] as const)(
+    'open work contains an unreadable ancestor %s and names its affected runs',
+    async field => {
+      const harness = await makeHarness();
+      const logs: string[] = [];
+      try {
+        const parent = await startOnItem(harness);
+        const child = await createOnItem(harness, parent);
+        const grandchild = await createOnItem(harness, child);
+        const healthy = await harness.store.createWorkflowRun({
+          workflow_name: 'healthy',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+        });
+        await harness.store.completeWorkflowRun(parent, { duration_ms: 1 });
+        for (const id of [child, grandchild, healthy.id])
+          await harness.store.failWorkflowRun(id, 'failed');
+        await backdate(harness, healthy.id, 1);
+        expect((await openWorkIds(harness)).sort()).toEqual([child, grandchild, healthy.id].sort());
+        await harness.db.query(
+          `UPDATE remote_agent_workflow_runs SET ${field} = $1 WHERE id = $2`,
+          [field === 'origin' ? '{"unexpected":"private-origin-sentinel"}' : 'unexpected', parent]
+        );
+        setLogSink(line => logs.push(line));
+        expect(await harness.store.getWorkflowRunForAttention(parent)).toEqual({
+          type: 'degraded',
+          reason: 'run_unreadable',
+          runId: parent,
+        });
+        expect((await openWorkIds(harness)).sort()).toEqual([child, grandchild, healthy.id].sort());
+        const named = logs.flatMap(line => {
+          const record: unknown = JSON.parse(line);
+          return typeof record === 'object' &&
+            record !== null &&
+            'workflowRunId' in record &&
+            'ancestorRunId' in record &&
+            record.ancestorRunId === parent
+            ? [record.workflowRunId]
+            : [];
+        });
+        expect(named.sort()).toEqual([child, grandchild].sort());
+        expect(logs.join('')).not.toContain('private-origin-sentinel');
+      } finally {
+        setLogSink(undefined);
+        await harness.close();
+      }
+    }
+  );
+
   test('an unreadable end keeps failed roots and descendants in open work', async () => {
     const harness = await makeHarness();
     try {

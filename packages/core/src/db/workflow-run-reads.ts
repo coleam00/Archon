@@ -17,11 +17,7 @@ import {
 import { getDatabaseType, getDialect, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { notOriginAnchor } from './workflow-origin-anchor';
-import {
-  normalizeWorkflowRun,
-  readWorkflowRunOrigin,
-  type WorkflowRunRow,
-} from './workflow-run-normalization';
+import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
 import { WorkflowStatusReadError, readWorkflowRunStatus } from './workflow-run-status';
 
@@ -77,13 +73,12 @@ export async function getWorkflowRunForAttention(
   const row = result.rows[0];
   if (!row) return null;
   try {
-    readWorkflowRunOrigin(row);
+    return normalizeWorkflowRun(row);
   } catch {
-    // Origin parser errors can include private stored contents.
+    // Parser errors can include private stored contents.
     getLog().error({ workflowRunId: id }, 'attention_run_normalization_failed');
     return { type: 'degraded', reason: 'run_unreadable', runId: id };
   }
-  return normalizeWorkflowRun(row);
 }
 
 /**

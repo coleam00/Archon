@@ -179,7 +179,7 @@ describe('workflowRunsCommand', () => {
       by: { declared: 'maintainer' },
       fromRun: null,
     });
-    const heldStarts = spyOn(host.deps.store, 'listHeldItemStarts').mockResolvedValue([]);
+    const starts = spyOn(host.deps.store, 'listItemStarts').mockResolvedValue([]);
 
     try {
       expect(
@@ -203,7 +203,7 @@ describe('workflowRunsCommand', () => {
       expect(endRead).toHaveBeenCalledWith('item-ended');
     } finally {
       endRead.mockRestore();
-      heldStarts.mockRestore();
+      starts.mockRestore();
     }
   });
 

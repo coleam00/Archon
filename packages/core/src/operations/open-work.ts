@@ -7,8 +7,12 @@ import { readHoldingItemEnd, type ItemEndStore } from '@archon/workflows/item-en
 import { readRunItemId } from '@archon/workflows/item-of-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowStore } from '@archon/workflows/store';
+import { createLogger } from '@archon/paths';
 
-type OpenWorkStore = ItemEndStore & Pick<IWorkflowStore, 'findOpenWorkRuns' | 'getWorkflowRun'>;
+type OpenWorkStore = ItemEndStore &
+  Pick<IWorkflowStore, 'findOpenWorkRuns' | 'getWorkflowRunForAttention'>;
+
+let log: ReturnType<typeof createLogger> | undefined;
 
 export async function readOpenWorkRuns(
   store: OpenWorkStore,
@@ -21,7 +25,24 @@ export async function readOpenWorkRuns(
   const runs: WorkflowRun[] = [];
   for (const run of candidates) {
     if (runs.length === options.limit) break;
-    const itemId = await readRunItemId(store, run);
+    const itemId = await readRunItemId(
+      {
+        getWorkflowRun: async id => {
+          const ancestor = await store.getWorkflowRunForAttention(id);
+          if (ancestor !== null && 'type' in ancestor) {
+            log ??= createLogger('operations.open-work');
+            log.error(
+              { workflowRunId: run.id, ancestorRunId: ancestor.runId },
+              'open_work_ancestry_unreadable'
+            );
+            // Unknown ancestry cannot prove a holding end; retain and identify the candidate.
+            return null;
+          }
+          return ancestor;
+        },
+      },
+      run
+    );
     if (itemId !== null) {
       const end = await readHoldingItemEnd(store, itemId);
       if (end !== null && !('type' in end)) continue;

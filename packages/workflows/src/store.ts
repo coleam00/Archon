@@ -501,7 +501,7 @@ export interface IWorkflowStore
     id: string,
     write: AttentionLabelWrite
   ): Promise<{ labeled: true; wait: WorkflowAttentionWaitContext } | { labeled: false }>;
-  /** Batch descendant read: corrupt origins become safe reports; query failures still reject. */
+  /** Point read for attention: unreadable rows become safe reports; query failures still reject. */
   getWorkflowRunForAttention(id: string): Promise<AttentionRead<WorkflowRun> | null>;
   /**
    * Every row the attention queue reads (`isAttentionQueueRow`), most recently started

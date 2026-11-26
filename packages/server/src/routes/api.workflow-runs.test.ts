@@ -252,6 +252,19 @@ describe('GET /api/workflows/runs', () => {
     expect(mockListWorkflowRuns).not.toHaveBeenCalled();
   });
 
+  test('ordinary listing keeps invalid-limit fallback', async () => {
+    mockFindOpenWorkRuns.mockClear();
+    mockListWorkflowRuns.mockResolvedValueOnce([MOCK_FAILED_RUN]);
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs?limit=invalid');
+
+    expect(response.status).toBe(200);
+    const body = z.object({ runs: z.array(apiWorkflowRunSchema) }).parse(await response.json());
+    expect(body.runs.map(run => run.id)).toEqual([MOCK_FAILED_RUN.id]);
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith(expect.objectContaining({ limit: 50 }));
+    expect(mockFindOpenWorkRuns).not.toHaveBeenCalled();
+  });
+
   test.each(['1.5', '0.5', '200.5', '0', '-1', 'Infinity', 'invalid', ''])(
     'open work rejects invalid limit %s before reading candidates',
     async limit => {
