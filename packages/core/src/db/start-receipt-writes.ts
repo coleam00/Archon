@@ -5,7 +5,9 @@ import type {
   SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import { getDatabase } from './connection';
+import { giveItemPriority } from './item-priorities';
 import { openWaitingRuns, resolveWakes, type PreparedWake, type WakeMapping } from './item-waits';
+import { ensureItemInProject } from './items';
 import type { TransactionQuery as Query } from './resource-slots';
 
 /**
@@ -40,15 +42,48 @@ export async function acceptStartReceipt(
       inputProblems,
     });
   }
-  return getDatabase().withTransaction(query =>
-    insertStartReceipt(
+  const priority = await priorityTargets(input, projectKeyOf);
+  return getDatabase().withTransaction(async query => {
+    const accepted = await insertStartReceipt(
       query,
       input,
       prepared.size === 0
         ? undefined
         : claimed => resolveWakes(query, claimed, prepared, wakes?.start)
-    )
-  );
+    );
+    // Only the acceptance that claims the delivery gives priority; a replay changes nothing.
+    if (!accepted.replay)
+      for (const target of priority)
+        await giveItemPriority(
+          query,
+          await ensureItemInProject(query, target.projectKey, target.key)
+        );
+    return accepted;
+  });
+}
+
+/**
+ * The items a receipt asking for priority (`trigger fire --priority`) gives it to: its item
+ * in each of its starts' projects. Priority is a fact on the item, written once here, so no
+ * start carries it to apply later. Every project must already be registered.
+ */
+async function priorityTargets(
+  input: SourceReceiptAcceptance,
+  projectKeyOf: (cwd: string) => Promise<string | null>
+): Promise<{ projectKey: string; key: string }[]> {
+  const key = input.receipt.itemKey;
+  if (!input.receipt.priority) return [];
+  if (key === undefined) throw new Error('A receipt that asks for priority must name its item.');
+  const projects = new Set<string>();
+  for (const binding of input.bindings) {
+    const projectKey = await projectKeyOf(binding.launch.cwd);
+    if (projectKey === null)
+      throw new Error(
+        `Cannot give item '${key}' priority: '${binding.launch.cwd}' is not a registered project.`
+      );
+    projects.add(projectKey);
+  }
+  return [...projects].map(projectKey => ({ projectKey, key }));
 }
 
 /**

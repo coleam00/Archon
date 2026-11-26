@@ -2506,6 +2506,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2566,6 +2567,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2601,6 +2603,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2636,6 +2639,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2670,6 +2674,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2707,6 +2712,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2732,6 +2738,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2779,6 +2786,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2816,6 +2824,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2840,6 +2849,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -3011,6 +3021,14 @@ declare module 'archon:script' {
           readonly key: string;
         };
       };
+    } | null;
+    readonly priority: {
+      readonly own: boolean;
+      readonly inheritedFrom: ReadonlyArray<{
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      }>;
     } | null;
     readonly ended: {
       readonly kind: 'ended';
@@ -3268,6 +3286,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3328,6 +3347,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3363,6 +3383,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3398,6 +3419,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3432,6 +3454,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3469,6 +3492,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3494,6 +3518,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3541,6 +3566,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3578,6 +3604,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3602,6 +3629,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3773,6 +3801,14 @@ declare module 'archon:script' {
             readonly key: string;
           };
         };
+      } | null;
+      readonly priority: {
+        readonly own: boolean;
+        readonly inheritedFrom: ReadonlyArray<{
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        }>;
       } | null;
       readonly ended: {
         readonly kind: 'ended';

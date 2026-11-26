@@ -17,6 +17,7 @@ import type { RunLimit } from '@archon/workflows/schemas/run-limit';
 import { itemHolder, itemHolders, type ItemRunRow } from '@archon/workflows/item-hold';
 import { InstallHeldError, RunLimitError, WorkflowItemHeldError } from '@archon/workflows/store';
 import { toHydratedTimestamp } from './timestamps';
+import { PRIORITY_ITEMS_CTE, queueOrderSql, readPriorityItems } from './item-priorities';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
@@ -432,8 +433,9 @@ export async function removeResourceSlotHolder(
 /**
  * What a run-start slot holds, read under its lock (`lockResourceSlot`) and `lockAdmission`:
  * live holders, capacity waiters, the checkouts live admitted runs hold, the items live runs
- * hold, and the queued start requests. The queued rows are locked too, so a concurrent
- * withdrawal cannot race their admission.
+ * hold, the items with priority, and the queued start requests in queue order
+ * (`queueOrderSql`). The queued rows are locked too, so a concurrent withdrawal cannot race
+ * their admission.
  */
 export async function resourceStartOccupancy(
   query: TransactionQuery,
@@ -471,9 +473,11 @@ export async function resourceStartOccupancy(
     [resource]
   );
   const queued = await query<Record<string, unknown>>(
-    `SELECT id, host_id, resource_key, status, launch, item_id FROM remote_agent_resource_start_requests
-      WHERE resource_key = $1 AND status = 'queued'
-      ORDER BY queue_position${getDialect().rowLock()}`,
+    `WITH RECURSIVE ${PRIORITY_ITEMS_CTE}
+     SELECT r.id, r.host_id, r.resource_key, r.status, r.launch, r.item_id
+       FROM remote_agent_resource_start_requests r
+      WHERE r.resource_key = $1 AND r.status = 'queued'
+      ORDER BY ${queueOrderSql('r')}${getDialect().rowLock()}`,
     [resource]
   );
   const isLocal = (row: (typeof live.rows)[number]) =>
@@ -545,6 +549,7 @@ export async function resourceStartOccupancy(
     foreignHeldCheckouts: heldCheckouts(foreign, reusable.rows),
     unknownForeignCheckoutHolder,
     heldItems: itemHolders(await liveItemRuns(query)),
+    priorityItems: await readPriorityItems(query),
   };
 }
 

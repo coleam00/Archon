@@ -29,6 +29,7 @@ const ask = (ref: string, question: string): ItemAsk => ({
   ref,
   project: { key: 'acme/widgets', codebaseId: 'cb-1', name: 'widgets' },
   item,
+  priority: false,
   revision: 1,
   labels: {},
   pausedAt: null,

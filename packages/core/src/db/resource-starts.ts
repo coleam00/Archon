@@ -57,6 +57,13 @@ import {
   type TransactionQuery as Query,
 } from './resource-slots';
 import { drainAdmits, runLimitBlocker } from './run-room';
+import {
+  isQueuedAhead,
+  PRIORITY_ITEMS_CTE,
+  queuedAheadSql,
+  queueOrderSql,
+  queueRankSql,
+} from './item-priorities';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
 import { ensureItem } from './items';
@@ -142,7 +149,7 @@ async function admitResourceStartWithQuery(
   // whichever blocker holds it, as it does on a resource blocker.
   const blocker =
     resourceStartBlocker(slot, launch, intent.hostId, itemId) ??
-    (await runLimitBlocker(query, intent.hostId, intent.resource));
+    (await runLimitBlocker(query, intent.hostId, intent.resource, slot, itemId));
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
@@ -574,9 +581,10 @@ export async function listQueuedResourceStartsForHost(
   hostId: string
 ): Promise<QueuedResourceStartInspection[]> {
   const result = await getDatabase().query<RequestInspectionRow>(
-    `${requestInspectionSelect}
+    `WITH RECURSIVE ${PRIORITY_ITEMS_CTE}
+     ${requestInspectionSelect}
       WHERE r.host_id = $1 AND r.status = 'queued'
-      ORDER BY r.resource_key, r.queue_position`,
+      ORDER BY r.resource_key, ${queueOrderSql('r')}`,
     [hostId]
   );
   return result.rows.map(row => {
@@ -607,13 +615,15 @@ export function storedWorkflowName(launch: unknown): string | null {
   }
 }
 
-export const queuedItemStartsSql = `SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at, r.queue_position,
+export const queuedItemStartsSql = `WITH RECURSIVE ${PRIORITY_ITEMS_CTE}
+     SELECT r.id, r.resource_key, r.host_id, r.launch, r.created_at, r.queue_position,
+       ${queueRankSql('r')} AS queue_rank,
        (SELECT COUNT(*) FROM remote_agent_resource_start_requests q
          WHERE q.resource_key = r.resource_key AND q.host_id = r.host_id
-           AND q.status = 'queued' AND q.queue_position < r.queue_position) AS ahead
+           AND q.status = 'queued' AND ${queuedAheadSql('q', 'r')}) AS ahead
        FROM remote_agent_resource_start_requests r
       WHERE r.item_id = $1 AND r.status = 'queued'
-      ORDER BY r.queue_position`;
+      ORDER BY ${queueOrderSql('r')}`;
 
 export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemStart[]> {
   const result = await getDatabase().query<{
@@ -623,6 +633,7 @@ export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemSt
     launch: unknown;
     created_at: string | Date;
     queue_position: number | string;
+    queue_rank: number | string;
     ahead: number | string;
   }>(queuedItemStartsSql, [itemId]);
   const unreadable = await unreadableQueued();
@@ -639,7 +650,10 @@ export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemSt
         head =>
           head.resource === row.resource_key &&
           head.hostId === row.host_id &&
-          head.position < Number(row.queue_position)
+          isQueuedAhead(head, {
+            rank: Number(row.queue_rank),
+            position: Number(row.queue_position),
+          })
       )?.requestId ?? null,
   }));
 }

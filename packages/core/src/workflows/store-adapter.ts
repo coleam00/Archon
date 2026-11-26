@@ -32,6 +32,7 @@ import * as itemRulingsDb from '../db/item-rulings';
 import * as itemEndsDb from '../db/item-ends';
 import * as itemMergesDb from '../db/item-merges';
 import * as itemLandingsDb from '../db/item-landings';
+import * as itemPrioritiesDb from '../db/item-priorities';
 import * as itemAsksDb from '../db/item-asks';
 import * as itemWaitsDb from '../db/item-waits';
 import * as itemStopsDb from '../db/item-stops';
@@ -347,6 +348,9 @@ export function createWorkflowStore(): IWorkflowStore {
     recordItemMerge: itemMergesDb.recordItemMerge,
     getItemLanding: itemLandingsDb.getItemLanding,
     recordItemLanding: itemLandingsDb.recordItemLanding,
+    getItemPriority: itemPrioritiesDb.getItemPriority,
+    setItemPriority: itemPrioritiesDb.setItemPriority,
+    clearItemPriority: itemPrioritiesDb.clearItemPriority,
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,

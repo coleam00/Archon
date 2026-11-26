@@ -7,10 +7,11 @@
  */
 import { decideHostStarts, drainableStarts } from '@archon/workflows/host-start-decision';
 import type { HostStartVerdict } from '@archon/workflows/host-start-decision';
-import type {
-  QueuedStart,
-  ResourceBlocker,
-  ResourceSlotOccupancy,
+import {
+  hasPriority,
+  type QueuedStart,
+  type ResourceBlocker,
+  type ResourceSlotOccupancy,
 } from '@archon/workflows/resource-start-store';
 import type { RunLimit } from '@archon/workflows/schemas/run-limit';
 import {
@@ -19,6 +20,7 @@ import {
   resourceStartOccupancy,
   type TransactionQuery,
 } from './resource-slots';
+import { PRIORITY_ITEMS_CTE, queueOrderSql } from './item-priorities';
 
 /**
  * What the run limit leaves room for now: how many more trees it admits (`Infinity` without
@@ -36,9 +38,9 @@ async function readRunRoom(
 }
 
 /**
- * The decision for every queued start of `hostId`, in its queue order, with `room` for the run
- * limit. Locks each resource the host queues on and reads it; `known` is a resource the
- * caller already locked and read.
+ * The decision for every queued start of `hostId`, in its queue order (`queueOrderSql`), with
+ * `room` for the run limit. Locks each resource the host queues on and reads it; `known` is a
+ * resource the caller already locked and read.
  */
 async function readHostDecision(
   query: TransactionQuery,
@@ -47,8 +49,9 @@ async function readHostDecision(
   known?: { resource: string; slot: ResourceSlotOccupancy }
 ): Promise<HostStartVerdict[]> {
   const queued = await query<{ id: string; resource_key: string }>(
-    `SELECT id, resource_key FROM remote_agent_resource_start_requests
-      WHERE host_id = $1 AND status = 'queued' ORDER BY queue_position`,
+    `WITH RECURSIVE ${PRIORITY_ITEMS_CTE}
+     SELECT r.id, r.resource_key FROM remote_agent_resource_start_requests r
+      WHERE r.host_id = $1 AND r.status = 'queued' ORDER BY ${queueOrderSql('r')}`,
     [hostId]
   );
   const slots = new Map<string, ResourceSlotOccupancy>();
@@ -89,19 +92,27 @@ export async function drainAdmits(
 /**
  * What the run limit puts in the way of a new start of `hostId` on `resource` that its resource
  * would admit (`resourceStartBlocker` returned null): the oldest counted tree while the limit
- * is full, or else the host's oldest queued start its decision admits on another resource,
- * which goes first as an older request of the host does on the same resource. Null otherwise.
- * The caller applies `overlap` to it as to any blocker.
+ * is full, or else the host's first queued start its decision admits on another resource,
+ * which goes first as an older request of the host does on the same resource. A new start on
+ * an item with priority (`hasPriority`, read from `slot`) goes ahead of ordinary ones, so
+ * only a priority start admitted there holds it. Null otherwise. The caller applies `overlap`
+ * to it as to any blocker.
  */
 export async function runLimitBlocker(
   query: TransactionQuery,
   hostId: string,
-  resource: string
+  resource: string,
+  slot: ResourceSlotOccupancy,
+  itemId: string | null
 ): Promise<ResourceBlocker | null> {
   const { room, blocker } = await readRunRoom(query);
   if (blocker || room === Infinity) return blocker;
+  const priority = hasPriority(slot, itemId);
   const first = (await readHostDecision(query, hostId, room)).find(
-    verdict => verdict.verdict === 'admit' && verdict.resource !== resource
+    verdict =>
+      verdict.verdict === 'admit' &&
+      verdict.resource !== resource &&
+      (!priority || hasPriority(slot, verdict.start.itemId))
   );
   return first ? { kind: 'request', id: first.start.id } : null;
 }

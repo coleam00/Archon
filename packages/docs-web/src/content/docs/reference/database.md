@@ -346,6 +346,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_item_landings`** - The branch an item's change lands on (`archon workflow landing`)
   - One row per item: `item_id` is the primary key, and recording again replaces the row
   - `branch`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `recorded_at`
+- **`remote_agent_item_priorities`** - An item's own priority (`archon workflow priority`)
+  - One row per item: `item_id` is the primary key, and the row existing means priority. Clearing deletes the row. An item `part_of` one with a row, through active links at any depth, has priority too; that is resolved on each read, never stored
+  - `item_id` is its only column
+  - Admission orders queued start requests by priority, then `queue_position`. No request column changes, so an older binary admits by `queue_position` alone
 - **`remote_agent_item_tracker_destinations`** - One row per item tracker destination (`tracker:<project>`)
   - The row exists once the destination's activation baseline is committed (`activated_at`), so a later activation by any process does not baseline again
   - `pass_owner_host`, `pass_owner_pid`, `pass_owner_instance` and `pass_started_at` name the process running the destination's pass, all null when none runs; one pass runs at a time across the server and CLI processes. `pass_requested` is 1 when another process asked the holder for one more pass
@@ -385,7 +389,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_resource_start_requests`** - Durable workflow-start requests
   - Stores prepared launches, overlap policy, admission status, and blockers
   - Prepared launches are versioned. Version 2 carries the run's `origin`; version 1 launches queued by older binaries are still admitted, with their conversation and user read as the origin. Older binaries cannot read version 2, so before downgrading, drain or withdraw any queued request with it and let every run admitted with it end; see [Persisted JSON documents](#persisted-json-documents)
-  - `queue_position` orders waiting requests; optional receipt and binding linkage preserves source provenance
+  - `queue_position` orders waiting requests, after their item's priority (`remote_agent_item_priorities`); optional receipt and binding linkage preserves source provenance
   - Nullable `item_id` references the item a start named, resolved when the binding is prepared, so a start that waits for capacity already has its item. The run takes it at admission
   - Nullable `start_limit` (JSON, read tolerantly since more than one binary reads it) and `grants_limit` (a limit name) record the start limit a binding start counted under and the limit it granted. A binding's start limit on an item is derived from these rows, their `status` and `queue_position`, at admission and in the item read; it is never kept as a counter. Rows are never deleted
 

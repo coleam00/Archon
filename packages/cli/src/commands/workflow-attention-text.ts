@@ -334,6 +334,7 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
  */
 function headingLine(item: AttentionQueueItem): string {
   const project = item.project?.name ?? '(no project)';
+  const mark = item.priority ? '  priority' : '';
   if (isHeldByRun(item)) {
     const paused =
       item.kind === 'owner_lost'
@@ -341,7 +342,7 @@ function headingLine(item: AttentionQueueItem): string {
         : item.pausedAt === null
           ? 'pause time not recorded'
           : `paused ${formatAge(item.pausedAt)} ago`;
-    return `  ${item.run.id}  ${item.run.workflow}  ${project}  ${paused}`;
+    return `  ${item.run.id}  ${item.run.workflow}  ${project}  ${paused}${mark}`;
   }
   const key = item.item === undefined ? '' : `  item ${item.item.key}`;
   const [what, event] = withoutRunHeading[item.kind];
@@ -349,7 +350,7 @@ function headingLine(item: AttentionQueueItem): string {
     item.pausedAt === null
       ? `${event} time not recorded`
       : `${event} ${formatAge(item.pausedAt)} ago`;
-  return `  ${item.ref}  ${what}  ${project}${key}  ${at}`;
+  return `  ${item.ref}  ${what}  ${project}${key}  ${at}${mark}`;
 }
 
 /** What the heading of an item no run holds calls it, and the event its time is of. */

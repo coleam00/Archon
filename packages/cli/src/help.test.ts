@@ -393,6 +393,9 @@ Commands:
                              Record the branch an item's change lands on. Every fresh run on the item, and on
                              an item part_of it that records none, is cut from it and proposes against it.
                              Recording again replaces it. With --from, first create the branch on the remote
+  workflow priority --item <key> [--clear]
+                             Give an item priority. Its queued starts, and those of items part_of it, go ahead of
+                             ordinary queued starts on each resource at the next drain; a held slot is never taken
   workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
                              with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
@@ -502,8 +505,9 @@ Options:
                              is not terminal (with or without a resource:), or who set the install hold while it is set
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow priority': the item to give priority or clear it on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
+  --priority                 For 'trigger fire': give the start's item priority once, when the fire is accepted
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
   --limit <n>                For 'workflow runs': max rows (default 20); for 'workflow items': items a page (default 20, at most 100)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)

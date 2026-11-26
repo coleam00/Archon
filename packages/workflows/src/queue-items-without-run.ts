@@ -26,7 +26,9 @@ import { isAttentionDegraded, type AttentionRead } from './schemas/attention-deg
 import {
   projectRef,
   projectRefForRun,
+  queueItemOf,
   runProject,
+  withPriority,
   type AskQueueItem,
   type AttentionQueueItemSources,
   type AttentionQueueItemWithoutRun,
@@ -59,7 +61,7 @@ import type { IWorkflowStore } from './store';
 /** The store reads an ask's queue item needs. */
 export type AskItemStore = Pick<
   IWorkflowStore,
-  'listOpenItemAsks' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
+  'listOpenItemAsks' | 'getItem' | 'getItemPriority' | 'getWorkflowRun' | 'getCodebase'
 >;
 
 /**
@@ -89,7 +91,7 @@ export async function askQueueItem(
   ask: StoredItemAsk,
   codebases: CodebaseCache = new Map()
 ): Promise<AskQueueItem> {
-  const item = await store.getItem(ask.itemId);
+  const { item, priority } = await queueItemOf(store, ask.itemId);
   const run = await store.getWorkflowRun(ask.runId);
   const project =
     run !== null
@@ -102,6 +104,7 @@ export async function askQueueItem(
     ref: askItemRef(ask.id),
     project,
     ...(item === null ? {} : { item }),
+    priority,
     revision: 1,
     labels: {},
     pausedAt: ask.openedAt,
@@ -148,7 +151,7 @@ export async function openAskItems(
 /** The store reads an overdue wait's queue item needs. */
 export type WaitItemStore = Pick<
   IWorkflowStore,
-  'listOpenItemWaits' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
+  'listOpenItemWaits' | 'getItem' | 'getItemPriority' | 'getWorkflowRun' | 'getCodebase'
 >;
 
 /**
@@ -161,7 +164,7 @@ export async function waitQueueItem(
   codebases: CodebaseCache = new Map()
 ): Promise<OverdueWaitQueueItem> {
   const [first] = set;
-  const item = await store.getItem(first.itemId);
+  const { item, priority } = await queueItemOf(store, first.itemId);
   const run = await store.getWorkflowRun(first.runId);
   const project =
     run !== null
@@ -174,6 +177,7 @@ export async function waitQueueItem(
     ref: waitItemRef(first.runId),
     project,
     ...(item === null ? {} : { item }),
+    priority,
     revision: 1,
     labels: {},
     pausedAt: first.openedAt,
@@ -224,6 +228,7 @@ export type StoppedItemStore = Pick<
   | 'listStoppedItemRuns'
   | 'listEventsForRuns'
   | 'getItem'
+  | 'getItemPriority'
   | 'getCodebase'
   | 'getItemMerge'
   | 'listItemLinks'
@@ -239,7 +244,7 @@ export type StoppedItemStore = Pick<
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
-  store: Pick<StoppedItemStore, 'getItem' | 'getCodebase'>,
+  store: Pick<StoppedItemStore, 'getItem' | 'getItemPriority' | 'getCodebase'>,
   run: WorkflowRun,
   codebases: CodebaseCache = new Map(),
   /** A failed run's `workflow_failed` events, which carry what failed first. */
@@ -252,7 +257,7 @@ export async function stoppedQueueItem(
     ? { summary: null }
     : readItemStopped(run.metadata);
   if (stopped === undefined || (run.item_id === null && !isOutcomeUnknownRun(run))) return null;
-  const item = run.item_id === null ? null : await store.getItem(run.item_id);
+  const { item, priority } = await queueItemOf(store, run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
   if (run.codebase_id !== null) {
     const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
@@ -264,6 +269,7 @@ export async function stoppedQueueItem(
     ref: stoppedItemRef(run.id),
     project: projectRefForRun(run, codebase),
     ...(item === null ? {} : { item }),
+    priority,
     revision: 1,
     labels: {},
     pausedAt: stopped.refused?.at(-1)?.refusedAt ?? run.completed_at?.toISOString() ?? null,
@@ -381,7 +387,10 @@ async function waitsOnOpenItem(store: StoppedItemStore, run: WorkflowRun): Promi
 }
 
 /** The store reads a lost preparation's queue item needs. */
-export type PreparingItemStore = Pick<IWorkflowStore, 'listPreparingStarts' | 'getStartReceipt'>;
+export type PreparingItemStore = Pick<
+  IWorkflowStore,
+  'listPreparingStarts' | 'getStartReceipt' | 'getItemPriority'
+>;
 
 /**
  * The binding starts whose preparer this process can prove gone, as queue items, for
@@ -410,6 +419,7 @@ export async function preparationLostItems(
           ? null
           : projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase),
       ...(start.item === null ? {} : { item: start.item }),
+      priority: (await withPriority(store, start.item)).priority,
       revision: 1,
       labels: {},
       pausedAt: start.claimedAt,
@@ -422,7 +432,7 @@ export async function preparationLostItems(
 /** The store reads an unreadable queued request's queue item needs. */
 export type UnreadableStartItemStore = Pick<
   IWorkflowStore,
-  'listUnreadableQueuedStarts' | 'getItem'
+  'listUnreadableQueuedStarts' | 'getItem' | 'getItemPriority'
 >;
 
 /**
@@ -435,12 +445,13 @@ export async function unreadableStartItems(
 ): Promise<UnreadableStartQueueItem[]> {
   const items: UnreadableStartQueueItem[] = [];
   for (const start of await store.listUnreadableQueuedStarts()) {
-    const item = start.itemId === null ? null : await store.getItem(start.itemId);
+    const { item, priority } = await queueItemOf(store, start.itemId);
     items.push({
       kind: 'unreadable_start',
       ref: unreadableStartRef(start.requestId),
       project: item === null ? null : projectRef(item.projectKey, null),
       ...(item === null ? {} : { item }),
+      priority,
       revision: 1,
       labels: {},
       pausedAt: start.queuedAt,
@@ -456,7 +467,7 @@ export async function unreadableStartItems(
 }
 
 /** The store read a refused start's queue item needs. */
-export type RefusedStartItemStore = Pick<IWorkflowStore, 'listRefusedStarts'>;
+export type RefusedStartItemStore = Pick<IWorkflowStore, 'listRefusedStarts' | 'getItemPriority'>;
 
 /**
  * The refused starts no run caused that are still their item's newest step, as queue items,
@@ -466,9 +477,10 @@ export type RefusedStartItemStore = Pick<IWorkflowStore, 'listRefusedStarts'>;
 export async function refusedStartItems(
   store: RefusedStartItemStore
 ): Promise<RefusedStartQueueItem[]> {
-  return (await store.listRefusedStarts()).map(start => {
+  const items: RefusedStartQueueItem[] = [];
+  for (const start of await store.listRefusedStarts()) {
     const { receiptId, bindingId, hostId, workflow, itemKey, refusal, codebase } = start;
-    return {
+    items.push({
       kind: 'refused_start',
       ref: refusedStartRef(receiptId, bindingId),
       project:
@@ -476,6 +488,7 @@ export async function refusedStartItems(
           ? null
           : projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase),
       ...(start.item === null ? {} : { item: start.item }),
+      priority: (await withPriority(store, start.item)).priority,
       revision: 1,
       labels: {},
       pausedAt: start.refusedAt,
@@ -489,6 +502,7 @@ export async function refusedStartItems(
         ...(refusal.limit === undefined ? {} : { limit: refusal.limit }),
         ...(refusal.fileSetting === undefined ? {} : { fileSetting: refusal.fileSetting }),
       },
-    };
-  });
+    });
+  }
+  return items;
 }
