@@ -15,4 +15,9 @@ export interface DiscoveryContext extends WorkflowParseContext {
    * expanded later sees the errors of the scopes before it.
    */
   allErrors: WorkflowLoadError[];
+  /**
+   * The pack folder the project source is, when it is one: its key, and the entrypoint keys
+   * whose workflow file loaded, which name those workflows.
+   */
+  sourcePack?: { key: string; entrypoints: ReadonlySet<string> };
 }

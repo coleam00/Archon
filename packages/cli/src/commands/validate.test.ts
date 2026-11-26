@@ -508,85 +508,60 @@ describe('validateWorkflowsCommand', () => {
     }
   });
 
-  test('refuses a --workflow-source binding to a workflow its manifest does not list', async () => {
-    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
-      workflows: [
-        makeTestWorkflowWithSource(
-          { name: 'plan', nodes: [{ id: 'run', bash: 'true' }] },
-          'project'
-        ),
-      ],
-      errors: [],
-    });
-    const source = await mkdtemp(join(tmpdir(), 'archon-cli-validate-pack-'));
-    const manifest = (dir: string, entrypoints: Record<string, string>) =>
-      writeFile(
-        join(dir, 'archon-plugin.json'),
-        JSON.stringify({
-          schemaVersion: 1,
-          kind: 'workflow-pack',
-          name: 'factory',
-          description: 'Factory workflows',
-          entrypoints,
-        })
-      );
-    // The project's own manifest lists both, so reading it instead of the source's passes.
-    await manifest(validationCwd, { plan: 'plan/plan.yaml', triage: 'triage/triage.yaml' });
-    await manifest(source, { plan: 'plan/plan.yaml' });
-    await mkdir(join(source, '.pack'));
-    await writeFile(
-      join(source, '.pack', 'pack.yaml'),
-      'bindings:\n  plan-after-triage:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'
-    );
-    const args = [undefined, true, process.env, validationCwd, source] as const;
+  test('refuses a binding to a workflow its pack does not dispatch, as pack bindings does', async () => {
+    const stage = (name: string) => {
+      const entry = makeTestWorkflowWithSource({ name, nodes: [{ id: 'run', bash: 'true' }] });
+      entry.workflow.pack = { key: 'factory', workflow: name, source: 'project' };
+      return entry;
+    };
+    // Discovery dispatches only `plan`: `triage` is support, or not in the pack at all.
+    const plan = stage('plan');
+    plan.workflow.pack = {
+      key: 'factory',
+      workflow: 'plan',
+      source: 'project',
+      bindings: {
+        'plan-after-triage': packRunEndedBindingSchema.parse({
+          workflow: 'plan',
+          resource: 'plan',
+          overlap: 'queue',
+          run_ended: { workflow: 'triage', outcome: 'done' },
+        }),
+      },
+    };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [plan], errors: [] });
     const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    const packResults = (output: unknown) =>
+      (JSON.parse(String(output)).results as validator.WorkflowValidationResult[]).filter(
+        r => r.workflowName === 'factory .pack/pack.yaml'
+      );
     try {
-      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
-      const results = (output: unknown) =>
-        (JSON.parse(String(output)).results as validator.WorkflowValidationResult[]).filter(
-          r => r.workflowName === 'archon-plugin.json'
-        );
-      expect(results(write.mock.calls[0]?.[0])).toEqual([
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(1);
+      expect(packResults(write.mock.calls[0]?.[0])).toEqual([
         {
-          workflowName: 'archon-plugin.json',
-          filename: 'archon-plugin.json',
+          workflowName: 'factory .pack/pack.yaml',
           valid: false,
           issues: [
             {
               level: 'error',
-              field: 'manifest_entrypoints',
+              field: 'pack_bindings',
               message:
-                "binding 'plan-after-triage' in .pack/pack.yaml names workflow 'triage', which archon-plugin.json does not list as an entrypoint",
-              hint: "An installed copy refuses this binding at archon pack bindings. List 'triage' under entrypoints, or bind one it lists: plan.",
+                "Binding 'plan-after-triage' names workflow 'triage', which pack 'factory' does not provide.",
+              hint: 'Bind a workflow the pack dispatches: plan. A pack folder or an installed copy dispatches only the entrypoints its archon-plugin.json lists.',
             },
           ],
         },
       ]);
 
-      await manifest(source, { plan: 'plan/plan.yaml', triage: 'triage/triage.yaml' });
-      write.mockClear();
-      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(0);
-      expect(results(write.mock.calls[0]?.[0])).toEqual([]);
-
-      // A qualified name for the pack's own listed stage is refused: the bare name is portable.
-      await writeFile(
-        join(source, '.pack', 'pack.yaml'),
-        'bindings:\n  plan:\n    workflow: acme/factory:plan\n    resource: plan\n    overlap: queue\n'
-      );
-      write.mockClear();
-      expect(await validateWorkflowsCommand(validationCwd, ...args)).toBe(1);
-      expect(results(write.mock.calls[0]?.[0])[0]).toMatchObject({
-        issues: [
-          {
-            message:
-              "binding 'plan' in .pack/pack.yaml names workflow 'acme/factory:plan', which archon-plugin.json does not list as an entrypoint",
-            hint: 'Name a stage of this pack by its bare name, as the pack writes it; archon pack bindings adds the installed prefix. Bind one it lists: plan, triage.',
-          },
-        ],
+      mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+        workflows: [plan, stage('triage')],
+        errors: [],
       });
+      write.mockClear();
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(0);
+      expect(packResults(write.mock.calls[0]?.[0])).toEqual([]);
     } finally {
       write.mockRestore();
-      await removeTempTree(source);
     }
   });
 

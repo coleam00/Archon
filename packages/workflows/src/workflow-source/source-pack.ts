@@ -14,7 +14,8 @@ import { isDirectory, listTree, type TreeFile, type TreeListing } from './tree';
  * A pack's own folder given as the workflow source: the folder whose root holds a
  * workflow-pack `archon-plugin.json`. It is read as one project-scope pack keyed by its
  * manifest `name`, as if it sat at `<source>/.archon/workflows/<name>/`, so a pack author
- * can run the pack without installing it or copying it into that layout. A run's capture
+ * can run the pack without installing it or copying it into that layout. As on an installed
+ * copy, only its manifest entrypoints are dispatchable, named by entrypoint key. A run's capture
  * freezes the folder whole as its project root, so the frozen copy is read by this rule too.
  */
 export interface SourcePackFolder {
@@ -22,6 +23,8 @@ export interface SourcePackFolder {
   readonly name: string;
   /** The folder itself, holding `archon-plugin.json`. */
   readonly dir: string;
+  /** The manifest's entrypoints: key to `<folder>/<file>.yaml`. Only these are dispatchable. */
+  readonly entrypoints: Readonly<Record<string, string>>;
 }
 
 /**
@@ -75,12 +78,12 @@ export async function sourcePackFolder(dir: string): Promise<SourcePackFolder | 
     return null;
   const parsed = workflowPackManifestSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`Invalid ${file}: ${describeIssues(parsed.error)}`);
-  const { name } = parsed.data;
+  const { name, entrypoints } = parsed.data;
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const nested = join(dir, workflowFolder, name);
   if (!isReservedScopeDirName(name) && (await isDirectory(nested)))
     throw new AmbiguousSourcePackError(name, file, nested);
-  return { name, dir };
+  return { name, dir, entrypoints };
 }
 
 /**

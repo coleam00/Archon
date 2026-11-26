@@ -342,6 +342,31 @@ export function packWorkflowName(names: readonly string[], declared: string): st
 }
 
 /**
+ * The refusal of a binding that names a workflow its pack does not dispatch, keyed as the
+ * operator named the pack (`factory` from its folder, `acme.factory` installed).
+ */
+export function unprovidedWorkflowRefusal(id: string, declared: string, packKey: string): string {
+  return `Binding '${id}' names workflow '${declared}', which pack '${packKey}' does not provide.`;
+}
+
+/**
+ * The refusal of each workflow name the bindings declare that `names`, the pack's
+ * dispatchable workflows, does not provide: the check `archon pack bindings` makes, for a
+ * reader that reports every refusal rather than stopping at the first.
+ */
+export function packBindingRefusals(
+  packKey: string,
+  names: readonly string[],
+  bindings: Readonly<Record<string, PackBinding>>
+): string[] {
+  return Object.entries(bindings).flatMap(([id, binding]) =>
+    bindingWorkflowNames(binding)
+      .filter(workflow => packWorkflowName(names, workflow) === undefined)
+      .map(workflow => unprovidedWorkflowRefusal(id, workflow, packKey))
+  );
+}
+
+/**
  * Every workflow name one binding declares: the workflow it starts, the run it follows,
  * the workflow whose run resets its limit, and the workflow it wakes. `archon pack bindings`
  * resolves each of these with `packWorkflowName`, so a field that names a workflow there

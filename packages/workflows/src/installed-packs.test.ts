@@ -662,7 +662,12 @@ describe('a pack folder given as the source', () => {
     const folder = await packFolder('local');
 
     const live = await discoverFrom(folder);
-    const local = live.workflows.find(entry => entry.workflow.name === 'code-review');
+    // Only the manifest entrypoint dispatches, under its key as on the installed copy; the
+    // workflow it includes is support, and the include still expands.
+    const local = live.workflows.find(entry => entry.workflow.name === 'review');
+    expect(names(live.workflows)).not.toContain('helper');
+    expect(names(live.support ?? [])).toContain('helper');
+    expect(local?.workflow.nodes.some(node => node.id === 'helper__summarize')).toBe(true);
     expect(local?.source).toBe('project');
     expect(local?.workflow.pack?.key).toBe('review-kit');
     expect(local?.workflow.description).toBe('Review a change (local)');
@@ -700,11 +705,7 @@ describe('a pack folder given as the source', () => {
     });
     await expect(access(join(capture.anchor.root, 'project', '.archon', '.env'))).rejects.toThrow();
     await writeFile(join(folder, 'review', 'commands', 'scope.md'), 'Edited after start.\n');
-    const resumed = await resolveContinuationWorkflow(
-      deps,
-      runWith(capture, 'code-review'),
-      folder
-    );
+    const resumed = await resolveContinuationWorkflow(deps, runWith(capture, 'review'), folder);
     expect(resumed?.workflow.pack).toMatchObject({ key: 'review-kit', source: 'project' });
     expect(
       await loadCommandPrompt(deps, folder, scope.source.name, undefined, resumed?.roots)
@@ -715,9 +716,7 @@ describe('a pack folder given as the source', () => {
     const folder = await packFolder('local', { skills: ['review'] });
     const live = await discoverFrom(folder);
     expect(live.errors).toEqual([]);
-    expect(live.workflows.find(entry => entry.workflow.name === 'code-review')?.source).toBe(
-      'project'
-    );
+    expect(live.workflows.find(entry => entry.workflow.name === 'review')?.source).toBe('project');
   });
 
   test('names the copy it read and the other copy, and how to name each', async () => {

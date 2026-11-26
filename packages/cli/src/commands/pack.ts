@@ -58,6 +58,7 @@ import {
   type PackGraphLink,
   packWorkflowName,
   packWorkflows,
+  unprovidedWorkflowRefusal,
 } from '@archon/workflows/pack-graph';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { writeJsonLine } from '../utils/stdout';
@@ -446,10 +447,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
   const name = packWorkflowName(pack.workflowNames, declared);
-  if (name === undefined)
-    throw new Error(
-      `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
-    );
+  if (name === undefined) throw new Error(unprovidedWorkflowRefusal(id, declared, pack.key));
   return name;
 }
 

@@ -40,6 +40,7 @@ import {
   loadGlobalScope,
   loadProjectScope,
   type ScopeFiles,
+  splitSourcePack,
 } from './workflow-discovery/scopes';
 import { getLog } from './workflow-discovery/log';
 // Re-exported here because this is the module callers already import to discover with.
@@ -122,7 +123,8 @@ export async function discoverWorkflows(
 }
 
 /**
- * Assemble the catalog: the legacy scopes, then installed entrypoints. A qualified
+ * Assemble the catalog: the legacy scopes, with a source pack folder's support workflows
+ * moved out of them, then installed entrypoints. A qualified
  * installed name wins over a legacy workflow declaring the same name, so no project or
  * global file can shadow an installed workflow.
  */
@@ -147,7 +149,8 @@ async function finishDiscovery(
   const legacy = await expandScope(context, workflowsByFile);
   allErrors.push(...legacy.errors);
   await assertCapturedFilesPresent(verifiedFiles);
-  const workflows = [...legacy.workflows, ...installed.workflows];
+  const source = splitSourcePack(context.sourcePack, legacy.workflows);
+  const workflows = [...source.workflows, ...installed.workflows];
   if (context.roots.kind === 'captured') {
     const failure = allErrors.find(
       error => error.errorType === 'read_error' && isSourceReadFailure(error.cause, verifiedFiles)
@@ -166,7 +169,7 @@ async function finishDiscovery(
     },
     'workflows_discovery_completed'
   );
-  return { workflows, support: installed.support, errors: allErrors };
+  return { workflows, support: [...source.support, ...installed.support], errors: allErrors };
 }
 
 /**

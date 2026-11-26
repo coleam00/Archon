@@ -1,7 +1,7 @@
 import { readdir, access } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, join, relative, sep } from 'path';
 import * as archonPaths from '@archon/paths';
-import type { WorkflowLoadError } from '../schemas';
+import type { WorkflowLoadError, WorkflowWithSource } from '../schemas';
 import {
   BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
@@ -258,7 +258,8 @@ export async function loadGlobalScope(context: DiscoveryContext, files: ScopeFil
  * A missing folder is no project workflows; any other access failure rejects discovery.
  *
  * A source that is itself a pack folder (`sourcePackFolder`) adds that pack to the project
- * scope under its manifest name. A capture freezes such a folder whole as its project
+ * scope under its manifest name; `splitSourcePack` later keeps only its entrypoints
+ * dispatchable. A capture freezes such a folder whole as its project
  * root, so live and captured roots read it the same way.
  */
 export async function loadProjectScope(
@@ -345,7 +346,43 @@ async function addSourcePack(
     path: pack.dir,
     source: 'project',
   });
+  // An entrypoint is named by its manifest key, as on an installed copy. Renamed before
+  // include expansion, so a key that collides with another workflow's name is a duplicate.
+  const entrypointByPath = new Map(
+    Object.entries(pack.entrypoints).map(([key, path]) => [path, key])
+  );
+  const entrypoints = new Set<string>();
+  for (const [filename, parsed] of packaged.workflows) {
+    const path = parsed.filePath === undefined ? undefined : relative(pack.dir, parsed.filePath);
+    const key = path === undefined ? undefined : entrypointByPath.get(path.split(sep).join('/'));
+    if (key === undefined) continue;
+    entrypoints.add(key);
+    if (key !== parsed.workflow.name)
+      packaged.workflows.set(filename, { ...parsed, workflow: { ...parsed.workflow, name: key } });
+  }
+  context.sourcePack = { key: pack.name, entrypoints };
   mergeScopeResults(into, packaged);
+}
+
+/**
+ * A pack folder read as the source dispatches only its manifest entrypoints, as an installed
+ * copy does; its other workflows are support, which its own workflows compose and nothing
+ * dispatches. Split after include expansion, which needs the support workflows in scope.
+ */
+export function splitSourcePack(
+  sourcePack: DiscoveryContext['sourcePack'],
+  entries: readonly WorkflowWithSource[]
+): { workflows: WorkflowWithSource[]; support: WorkflowWithSource[] } {
+  const workflows: WorkflowWithSource[] = [];
+  const support: WorkflowWithSource[] = [];
+  for (const entry of entries) {
+    const member =
+      sourcePack !== undefined &&
+      entry.source === 'project' &&
+      entry.workflow.pack?.key === sourcePack.key;
+    (member && !sourcePack.entrypoints.has(entry.workflow.name) ? support : workflows).push(entry);
+  }
+  return { workflows, support };
 }
 
 /** Warn about deprecated non-prefixed defaults in the repo's defaults folder. */
