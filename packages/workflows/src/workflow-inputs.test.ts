@@ -46,6 +46,13 @@ describe('parseInputAssignments (#2554)', () => {
     expect(() => parseInputAssignments(['scope'])).toThrow(/expected 'name=value'/);
   });
 
+  test('names a no-= entry by its position, never its text', () => {
+    // With no `=` the whole entry may be a secret value, so only its position is safe.
+    const parse = () => parseInputAssignments(['scope=api', 'ghp_secret']);
+    expect(parse).toThrow(/Input assignment 2 has no '='/);
+    expect(parse).not.toThrow(/ghp_secret/);
+  });
+
   test('rejects a name that is not a valid input name', () => {
     // Leading digit and a dot are both outside INPUT_NAME_PATTERN.
     expect(() => parseInputAssignments(['1scope=api'])).toThrow(/Invalid input name/);

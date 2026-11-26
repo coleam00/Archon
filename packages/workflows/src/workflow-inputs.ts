@@ -176,8 +176,9 @@ export function defaultRunInputs(declared: DeclaredInputs): Record<string, JsonV
  * copy of the grammar; that constant's docblock explains why a second copy drifts
  * silently in the dangerous direction.
  *
- * `valueLabel` names what follows `=` in the missing-`=` message: `--input-file` speaks
- * the same grammar with a path in place of the value.
+ * No error echoes a value. A missing `=` is reported by the entry's 1-based position in
+ * `assignments`. `valueLabel` names what follows `=` in that message: `--input-file`
+ * speaks the same grammar with a path in place of the value.
  *
  * @throws WorkflowInputContractError on a missing `=`, an invalid name, or a duplicate.
  */
@@ -186,11 +187,14 @@ export function parseInputAssignments(
   valueLabel: 'value' | 'path' = 'value'
 ): Record<string, string> {
   const parsed: Record<string, string> = {};
-  for (const assignment of assignments) {
+  for (const [index, assignment] of assignments.entries()) {
     const eq = assignment.indexOf('=');
     if (eq === -1) {
+      // Names the 1-based position, never the text: with no `=` there is no name/value
+      // boundary, so the whole entry may be the value (`--input ghp_...`). Do not quote it
+      // even when it looks like a name; a token matches INPUT_NAME_PATTERN too.
       throw new WorkflowInputContractError(
-        `Invalid input assignment '${assignment}': expected 'name=${valueLabel}'.`
+        `Input assignment ${index + 1} has no '=': expected 'name=${valueLabel}'.`
       );
     }
     const name = assignment.slice(0, eq);
