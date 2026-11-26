@@ -2771,7 +2771,7 @@ describe('workflow-node plugin scope', () => {
 
     expect(chunks.find(c => c.type === 'result')?.failure).toBeUndefined();
     expect(mockLogger.info).toHaveBeenCalledWith(
-      { plugins: ['policy-plugin@org-marketplace'] },
+      { nodeId: 'closed-node', plugins: ['policy-plugin@org-marketplace'] },
       'claude.managed_plugins_loaded'
     );
   });

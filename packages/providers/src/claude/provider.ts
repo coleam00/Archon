@@ -748,7 +748,9 @@ export class ClaudeProvider implements IAgentProvider {
       }
       input.admit();
       const events = withFirstMessageTimeout(
-        pluginScope ? withPluginScopeCheck(rawEvents, pluginScope) : rawEvents,
+        pluginScope
+          ? withPluginScopeCheck(rawEvents, pluginScope, requestOptions?.nodeConfig?.nodeId)
+          : rawEvents,
         controller,
         firstEventTimeoutMs,
         diagnostics

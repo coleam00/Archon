@@ -138,9 +138,10 @@ export function buildPluginListCommand(input: {
 
 /**
  * Every installed plugin id `claude plugin list --json` reports, deduplicated (it
- * lists one record per install scope), and those with a Managed-scope record. A listing ended by a signal or the timeout
- * is `transient`; any other failure is `misconfigured`. Both carry the command's
- * own output as evidence, and the node fails before its session starts.
+ * lists one record per install scope), and those with a Managed-scope record. A
+ * listing ended by a signal or the timeout is `transient`; any other failure is
+ * `misconfigured`. Both carry the command's own output as evidence, and the node
+ * fails before its session starts.
  */
 export async function readClaudePluginInventory(
   cmd: PluginListCommand
@@ -260,12 +261,18 @@ const initPluginsSchema = z.array(z.object({ name: z.string(), source: z.string(
  */
 export async function* withPluginScopeCheck(
   events: AsyncIterable<SDKMessage>,
-  scope: PluginScope
+  scope: PluginScope,
+  nodeId?: string
 ): AsyncGenerator<SDKMessage> {
   let initSeen = false;
   for await (const event of events) {
     if (event.type === 'system' && event.subtype === 'init') {
-      checkInitPlugins(event.plugins, scope);
+      const managedLoaded = checkInitPlugins(event.plugins, scope);
+      // A session can send init more than once; the plugins a node did not name are
+      // reported once, with the node that received them.
+      if (!initSeen && managedLoaded.length > 0) {
+        getLog().info({ nodeId, plugins: managedLoaded }, 'claude.managed_plugins_loaded');
+      }
       initSeen = true;
     } else if (
       !initSeen &&
@@ -288,7 +295,8 @@ const MODEL_OUTPUT_TYPES: ReadonlySet<SDKMessage['type']> = new Set([
   'result',
 ]);
 
-function checkInitPlugins(plugins: unknown, scope: PluginScope): void {
+/** Fails on a plugin outside the node's scope; returns the Managed-scope ids that loaded unnamed. */
+function checkInitPlugins(plugins: unknown, scope: PluginScope): string[] {
   const parsed = initPluginsSchema.safeParse(plugins);
   if (!parsed.success) {
     throw new ClassifiedProviderError(
@@ -309,11 +317,8 @@ function checkInitPlugins(plugins: unknown, scope: PluginScope): void {
     if (managed.has(id)) managedLoaded.push(id);
     else unexpected.push(id);
   }
-  if (managedLoaded.length > 0) {
-    getLog().info({ plugins: managedLoaded }, 'claude.managed_plugins_loaded');
-  }
   const missing = scope.named.filter(id => !loaded.has(id));
-  if (unexpected.length === 0 && missing.length === 0) return;
+  if (unexpected.length === 0 && missing.length === 0) return managedLoaded;
   const problems = [
     ...(unexpected.length > 0
       ? [`loaded plugins the node does not name: ${unexpected.join(', ')}`]
