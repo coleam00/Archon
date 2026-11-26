@@ -10,6 +10,7 @@ import {
 import { InMemoryStore } from './child-runs/test-store';
 import { providerRegistry } from '@archon/providers';
 import { InProcessWorkflowEngine } from './in-process-engine';
+import * as nodeEventWrite from './node-event-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { ParentStatusReadError } from './parent-status-read';
 import { continueBlockedRun } from './parent-resume';
@@ -603,10 +604,12 @@ nodes:
     expect([...store.runs.values()][0]?.metadata.total_cost_usd).toBe(0.01);
   });
 
-  it('automatically resumes a parent after its gated child fails', async () => {
-    await writeWorkflow(
-      'fails-after-gate',
-      `name: fails-after-gate
+  it.each([false, true])(
+    'automatically resumes a parent after its gated child fails (outcome unknown: %p)',
+    async unknown => {
+      await writeWorkflow(
+        'fails-after-gate',
+        `name: fails-after-gate
 description: failed gated child
 nodes:
   - id: gate
@@ -616,10 +619,10 @@ nodes:
     bash: exit 1
     depends_on: [gate]
 `
-    );
-    await writeWorkflow(
-      'parent-failed-child',
-      `name: parent-failed-child
+      );
+      await writeWorkflow(
+        'parent-failed-child',
+        `name: parent-failed-child
 description: parent
 nodes:
   - id: sub
@@ -628,50 +631,93 @@ nodes:
     prompt: must not run
     depends_on: [sub]
 `
-    );
-    const store = new InMemoryStore();
-    const deps = makeDeps(store);
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'test',
-      cwd,
-      await discover('parent-failed-child'),
-      'goal'
-    );
-    const parent = [...store.runs.values()].find(
-      run => run.workflow_name === 'parent-failed-child'
-    )!;
-    const child = [...store.runs.values()].find(run => run.workflow_name === 'fails-after-gate')!;
-    expect(parent.status).toBe('paused');
-    expect(child.status).toBe('paused');
-    store.approveGate(child.id);
-    const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
-    if (!hydrated) throw new Error('Child not resumable');
-    await executeWorkflow(
-      deps,
-      makePlatform(),
-      'test',
-      cwd,
-      await discover('fails-after-gate'),
-      'goal',
-      undefined,
-      hydrated
-    );
-    expect((await store.getWorkflowRun(child.id))?.status).toBe('failed');
-    expect((await store.getWorkflowRun(parent.id))?.status).toBe('failed');
-    expect(
-      store.events.filter(
-        event =>
-          event.workflow_run_id === parent.id &&
-          event.step_name === 'sub' &&
-          event.event_type === 'node_failed'
-      )
-    ).toHaveLength(1);
-    expect(
-      store.events.some(event => event.step_name === 'after' && event.event_type === 'node_started')
-    ).toBe(false);
-  });
+      );
+      // The child's step records its failure as a writing tool whose outcome is unknown would.
+      const record = nodeEventWrite.recordNodeState;
+      const marking = spyOn(nodeEventWrite, 'recordNodeState').mockImplementation(
+        (sinks, written, continuation) =>
+          unknown &&
+          !('cache' in written) &&
+          written.lifecycle.status === 'failed' &&
+          written.node.id === 'fail'
+            ? record(
+                sinks,
+                {
+                  ...written,
+                  lifecycle: { ...written.lifecycle, failureKind: 'outcome_unknown' as const },
+                },
+                continuation
+              )
+            : record(sinks, written, continuation)
+      );
+      try {
+        const store = new InMemoryStore();
+        const deps = makeDeps(store);
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'test',
+          cwd,
+          await discover('parent-failed-child'),
+          'goal'
+        );
+        const parent = [...store.runs.values()].find(
+          run => run.workflow_name === 'parent-failed-child'
+        )!;
+        const child = [...store.runs.values()].find(
+          run => run.workflow_name === 'fails-after-gate'
+        )!;
+        expect(parent.status).toBe('paused');
+        expect(child.status).toBe('paused');
+        store.approveGate(child.id);
+        const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+        if (!hydrated) throw new Error('Child not resumable');
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'test',
+          cwd,
+          await discover('fails-after-gate'),
+          'goal',
+          undefined,
+          hydrated
+        );
+        const failures = (step: string, runId: string) =>
+          store.events.filter(
+            event =>
+              event.workflow_run_id === runId &&
+              event.step_name === step &&
+              event.event_type === 'node_failed'
+          );
+        expect((await store.getWorkflowRun(child.id))?.status).toBe('failed');
+        expect((await store.getWorkflowRun(parent.id))?.status).toBe('failed');
+        expect(failures('sub', parent.id)).toHaveLength(1);
+        // Woken by the child, the parent re-drives an ordinary failure once; never an unknown one.
+        expect(failures('fail', child.id)).toHaveLength(unknown ? 1 : 2);
+        expect(
+          store.events.some(
+            event => event.step_name === 'after' && event.event_type === 'node_started'
+          )
+        ).toBe(false);
+        if (!unknown) return;
+        // An operator's resume of the parent by hand re-drives the child.
+        const byHand = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'test',
+          cwd,
+          await discover('parent-failed-child'),
+          'goal',
+          undefined,
+          byHand
+        );
+        expect(failures('fail', child.id)).toHaveLength(2);
+      } finally {
+        marking.mockRestore();
+      }
+    }
+  );
 
   describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'child source recovery',

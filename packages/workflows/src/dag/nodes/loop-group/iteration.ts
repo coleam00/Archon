@@ -328,6 +328,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     totalTokensUnknown: false,
     stepNamePrefix: run.bodyStepNamePrefix,
     loopGroupPath: [...ctx.loopGroupPath, { groupId: node.id, iteration: i }],
+    fanOutPath: ctx.fanOutPath,
     // Deliver this iteration's approval-gate free-text to body exec: nodes via env
     // (#2115, #2725). Script bodies use this as their ONLY channel (their loop scope leaves
     // the literal token alone, unsafe to splice into TS/Python source). Bash bodies get

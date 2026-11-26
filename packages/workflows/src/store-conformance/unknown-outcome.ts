@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
+import { finishNodeExecution, newNodeInvocation, startNodeExecution } from '../node-execution';
+import { serializeNodeStateRecord } from '../node-record-serialization';
 import { readSourceRelease } from '../schemas';
+import type { FanOutFrame } from '../schemas/node-execution';
 import {
   WorkflowNotResumableError,
   deadlineWaitCursor,
@@ -20,7 +23,7 @@ async function claimOf(store: IWorkflowStore, id: string): Promise<string | null
 /** A run the automatic claim of `kind` could take, holding the failure `kind` of `write`. */
 async function heldFor(
   store: IWorkflowStore,
-  kind: 'wait' | 'answered' | 'source' | 'child' | 'quota',
+  kind: 'wait' | 'answered' | 'source' | 'child' | 'redrive' | 'quota',
   failureKind: string
 ): Promise<{ id: string; cursor: ResumeClaimCursor }> {
   const run = await running(store);
@@ -67,6 +70,11 @@ async function heldFor(
     });
     return { id: run.id, cursor: { kind: 'child', childRunId: 'child-1' } };
   }
+  if (kind === 'redrive') {
+    // A failed child its parent drives again by itself.
+    await store.failWorkflowRun(run.id, 'failed');
+    return { id: run.id, cursor: { kind: 'redrive' } };
+  }
   await failWithSchedule(store, run.id);
   return {
     id: run.id,
@@ -81,7 +89,7 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
       store = getHarness().store;
     });
 
-    for (const kind of ['wait', 'answered', 'source', 'child', 'quota'] as const) {
+    for (const kind of ['wait', 'answered', 'source', 'child', 'redrive', 'quota'] as const) {
       test(`refuses the automatic ${kind} claim and admits a resume by hand`, async () => {
         const held = await heldFor(store, kind, 'outcome_unknown');
         const before = await store.getWorkflowRun(held.id);
@@ -112,28 +120,49 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
 
     test('admits the automatic claim when a completed fan-out join absorbed the instance', async () => {
       const scope = 'refine.__archon_fan_out__fan__root';
+      // A sibling fan-out whose id is `fan__root__abc`, where `abc` is an instance of `fan`:
+      // its writer's step name reads as if it ran in that instance.
+      const sibling = `${scope}__abc__root`;
+      const record = (
+        runId: string,
+        path: string,
+        fanOutPath: FanOutFrame[],
+        lifecycle: Parameters<typeof finishNodeExecution>[1]
+      ) =>
+        serializeNodeStateRecord(
+          finishNodeExecution(
+            startNodeExecution({
+              runId,
+              path,
+              node: { id: path, kind: 'agent', source: { kind: 'inline', prompt: 'p' } },
+              invocation: { ...newNodeInvocation(), fanOutPath },
+              provider: 'claude',
+            }),
+            lifecycle
+          )
+        );
+      const uncertain = {
+        status: 'failed',
+        error: 'timed out',
+        failureKind: 'outcome_unknown',
+      } as const;
       const absorbed = await running(store);
       const live = await running(store);
-      for (const run of [absorbed, live]) {
-        await store.persistWorkflowEvent({
-          workflow_run_id: run.id,
-          event_type: 'fan_out_instances',
-          step_name: scope,
-          data: {},
-        });
-        await store.persistWorkflowEvent({
-          workflow_run_id: run.id,
-          event_type: 'node_failed',
-          step_name: `${scope}__abc__write`,
-          data: { error: 'timed out', failure_kind: 'outcome_unknown' },
-        });
-      }
-      await store.persistWorkflowEvent({
-        workflow_run_id: absorbed.id,
-        event_type: 'node_completed',
-        step_name: 'refine.fan',
-        data: { node_output: '' },
-      });
+      const beside = await running(store);
+      for (const run of [absorbed, live])
+        await store.persistWorkflowEvent(
+          record(run.id, `${scope}__abc__write`, [{ scope, identity: 'abc' }], uncertain)
+        );
+      await store.persistWorkflowEvent(
+        record(
+          beside.id,
+          `${sibling}__def__write`,
+          [{ scope: sibling, identity: 'def' }],
+          uncertain
+        )
+      );
+      for (const run of [absorbed, beside])
+        await store.persistWorkflowEvent(record(run.id, 'refine.fan', [], { status: 'completed' }));
       // An audit event on the absorbed step after the join completed is not a node record.
       await store.persistWorkflowEvent({
         workflow_run_id: absorbed.id,
@@ -141,14 +170,16 @@ export function describeUnknownOutcomeConformance(getHarness: () => WorkflowStor
         step_name: `${scope}__abc__write`,
         data: {},
       });
-      for (const run of [absorbed, live])
+      for (const run of [absorbed, live, beside])
         await store.pauseWorkflowRunForWait(run.id, wait, { kind: 'started', stepName: 'wait' });
       expect((await store.resumeWorkflowRun(absorbed.id, deadlineWaitCursor(wait))).status).toBe(
         'running'
       );
-      expect(
-        await rejection(store.resumeWorkflowRun(live.id, deadlineWaitCursor(wait)))
-      ).toBeInstanceOf(WorkflowNotResumableError);
+      // Neither an unfinished join nor the join of a fan-out the record did not run in absorbs it.
+      for (const run of [live, beside])
+        expect(
+          await rejection(store.resumeWorkflowRun(run.id, deadlineWaitCursor(wait)))
+        ).toBeInstanceOf(WorkflowNotResumableError);
     });
 
     test('a failure under the pass own claim also fails the row it paused, and no other', async () => {

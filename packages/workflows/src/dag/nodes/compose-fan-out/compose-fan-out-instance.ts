@@ -29,6 +29,7 @@ import { aggregateProviderFailure, rootFailures } from '../../../executor-shared
 import { getLog } from '../../log';
 import { runLayers } from '../../run-layers';
 import { RunSourceUnreadableError } from '../../node-source';
+import type { UnknownOutcome } from '../../../unknown-outcome';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { type RunLayersContext } from '../../run-context';
 import { expandComposeInstance } from './compose-fan-out-expansion';
@@ -54,6 +55,8 @@ export interface ComposeInstanceScope {
   node: ComposeFanOutNode;
   fanOutScopeName: string;
   resumeSnapshot: DagResumeSnapshot;
+  /** The run's unknown outcomes, read once for the pass (`readUnknownOutcomes`). */
+  unknownOutcomes: readonly UnknownOutcome[];
   definition: ResolvedWorkflow;
   commandContents: ReadonlyMap<string, IncludeCommandContent>;
 }
@@ -222,6 +225,10 @@ function instanceRunContext(
     totalTokensUnknown: false,
     stepNamePrefix: instance.stepNamePrefix,
     loopGroupPath: ctx.loopGroupPath,
+    fanOutPath: [
+      ...ctx.fanOutPath,
+      { scope: instance.scope.fanOutScopeName, identity: instance.snapshot.identity },
+    ],
     // A composed instance is its own workflow: its prompts never took the enclosing
     // loop's substitution pass, so its command bodies don't either.
     loopBodyScopes: [],
@@ -449,6 +456,34 @@ async function settleInstance(
 }
 
 /**
+ * An instance whose node failed with an unknown outcome that this fan-out's own join
+ * absorbed (`unknownOutcomes`): a recomputed join gets the recorded failure back rather than
+ * running the uncertain node again. One an inner join absorbed leaves the instance to run
+ * again, so its other failures are retried; a live one runs again, which only a resume by
+ * hand reaches.
+ */
+function absorbedUnknownOutcome(
+  scope: ComposeInstanceScope,
+  identity: string,
+  scopeName: string
+): ComposeInstanceOutcome | undefined {
+  const under = scope.unknownOutcomes.filter(outcome =>
+    outcome.invocation?.fanOutPath?.some(
+      frame => frame.scope === scope.fanOutScopeName && frame.identity === identity
+    )
+  );
+  const own = under.some(outcome => outcome.absorbedBy === scope.fanOutScopeName);
+  if (!own || under.some(outcome => outcome.absorbedBy === undefined)) return undefined;
+  return {
+    status: 'failed',
+    output: '',
+    error:
+      scope.resumeSnapshot.failedNodes.get(scopeName)?.error ??
+      `instance ${scopeName} failed with an unknown outcome`,
+  };
+}
+
+/**
  * Execute one composed fan-out instance: thread it whole when it already completed,
  * otherwise run the composed body via runLayers in its own context, threading inner
  * nodes that already completed. The authored node ids remain ordinary DAG ids inside
@@ -494,6 +529,8 @@ export async function runComposeInstance(
   if (prior !== undefined) return threadedOutcome(prior);
 
   const stepNamePrefix = `${scopeName}__`;
+  const absorbed = absorbedUnknownOutcome(scope, snapshot.identity, scopeName);
+  if (absorbed !== undefined) return absorbed;
   const threaded = threadCompletedInnerNodes(expanded.nodes, priorOutputs, stepNamePrefix);
   let priorUsage: InstanceRun['priorUsage'];
   try {

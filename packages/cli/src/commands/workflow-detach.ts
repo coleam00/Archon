@@ -1,3 +1,4 @@
+import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { generatedTaskBranch } from '@archon/isolation';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -583,6 +584,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
         ...(continuationDeclaration
           ? { [CONTINUATION_METADATA_KEY]: continuationDeclaration.stamp }
           : {}),
+        ...observesItemMetadata(workflow),
       },
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
       ...(launch.options.item === undefined ? {} : { item_key: launch.options.item }),
