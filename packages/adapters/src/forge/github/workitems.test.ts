@@ -882,6 +882,31 @@ function assigneeForge(options: { kind?: 'issue' | 'pr'; mode?: 'ignore' | 'lose
   // repository access, so the repository-wide check refuses them.
   const assignable = new Set(['other', 'octo', 'commenter']);
   const calls: string[] = [];
+  const status = (ok: boolean) =>
+    ok ? new Response(null, { status: 204 }) : Response.json({}, { status: 404 });
+  const broken = (code: number) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error('connection reset'));
+        },
+      }),
+      { status: code }
+    );
+  const write = (method: string, init?: RequestInit): Response => {
+    const { assignees } = JSON.parse(String(init?.body)) as { assignees: string[] };
+    const named = new Set(assignees.map(name => name.toLowerCase()));
+    const next =
+      method === 'POST'
+        ? [...item.assignees, ...assignees.map(name => ({ login: name }))]
+        : item.assignees.filter(row => !named.has(row.login.toLowerCase()));
+    const code = method === 'POST' ? 201 : 200;
+    if (options.mode === 'ignore') return Response.json(item, { status: code });
+    if (options.mode === 'lose')
+      return Response.json({ ...item, assignees: next }, { status: code });
+    item.assignees = next;
+    return options.mode === 'cut' ? broken(code) : Response.json(item, { status: code });
+  };
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const path = url.origin + url.pathname;
@@ -889,36 +914,10 @@ function assigneeForge(options: { kind?: 'issue' | 'pr'; mode?: 'ignore' | 'lose
     calls.push(`${method} ${path}`);
     const login = decodeURIComponent(url.pathname.split('/').pop() ?? '').toLowerCase();
     if (path === `${root}/issues/1`) return Response.json(structuredClone(item));
-    if (path.startsWith(`${root}/issues/1/assignees/`))
-      return assignable.has(login)
-        ? new Response(null, { status: 204 })
-        : Response.json({ message: 'Not Found' }, { status: 404 });
+    if (path.startsWith(`${root}/issues/1/assignees/`)) return status(assignable.has(login));
     if (path.startsWith(`${root}/assignees/`))
-      return login === 'commenter' || !assignable.has(login)
-        ? Response.json({ message: 'Not Found' }, { status: 404 })
-        : new Response(null, { status: 204 });
-    if (path === `${root}/issues/1/assignees`) {
-      const { assignees } = JSON.parse(String(init?.body)) as { assignees: string[] };
-      const named = new Set(assignees.map(name => name.toLowerCase()));
-      const next =
-        method === 'POST'
-          ? [...item.assignees, ...assignees.map(name => ({ login: name }))]
-          : item.assignees.filter(row => !named.has(row.login.toLowerCase()));
-      const status = method === 'POST' ? 201 : 200;
-      if (options.mode === 'ignore') return Response.json(item, { status });
-      if (options.mode === 'lose') return Response.json({ ...item, assignees: next }, { status });
-      item.assignees = next;
-      if (options.mode === 'cut')
-        return new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(new Error('connection reset'));
-            },
-          }),
-          { status }
-        );
-      return Response.json(item, { status });
-    }
+      return status(login !== 'commenter' && assignable.has(login));
+    if (path === `${root}/issues/1/assignees`) return write(method, init);
     throw new Error(`unexpected ${method} ${path}`);
   };
   const assigned = (): string[] => item.assignees.map(row => row.login);

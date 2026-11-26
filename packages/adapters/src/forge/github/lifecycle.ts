@@ -24,14 +24,13 @@ import { upsertComment } from './comments';
 import { replyOnThread, resolveThread } from './review-threads';
 import { submitReview } from './reviews';
 import { putAttachment } from './attachments';
+import { addAssignee, removeAssignee } from './assignees';
 import {
-  addAssignee,
   addLabel,
   closeWorkItem,
   createWorkItem,
   editWorkItemBody,
   ensureLabel,
-  removeAssignee,
   removeLabel,
   setLabels,
 } from './workitems';
