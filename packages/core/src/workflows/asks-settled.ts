@@ -42,7 +42,6 @@ import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definit
 import {
   bindingProjectKey,
   bindingReceipt,
-  declaredInputNames,
   mappedInputs,
   readAsksSettledBindings,
   rebuiltStart,
@@ -52,6 +51,7 @@ import {
   type RebuiltStart,
   type RunEndedStartsDependencies,
 } from './run-ended';
+import { declaredInputNames, undeclaredInputReads } from './declared-inputs';
 import {
   selectStartedWorkflow,
   startedWorkflowInputProblems,
@@ -234,24 +234,31 @@ function choseOption(rows: readonly StoredItemAsk[], option: string): boolean {
   return chosen.length > 0 && chosen.every(id => id === option);
 }
 
-/** The checkout the asking run recorded when it completed, or why a start cannot take one. */
-function recordedCheckout(
+/**
+ * The checkout the run that left the asks or the met wait (`left`) recorded when it
+ * completed, or why a start cannot take one.
+ */
+export function recordedCheckout(
   runId: string,
   run: AskingRunRow | null,
-  workflowName: string
+  workflowName: string,
+  left: 'asks' | 'wait' = 'asks'
 ): EndedCheckout {
   const again = `run '${workflowName}' again on the item`;
   if (run === null)
-    return { refused: `run '${runId}', which left the asks, no longer exists; ${again}` };
+    return { refused: `run '${runId}', which left the ${left}, no longer exists; ${again}` };
   const recorded = readAsksCheckout({ id: runId, metadata: run.metadata });
   if (recorded === undefined)
     return {
-      refused: `run '${runId}' recorded no checkout when it ended (the binding's checkout was added after it ended, or an older Archon ran it); ${again}`,
+      refused:
+        left === 'asks'
+          ? `run '${runId}' recorded no checkout when it ended (the binding's checkout was added after it ended, or an older Archon ran it); ${again}`
+          : `run '${runId}' recorded no checkout when it ended (its pack declares no wake binding with checkout: waiting-run for '${workflowName}', the binding was added after it ended, or an older Archon ran it); ${again}`,
     };
   if (!('handoff' in recorded)) return recorded;
-  // Branch recreation would hand on a checkout the asking run no longer has, so a removed
-  // worktree refuses here, where the reason lands on the receipt. Execution checks again
-  // (`assertAskingWorktree`), for a start that runs later.
+  // Branch recreation would hand on a checkout the run no longer has, so a removed
+  // worktree refuses here, where the reason lands on the receipt. Execution checks an
+  // asks-settled start again (`assertAskingWorktree`), for a start that runs later.
   const gone = askingWorktreeGone(runId, recorded);
   return gone === undefined ? { handoff: recorded.handoff } : { refused: `${gone}; ${again}` };
 }
@@ -267,17 +274,23 @@ export function askingWorktreeGone(
 }
 
 /**
- * At the completion of a run on an item that leaves asks: the checkout it left, when an
- * asks-settled binding with `checkout` matches it (its workflow, in the item's project),
- * else undefined. Read once however many bindings match.
+ * At the completion of a run on an item that leaves asks or waits: the checkout it left,
+ * recorded for the start that follows. For asks, only when an asks-settled binding with
+ * `checkout` matches it (its workflow, in the item's project), else undefined. For waits
+ * (`waits`), whenever the caller says a wake binding its pack declares takes the checkout:
+ * that binding is source plugin config, which this path does not read. Read once however
+ * many bindings match.
  */
 export function createAsksCheckout(
   dependencies: Omit<RunEndedStartsDependencies, 'now' | 'listItemAsks'> & {
     getRun: (id: string) => Promise<WorkflowRun | null>;
   }
-): (run: WorkflowRun) => Promise<AsksCheckout | undefined> {
-  return async run => {
+): (run: WorkflowRun, left: { waits: boolean }) => Promise<AsksCheckout | undefined> {
+  return async (run, { waits }) => {
     if (!run.item_id) return undefined;
+    const recorded = async (): Promise<AsksCheckout> =>
+      withWorktree(run, await dependencies.endedCheckout(run), dependencies.getRun);
+    if (waits) return recorded();
     const candidates = (await readAsksSettledBindings(dependencies.triggersDirectory())).filter(
       candidate =>
         candidate.asksSettled.workflowName === run.workflow_name &&
@@ -287,8 +300,7 @@ export function createAsksCheckout(
     const item = await dependencies.getItem(run.item_id);
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     for (const candidate of candidates)
-      if ((await bindingProjectKey(candidate, dependencies)) === item.projectKey)
-        return withWorktree(run, await dependencies.endedCheckout(run), dependencies.getRun);
+      if ((await bindingProjectKey(candidate, dependencies)) === item.projectKey) return recorded();
     return undefined;
   };
 }
@@ -375,15 +387,12 @@ function askingWorkflowProblems(
   if (!asking) return [`workflow '${asksSettled.workflowName}' is not in this project`];
   if (asking.result?.asks === undefined)
     return [`workflow '${asksSettled.workflowName}' declares no returns.asks`];
-  const declared = declaredInputNames(asking);
   return [
     ...undeclaredOptionProblems(asksSettled, asking),
-    ...Object.entries(asksSettled.inputs ?? {}).flatMap(([target, source]) =>
-      'input' in source && !declared.includes(source.input)
-        ? [
-            `input '${target}' reads '${source.input}', which '${asksSettled.workflowName}' does not declare`,
-          ]
-        : []
+    ...undeclaredInputReads(
+      asksSettled.inputs,
+      asksSettled.workflowName,
+      declaredInputNames(asking)
     ),
   ];
 }

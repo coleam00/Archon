@@ -716,7 +716,9 @@ export class SqliteAdapter implements IDatabase {
         closed_at TEXT,
         met_by_receipt_id TEXT,
         met_by_binding_id TEXT,
-        replaced_by_run_id TEXT
+        replaced_by_run_id TEXT,
+        subject_kind TEXT,
+        subject_number INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_item_waits_open ON remote_agent_item_waits(workflow_name, event, about) WHERE closed_as IS NULL;
       CREATE INDEX IF NOT EXISTS idx_item_waits_run_id ON remote_agent_item_waits(run_id);

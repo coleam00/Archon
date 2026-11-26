@@ -86,7 +86,7 @@ function endingOutcomesError(
 interface DeclaredResultField {
   key: 'outcome' | 'asks' | 'waits' | 'summary';
   field: string;
-  engineSchema?: () => Record<string, unknown>;
+  engineSchema?: (node: DagNode) => Record<string, unknown>;
 }
 
 function declaredResultFields(result: WorkflowDefinition['result']): DeclaredResultField[] {
@@ -138,7 +138,7 @@ function resultFieldError(
     );
   return (
     selectedNodeShapeError(subject, nodeId, node, 'an object output_format') ??
-    validateEngineFieldSchema(subject, nodeId, field, node, engineSchema())
+    validateEngineFieldSchema(subject, nodeId, field, node, engineSchema(node))
   );
 }
 

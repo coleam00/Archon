@@ -6,8 +6,10 @@ import {
   entryReadsNeedLinkedItems,
   linkedReadsNoItemAnswers,
   runEndedInputSourceSchema,
+  wakeInputSourceSchema,
 } from './binding-input-source';
 import { itemLinkKindSchema } from './item-link';
+import { itemWaitSubjectSchema } from './item-wait';
 import { handoffRefusalSchema } from './run-metadata';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
@@ -407,11 +409,14 @@ export function readCheckoutHandoff(run: {
 }
 
 /**
- * Run metadata key of a run that completed leaving asks while an asks-settled binding
- * with `checkout: "asking-run"` matched it: the checkout it left, read at completion, and
- * the worktree that holds it (the run's own, or for a run that worked on a copy, the one
- * its source left). The settling transaction and the started run's execution each refuse
- * the hand-off when that worktree is gone, so the checkout is never recreated.
+ * Run metadata key of the checkout a run left for the start that follows it later: a run
+ * that completed leaving asks while an asks-settled binding with `checkout: "asking-run"`
+ * matched it, or any run that completed leaving waits, which a wake binding with
+ * `checkout: "waiting-run"` may hand on (the name predates waits). It holds the checkout
+ * read at completion and the worktree that holds it (the run's own, or for a run that
+ * worked on a copy, the one its source left). The settling or waking transaction, and for
+ * asks the started run's execution, refuse the hand-off when that worktree is gone, so the
+ * checkout is never recreated.
  */
 export const ASKS_CHECKOUT_METADATA_KEY = 'asks_checkout';
 
@@ -427,9 +432,10 @@ export function asksCheckoutMetadata(checkout: AsksCheckout): Record<string, Ask
 }
 
 /**
- * The checkout an asking run recorded, or undefined when it recorded none. A value that
- * does not parse reads as a refusal, not a throw: this runs inside the transaction that
- * closes an ask, and a throw there would refuse the operator's answer.
+ * The checkout an asking or waiting run recorded, or undefined when it recorded none. A
+ * value that does not parse reads as a refusal, not a throw: this runs inside the
+ * transaction that closes an ask or accepts a receipt, and a throw there would refuse the
+ * operator's answer or the event.
  */
 export function readAsksCheckout(run: {
   id: string;
@@ -449,7 +455,12 @@ export const bindingWakeSchema = z
     workflowName: z.string().min(1),
     wait: z.string().min(1),
     about: z.string().min(1),
+    subject: itemWaitSubjectSchema.optional(),
+    /** The item an observation of the wait is for, apart from any item the binding maps. */
+    observedItemKey: z.string().min(1).optional(),
     input: z.string().min(1).optional(),
+    inputs: z.record(z.string().min(1), wakeInputSourceSchema).optional(),
+    checkout: z.literal('waiting-run').optional(),
   })
   .strict();
 export type BindingWake = z.infer<typeof bindingWakeSchema>;
@@ -519,9 +530,9 @@ export const resourceStartBindingIntentSchema = z
      */
     itemKey: itemKeySchema.optional(),
     /**
-     * The checkout a run-ended binding with `checkout: "ended-run"` or an asks-settled
-     * binding with `checkout: "asking-run"` hands the started run, recorded when the ended
-     * or asking run completed. Preparation decides the lane from it, not from
+     * The checkout a run-ended binding with `checkout: "ended-run"`, an asks-settled
+     * binding with `checkout: "asking-run"` or a wake binding with `checkout: "waiting-run"`
+     * hands the started run, recorded when the ended, asking or waiting run completed. Preparation decides the lane from it, not from
      * `launch.isolation`, which names the branch only for older binaries. Operator configs
      * omit this field. The SQL store never writes it into the `intent` column; see
      * `storableIntent` in core's start-receipt-writes.
@@ -530,13 +541,18 @@ export const resourceStartBindingIntentSchema = z
     /**
      * A source plugin's binding that wakes waiting work: the open wait `wait` a run of
      * `workflowName` left, on an item of the project this binding launches in, whose `about`
-     * is exactly this `about`. With `itemKey`, the item the event names, only a wait on that
-     * item matches; an event that names its subject (a review names its pull request) must
-     * set it, so another subject at the same commit wakes nothing here. The store resolves
+     * is exactly this `about`, and whose `subject` is the event's `subject`: an event about
+     * another subject at the same commit, or one that names none (a check), meets no wait
+     * that names one. With `itemKey`, the item the event names, only a wait on that item
+     * matches, and that one also when it names no subject. With `observedItemKey`, only the
+     * wait on the item an observation was for matches. The store resolves
      * the wake when it accepts the receipt, in the same transaction: a match closes the set
      * as met and the binding starts on the wait's item, with the met wait as event input
-     * `input` when set; anything else is recorded as not started, with why. It never
-     * reaches the `intent` column.
+     * `input` when set; anything else is recorded as not started, with why. `inputs` maps
+     * event inputs from the run that left the met wait (its own inputs) and from the item's
+     * answers, and `checkout: "waiting-run"` sets `checkoutFrom` to the checkout that run
+     * recorded when it completed; a value or checkout that cannot be read refuses the start
+     * and leaves the wait open. It never reaches the `intent` column.
      */
     wake: bindingWakeSchema.optional(),
     /**
@@ -555,6 +571,24 @@ export const resourceStartBindingIntentSchema = z
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
+
+/**
+ * `binding` handing its started run `handoff`, the checkout another run left, or unchanged
+ * without one. `launch.isolation` names the branch for an older binary, which reads no
+ * hand-off: it runs the stage on that branch or fails to check it out, never on the base
+ * branch.
+ */
+export function withCheckoutFrom<T extends Pick<ResourceStartBindingIntent, 'launch'>>(
+  binding: T,
+  handoff: CheckoutHandoff | undefined
+): T & { checkoutFrom?: CheckoutHandoff } {
+  if (handoff === undefined) return binding;
+  return {
+    ...binding,
+    launch: { ...binding.launch, isolation: { kind: 'worktree' as const, branch: handoff.branch } },
+    checkoutFrom: handoff,
+  };
+}
 
 /**
  * A binding refused at start because its pack's forge needs cannot be met: the pack and

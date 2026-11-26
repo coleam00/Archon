@@ -288,7 +288,7 @@ function waitLines(read: ItemRead): string[] {
   if (read.waits.length === 0) return ['  none'];
   return read.waits.map(
     wait =>
-      `  '${wait.event}' about ${wait.about}, since ${minute(wait.waitingSince)}, ${wait.overdue ? 'overdue since' : 'due'} ${minute(wait.deadline)} (left by ${wait.workflow} run ${wait.runId.slice(0, 8)})`
+      `  '${wait.event}' about ${wait.about}${wait.subject === null ? '' : ` on ${wait.subject.kind} ${String(wait.subject.number)}`}, since ${minute(wait.waitingSince)}, ${wait.overdue ? 'overdue since' : 'due'} ${minute(wait.deadline)} (left by ${wait.workflow} run ${wait.runId.slice(0, 8)})`
   );
 }
 

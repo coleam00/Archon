@@ -499,7 +499,7 @@ describe('the merge stage settles its item', () => {
   test('a pull request whose checks still run ends waiting for a check at exactly its head, and one asked about leaves the ask and no wait', () => {
     const at = install();
     const waiting = ok(settle(at, decision({ action: 'wait', reason: 'CI pending' }), { pr: { checks: 'pending' } }));
-    expect(waiting).toMatchObject({ outcome: 'waiting', asks: [], waits: [{ event: 'checks', about: HEAD, within_minutes: 60 }] });
+    expect(waiting).toMatchObject({ outcome: 'waiting', asks: [], waits: [{ event: 'checks', about: HEAD, subject: null, within_minutes: 60 }] });
     const asked = ok(settle(at, decision({ action: 'ask', class: 'unclear', ask: ASK, brief: 'rework PR 42' }), { pr: { checks: 'pending' } }));
     expect(asked).toMatchObject({ outcome: 'asked', number: 7, head: HEAD, brief: 'rework PR 42', asks: [{ ...ASK, artifacts: [] }], waits: [] });
     expect(stored(at).value).toMatchObject({ facts: { merge: { status: 'asking' } } });

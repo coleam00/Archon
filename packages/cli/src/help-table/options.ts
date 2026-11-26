@@ -265,7 +265,8 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--priority',
-    description: "For 'trigger fire': give the start's item priority when its start is prepared",
+    description:
+      "For 'trigger fire': give the start's item priority once, when the fire is accepted",
     owners: [{ command: 'trigger', subcommand: 'fire' }],
   },
   {
