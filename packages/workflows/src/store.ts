@@ -307,6 +307,19 @@ export interface IWorkflowStore
   recordItemLanding(
     input: import('./schemas/item-landing').ItemLandingReport
   ): Promise<import('./schemas/item-landing').ItemLanding>;
+  /** The item's priority, its own or through items it is `part_of`; null when it has none. */
+  getItemPriority(itemId: string): Promise<import('./schemas/item-priority').ItemPriority | null>;
+  /** Give the item `key` names its own priority, writing the item on first use. */
+  setItemPriority(
+    input: import('./schemas/item-priority').ItemPriorityTarget
+  ): Promise<import('./schemas/item-priority').ItemPriority>;
+  /**
+   * Remove the item's own priority and return what it still has through items it is
+   * `part_of`. Null when the project has no item under the key; clearing never creates one.
+   */
+  clearItemPriority(
+    input: import('./schemas/item-priority').ItemPriorityTarget
+  ): Promise<{ priority: import('./schemas/item-priority').ItemPriority | null } | null>;
   /**
    * Every link from or to an item, ended ones included, in recording order. A row that does
    * not read is reported as unreadable in its place, not thrown.

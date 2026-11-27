@@ -34,6 +34,7 @@ import {
   type ItemMergeDegraded,
 } from './schemas/item-merge';
 import { itemLandingUnresolvedSchema, resolvedItemLandingSchema } from './schemas/item-landing';
+import { itemPrioritySchema } from './schemas/item-priority';
 import { itemEndDegradedSchema, itemEndSchema } from './schemas/item-end';
 import { readHoldingItemEnd } from './item-end';
 import { readRunItemId } from './item-of-run';
@@ -44,6 +45,7 @@ import { workOrderMemberUnreadableSchema, workOrderSchema } from './schemas/work
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { parseRunUsage } from './schemas/run-usage';
 import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
+import { itemWaitSubjectSchema } from './schemas/item-wait';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
   attentionAnswererSchema,
@@ -290,6 +292,7 @@ export const itemAnswerKindSchema = z.enum({
 export const itemOpenWaitSchema = z.object({
   event: z.string(),
   about: z.string(),
+  subject: itemWaitSubjectSchema.nullable(),
   workflow: z.string(),
   runId: z.string(),
   waitingSince: z.string().datetime(),
@@ -326,7 +329,9 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * branch a fresh run on the item is cut from and proposes against, and where it came from:
  * the item's own record, or the nearest item it is `part_of`. Null when neither records
  * one, or when it cannot be resolved. The read does not check that the branch is on the
- * remote; a run does when it starts. `ended` is the operator's end of the item while it
+ * remote; a run does when it starts. `priority` says the item's queued starts go ahead of
+ * ordinary ones (`schemas/item-priority.ts`): its own, or from the items it is `part_of`;
+ * null when it has none. `ended` is the operator's end of the item while it
  * holds (`schemas/item-end.ts`): the item is at rest until a run on it starts or resumes
  * after the end, or a start waits on it in `queued` or `held`. Null when the item was
  * never ended, the end no longer holds, or its row could not be read (`end_unreadable`, by
@@ -353,6 +358,7 @@ export const itemReadSchema = z.object({
   links: z.array(itemReadLinkSchema),
   merged: itemMergeSchema.nullable(),
   landing: resolvedItemLandingSchema.nullable(),
+  priority: itemPrioritySchema.nullable(),
   ended: itemEndSchema.nullable(),
   workOrder: workOrderSchema.nullable(),
   dependsOn: z.array(itemDependencySchema),
@@ -379,6 +385,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listItemRulings'
       | 'getItemMerge'
       | 'getItemLanding'
+      | 'getItemPriority'
       | 'getHoldingItemEnd'
       | 'listItemLinks'
       | 'listItemAsks'
@@ -701,7 +708,7 @@ async function readEnd(source: ItemReadSource, itemId: string) {
   return { ended: end, degraded: [] };
 }
 
-/** The facts on the item itself: rulings, links, merge, landing, end, work order, dependsOn. */
+/** The facts on the item itself: rulings, links, merge, landing, priority, end, work order, dependsOn. */
 async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
   const itemId = item.id;
   const rulingReads = await source.store.listItemRulings(itemId);
@@ -720,6 +727,7 @@ async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
     links,
     merged: merge !== null && !('type' in merge) ? merge : null,
     landing: landing.landing,
+    priority: await source.store.getItemPriority(itemId),
     ended: end.ended,
     workOrder: workOrder.workOrder,
     dependsOn: await readDependsOn(source.store, itemId, linkReads),
@@ -820,6 +828,7 @@ export async function assembleItemRead(
     waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
       event: wait.event,
       about: wait.about,
+      subject: wait.subject,
       workflow: wait.workflowName,
       runId: wait.runId,
       waitingSince: wait.openedAt,

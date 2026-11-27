@@ -7,10 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The forge can assign one user to an issue and unassign one with `workitem.assignee.add` and `workitem.assignee.remove`, keeping the issue's other assignees. A user GitHub would not assign on that issue is refused with what to check, and a change GitHub answers but leaves undone is refused with what it showed; nothing is written in either case. `actor.self` says which account the forge plugin acts as for a repository, so a caller can assign that account without typing its login. The installed GitHub plugin answers them after `archon plugin update coleam00/Archon/plugins/forge-github` installs a release that includes them.
+
+## [0.16.0] - 2026-11-26
+
+An item records when it is done, a failure whose outcome is unknown stops its run instead of repeating it, and a stage can wait for a review on a pull request.
+
+### Breaking
+
+- `returns.final` is removed. A workflow that declares it fails to load, with a message naming the two replacements. List the outcomes that finish the run's item (a landed change, a dropped one) under `returns.ends`: a run that completes with one of them ends the item, and it leaves attention. Declare `observes: true` on a workflow whose runs act on an item without being steps of it (an advice stage, a shadow judgment, a check after a merge): such a run never stops, ends or moves its item. Every other quiet ending of a step now stops its item: a step that completes with an outcome not in `returns.ends`, leaves no ask and no wait, and starts no next step is listed as `stopped` in `archon workflow attention`. `archon validate workflows` warns for each outcome that would stop an item this way. (#6347)
+
+### Added
+
+- A failure whose outcome is unknown, where a node's side effects may already have happened, stops the run for the operator. Nothing continues or retries it by itself; the stopped run names the nodes concerned and offers resume or abandon. The stop belongs to the node that owns the unknown outcome, so a failure in an unrelated node does not inherit it, and a continued parent does not rerun an uncertain child. (#6354, #6380)
+- A wait can name the issue or pull request it is about with `subject: { kind, number }`, and an event wakes it by that subject. An item keyed by its issue can now wait for a review on its pull request. (#6416)
+- A binding with `wake` can carry what the woken stage needs: `{ input: <name> }` reads an input of the run that left the wait, `{ item: answers }` reads the answers on the wait's item, and `wake.checkout: waiting-run` hands on that run's checkout. A binding that maps something it cannot read is refused with the wait left open. (#6417)
+- An item that is the parent of a work order reads `open`, `done` or `unknown` from its members, and `archon item show` names the members that are open or could not be read. (#6345)
+- `archon item show` lists what an item depends on and each dependency's state. An item that waits on an open item through `depends_on` is waiting, not stopped, and returns to the stopped list when the dependency closes. (#6396)
+- A run paused on a provider's usage limit shows in `archon workflow attention`, one entry per provider, with each run's node, retry time and resume command. (#6344)
+- `archon trigger fire` takes repeatable `--input name=value`, so starting a stage on one issue needs no inputs file. (#6366)
+- A Claude workflow node accepts a plugin that the organization enforces at Managed scope without the node naming it. An unnamed plugin from any other scope still fails the node. (#6237)
+
 ### Changed
 
 - Commands no longer print `[archon] stripped N keys from <cwd> …` on every run in a repository with a `.env`. The keys are still stripped. `archon doctor` now names them ("N keys from <repo>/.env are kept out of runs …"), and every command that loads its env logs them as `env.cwd_keys_stripped` at debug, shown with `LOG_LEVEL=debug`. (#6362)
 - A start a run's end or settled asks caused follows its trigger file while it waits. Registering the file again with another mapping rebuilds a start not yet prepared with the new inputs, and a queued one leaves its queue and is prepared again; a file that no longer binds the start refuses it on its item. A queued start whose workflow alone changed runs as prepared. Re-registering bindings no longer needs the install hold. (#6225)
+- `archon validate workflows` refuses a pack binding to a workflow the pack's manifest does not list as an entrypoint. An installed pack runs only its listed entrypoints, so such a binding started nothing. (#6367)
+
+### Fixed
+
+- A `result_of` input in an installed pack reads that pack's own workflow. It used to look for a project workflow of the same name, so a stage of an installed pack could not read an earlier stage's result. (#6418)
+- An item with a recorded merge is no longer listed as stopped when a later run on it fails or stops. (#6343)
+- A run started without a reserved id gets a UUID, so a detached start passes resource admission. (#6405)
+- Updating a GitHub comment verifies the read-back by its API path, so an answer from another host for the same issue passes and a comment on another issue does not. (#6408)
+- An `--input` assignment without `=` is refused by its position, without echoing the malformed value into terminals, logs or run records. (#6388)
+- A commit that only moves a submodule pointer counts as one changed file in a run's change size, whatever the repository's `diff.ignoreSubmodules` setting. (#6386)
+- `archon forge --help` keeps a space between a 27-character command and its description. (#6385)
+- The documentation covers worktree bases in a repository without a remote, workflow types outside a git repository, and updating a from-source checkout that has no local `main`. (#6383, #6384, #6369)
 
 ## [0.15.0] - 2026-11-25
 

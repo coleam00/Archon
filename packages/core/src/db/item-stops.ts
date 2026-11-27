@@ -125,8 +125,20 @@ export async function recordRefusedStartStop(
     )
   ).rows[0];
   const causedBy = causingRun(receipt?.source_actor);
-  if (causedBy === undefined) return;
-  const source = { id: causedBy };
+  if (causedBy !== undefined) await recordRunRefusedStart(query, causedBy, refusal);
+}
+
+/**
+ * The write behind `recordRefusedStartStop`, on a run already known to have caused the
+ * start: `runId`'s end or settled asks, or the run whose met wait a wake binding was
+ * refused for. Nothing is written when that run is not a completed run on an item.
+ */
+export async function recordRunRefusedStart(
+  query: Query,
+  runId: string,
+  refusal: { limit: StoppedLimit; itemKey: string } | { refused: StoppedRefusal }
+): Promise<void> {
+  const source = { id: runId };
   // Locked, so a sibling binding's refusal in another transaction adds to this stop rather
   // than replacing it: a limit and the preparation refusals of one run's end are kept together.
   const limited =

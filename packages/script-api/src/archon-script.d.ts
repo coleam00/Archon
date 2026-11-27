@@ -696,6 +696,28 @@ declare module 'archon:script' {
         readonly text: string;
       };
     };
+    'actor.self': {
+      readonly request: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+      };
+      readonly result: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly actor: {
+          readonly host: string;
+          readonly id: string;
+          readonly login: string;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
+        };
+      };
+    };
     'pr.merge': {
       readonly request: {
         readonly ref: {
@@ -1431,6 +1453,92 @@ declare module 'archon:script' {
         readonly labels: ReadonlyArray<string>;
       };
     };
+    'workitem.assignee.add': {
+      readonly request: {
+        readonly ref: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+            readonly hostClaim?: true;
+          };
+          readonly number: number;
+        };
+        readonly login: string;
+      };
+      readonly result: {
+        readonly target: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+            readonly hostClaim?: true;
+          };
+          readonly number: number;
+        } | {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly outcome: 'applied';
+        readonly changed: boolean;
+        readonly workitem: {
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+          readonly kind: 'issue';
+          readonly url: string;
+          readonly state: 'open' | 'closed';
+        };
+        readonly assignees: ReadonlyArray<string>;
+      };
+    };
+    'workitem.assignee.remove': {
+      readonly request: {
+        readonly ref: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+            readonly hostClaim?: true;
+          };
+          readonly number: number;
+        };
+        readonly login: string;
+      };
+      readonly result: {
+        readonly target: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+            readonly hostClaim?: true;
+          };
+          readonly number: number;
+        } | {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly outcome: 'applied';
+        readonly changed: boolean;
+        readonly workitem: {
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+          readonly kind: 'issue';
+          readonly url: string;
+          readonly state: 'open' | 'closed';
+        };
+        readonly assignees: ReadonlyArray<string>;
+      };
+    };
     'repo.label.ensure': {
       readonly request: {
         readonly repo: {
@@ -1725,7 +1833,7 @@ declare module 'archon:script' {
       readonly exitCode?: number | null;
     };
     readonly mutation?: {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'workitem.assignee.add' | 'workitem.assignee.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;
@@ -1819,7 +1927,7 @@ declare module 'archon:script' {
         readonly descriptionDigest: string;
       };
     } | {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'workitem.assignee.add' | 'workitem.assignee.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;
@@ -1927,7 +2035,7 @@ declare module 'archon:script' {
       };
       readonly leaveBehind: string;
     } | {
-      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
+      readonly op: 'pr.merge' | 'checks.rerun' | 'pr.create' | 'pr.edit-body' | 'pr.ready' | 'pr.draft' | 'pr.close' | 'comment.upsert' | 'workitem.comment.upsert' | 'workitem.create' | 'workitem.close' | 'workitem.labels.set' | 'workitem.label.add' | 'workitem.label.remove' | 'workitem.assignee.add' | 'workitem.assignee.remove' | 'repo.label.ensure' | 'pr.thread.reply' | 'pr.thread.resolve' | 'pr.review.submit' | 'workitem.edit-body' | 'attachment.put';
       readonly target: {
         readonly repo: {
           readonly host: string;
@@ -2375,6 +2483,10 @@ declare module 'archon:script' {
     readonly waits: ReadonlyArray<{
       readonly event: string;
       readonly about: string;
+      readonly subject: {
+        readonly kind: 'pr' | 'issue';
+        readonly number: number;
+      } | null;
       readonly workflow: string;
       readonly runId: string;
       readonly waitingSince: string;
@@ -2394,6 +2506,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2454,6 +2567,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2489,6 +2603,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2524,6 +2639,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2558,6 +2674,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2595,6 +2712,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2620,6 +2738,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2667,6 +2786,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2704,6 +2824,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2728,6 +2849,7 @@ declare module 'archon:script' {
         readonly projectKey: string;
         readonly key: string;
       };
+      readonly priority: boolean;
       readonly revision: number;
       readonly labels: Readonly<Record<string, string>>;
       readonly pausedAt: string | null;
@@ -2899,6 +3021,14 @@ declare module 'archon:script' {
           readonly key: string;
         };
       };
+    } | null;
+    readonly priority: {
+      readonly own: boolean;
+      readonly inheritedFrom: ReadonlyArray<{
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      }>;
     } | null;
     readonly ended: {
       readonly kind: 'ended';
@@ -3133,6 +3263,10 @@ declare module 'archon:script' {
       readonly waits: ReadonlyArray<{
         readonly event: string;
         readonly about: string;
+        readonly subject: {
+          readonly kind: 'pr' | 'issue';
+          readonly number: number;
+        } | null;
         readonly workflow: string;
         readonly runId: string;
         readonly waitingSince: string;
@@ -3152,6 +3286,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3212,6 +3347,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3247,6 +3383,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3282,6 +3419,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3316,6 +3454,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3353,6 +3492,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3378,6 +3518,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3425,6 +3566,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3462,6 +3604,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3486,6 +3629,7 @@ declare module 'archon:script' {
           readonly projectKey: string;
           readonly key: string;
         };
+        readonly priority: boolean;
         readonly revision: number;
         readonly labels: Readonly<Record<string, string>>;
         readonly pausedAt: string | null;
@@ -3657,6 +3801,14 @@ declare module 'archon:script' {
             readonly key: string;
           };
         };
+      } | null;
+      readonly priority: {
+        readonly own: boolean;
+        readonly inheritedFrom: ReadonlyArray<{
+          readonly id: string;
+          readonly projectKey: string;
+          readonly key: string;
+        }>;
       } | null;
       readonly ended: {
         readonly kind: 'ended';

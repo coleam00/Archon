@@ -50,6 +50,7 @@ const read: ItemRead = {
     {
       kind: 'awaiting_response',
       project: null,
+      priority: false,
       revision: 1,
       labels: {},
       pausedAt: null,
@@ -157,6 +158,10 @@ const read: ItemRead = {
     branch: 'feat/order',
     from: { kind: 'part_of', item: { id: 'wo-row', projectKey: 'acme/web', key: 'WO-12' } },
   },
+  priority: {
+    own: false,
+    inheritedFrom: [{ id: 'wo-row', projectKey: 'acme/web', key: 'WO-12' }],
+  },
   ended: {
     kind: 'ended',
     id: 'end-1',
@@ -257,6 +262,7 @@ test('an item read prints its runs, open questions and answers', () => {
   const text = lines.join('\n');
   expect(text).toContain('Merged 2026-11-01T11:00Z: https://github.com/acme/web/pull/12');
   expect(text).toContain('Lands on: feat/order (part_of WO-12)');
+  expect(text).toContain('Priority: part_of WO-12');
   const endLine = lines.find(line => line.includes('Done by hand elsewhere.'));
   expect(endLine).toContain('2026-11-01T12:00Z');
   expect(endLine).toContain('alice');

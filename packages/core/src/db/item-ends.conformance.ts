@@ -333,7 +333,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     try {
       const planned = await completeWithAsks(harness, [ask('Keep the flag?')], { item: 'pr-7' });
       const waiting = await startOnItem(harness);
-      const wait = { event: 'checks', about: 'a'.repeat(40), within_minutes: 60 };
+      const wait = { event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 60 };
       await harness.store.completeWorkflowRun(waiting, { duration_ms: 1 }, undefined, {
         waits: [wait],
       });
