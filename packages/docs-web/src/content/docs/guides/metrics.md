@@ -524,9 +524,9 @@ each with one of the following shapes:
 
 Every figure on a card comes from one instrument identity: the card's metric's newest
 instrument and its `measured_by`. A breakdown count or a denominator recorded only by another
-instrument shows "not recorded", never 0, and so does a `cost_of` metric. Every metric a card
-counts (`metric`, `breakdown`, `numerator`, `denominator`, `cost_of`) must be a `count`; a
-`score` there shows "not recorded" too. A calibration is a score metric that `calibrates`
+instrument shows "not recorded", never 0, and so does a `cost_of` metric. On `count`, `ratio` and `cost_per` cards, the
+counted fields (`metric`, `breakdown`, `numerator`, `denominator`, `cost_of`) each require
+a count instrument. A score in one of those fields shows "not recorded". A calibration is a score metric that `calibrates`
 the numerator with one record per labelled case, 1 when caught and 0 when missed; it counts
 only at exactly the numerator's identity and with a mean between 0 and 1, otherwise the card
 says "not calibrated". The calibration is read from the last 365 days of records, which load
