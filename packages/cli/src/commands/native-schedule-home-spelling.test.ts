@@ -234,15 +234,33 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
       if (args[0] === 'bootstrap') loaded.push(args[2] ?? '');
     };
     process.env.ARCHON_HOME = alias;
+    const passPaths = targets.map(target =>
+      join(archonHome, 'schedules', `${target.id}.last-pass.json`)
+    );
+    const lastPass = { at: '2026-11-27T00:00:00.000Z', pid: 2, ok: false, parts: {} };
+    const wake = idPrefix === 'workflow-wake-';
+    if (wake) {
+      for (const [index, path] of passPaths.entries())
+        await writeFile(
+          path,
+          JSON.stringify(index === 1 ? lastPass : { ...lastPass, pid: 1, ok: true })
+        );
+    }
 
     expect(await invoke(command, 'status', schedules)).toMatchObject({
       installed: true,
       registered: true,
       path: files[1],
+      ...(wake ? { lastPass } : {}),
     });
     expect(await invoke(command, 'install', schedules)).toMatchObject({ path: files[1] });
     expect(loaded).toEqual([]);
     expect(await jobFiles()).toHaveLength(2);
+    expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: true });
+    expect(await jobFiles()).toEqual([]);
+    if (wake)
+      for (const path of passPaths)
+        await expect(readFile(path)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   testOnPosixHost(
@@ -311,7 +329,7 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
   });
 
   testOnPosixHost('status and remove reach an id written before this change', async () => {
-    const { archonHome, schedules, jobFiles } = await fixture(idPrefix);
+    const { archonHome, alias, schedules, jobFiles } = await fixture(idPrefix);
     const recordedHome = `${archonHome}${sep}`;
     const legacyId = idForHome(idPrefix, recordedHome);
     const path = await seedJob(schedules, recordedHome, legacyId);
@@ -322,13 +340,14 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
       await mkdir(join(archonHome, 'schedules'), { recursive: true });
       await writeFile(lastPassPath, JSON.stringify(lastPass));
     }
-    process.env.ARCHON_HOME = recordedHome;
-
-    expect(await invoke(command, 'status', schedules)).toMatchObject({
-      installed: true,
-      path,
-      ...(wake ? { lastPass } : {}),
-    });
+    for (const spelling of [recordedHome, archonHome, alias]) {
+      process.env.ARCHON_HOME = spelling;
+      expect(await invoke(command, 'status', schedules)).toMatchObject({
+        installed: true,
+        path,
+        ...(wake ? { lastPass } : {}),
+      });
+    }
     expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: true });
     expect(await jobFiles()).toEqual([]);
     if (wake) await expect(readFile(lastPassPath)).rejects.toMatchObject({ code: 'ENOENT' });
