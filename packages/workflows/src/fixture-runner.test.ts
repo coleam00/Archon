@@ -426,6 +426,7 @@ describe('runFixtures', () => {
         description: 'Preserve writable storage when termination cannot be proved',
         nodes: [
           { id: 'review', loop: { prompt: 'review', max_iterations: 1, until_bash: 'exit 0' } },
+          { id: 'later', loop: { prompt: 'review', max_iterations: 1, until_bash: 'exit 0' } },
         ],
       }),
     });
@@ -472,7 +473,7 @@ describe('runFixtures', () => {
       expect(scratch && existsSync(scratch)).toBe(true);
     } finally {
       execute.mockRestore();
-      if (workspace)
+      if (workspace && existsSync(workspace))
         await execFileAsync('git', ['worktree', 'remove', '--force', workspace], { cwd });
       if (artifacts) await removeTempTree(dirname(artifacts));
     }
