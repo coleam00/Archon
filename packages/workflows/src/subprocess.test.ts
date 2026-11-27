@@ -29,6 +29,7 @@ posixOnly('an owned probe group reports a surviving tree even after root success
     stdin: { value: null },
     stdout: { value: null },
     stderr: { value: null },
+    stdio: { value: [] },
   });
   const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
   const kill = spyOn(process, 'kill').mockImplementation(() => {
