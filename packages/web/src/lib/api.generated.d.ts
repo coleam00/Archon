@@ -7445,6 +7445,7 @@ export interface components {
       );
       wait?: components['schemas']['WorkflowWaitContext'];
       stop_reason?: components['schemas']['RunStopReason'];
+      total_cost_usd?: number;
     } & {
       [key: string]: unknown;
     };

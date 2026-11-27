@@ -9,6 +9,7 @@ import {
   createTestWorkflowHost,
 } from '../test-support/workflow-command-harness';
 import { PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
+import { serializeRunUsage } from '@archon/workflows/schemas/run-usage';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -1123,35 +1124,35 @@ describe('workflowGetCommand', () => {
   const usageCases: [string, Record<string, unknown>, string, string, string][] = [
     [
       'recorded numbers',
-      { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
+      serializeRunUsage({ costUsd: 0.024, tokens: { input: 8420, output: 2180 } }),
       '$0.024',
       '8420',
       '2180',
     ],
     [
       'reported zero',
-      { total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 },
+      serializeRunUsage({ costUsd: 0, tokens: { input: 0, output: 0 } }),
       '$0',
       '0',
       '0',
     ],
     [
       'tiny cost',
-      { total_cost_usd: 0.00000001, total_tokens_in: 2, total_tokens_out: 3 },
+      serializeRunUsage({ costUsd: 0.00000001, tokens: { input: 2, output: 3 } }),
       '$0.00000001',
       '2',
       '3',
     ],
     [
       'summed cost',
-      { total_cost_usd: 0.1 + 0.2, total_tokens_in: 2, total_tokens_out: 3 },
+      serializeRunUsage({ costUsd: 0.1 + 0.2, tokens: { input: 2, output: 3 } }),
       '$0.3',
       '2',
       '3',
     ],
     [
       'large cost',
-      { total_cost_usd: 1e21, total_tokens_in: 2, total_tokens_out: 3 },
+      serializeRunUsage({ costUsd: 1e21, tokens: { input: 2, output: 3 } }),
       '$1000000000000000000000',
       '2',
       '3',
@@ -1173,7 +1174,10 @@ describe('workflowGetCommand', () => {
     ],
     [
       'unknown tokens',
-      { total_cost_usd: 1, total_tokens_in: 2, total_tokens_out: 3, total_tokens_unknown: true },
+      {
+        ...serializeRunUsage({ costUsd: 1, tokens: { input: 2, output: 3 } }),
+        total_tokens_unknown: true,
+      },
       '$1',
       'unknown',
       'unknown',
@@ -1202,14 +1206,14 @@ describe('workflowGetCommand', () => {
     ['valid input axis', { total_tokens_in: 2, total_tokens_out: [] }, 'unknown', '2', 'unknown'],
     [
       'negative cost, fractional input and negative output',
-      { total_cost_usd: -1, total_tokens_in: 1.5, total_tokens_out: -2 },
+      { ...serializeRunUsage({ costUsd: -1 }), total_tokens_in: 1.5, total_tokens_out: -2 },
       'unknown',
       'unknown',
       'unknown',
     ],
     [
       'negative input and fractional output',
-      { total_cost_usd: 0.5, total_tokens_in: -2, total_tokens_out: 1.5 },
+      { ...serializeRunUsage({ costUsd: 0.5 }), total_tokens_in: -2, total_tokens_out: 1.5 },
       '$0.5',
       'unknown',
       'unknown',
@@ -1648,7 +1652,7 @@ describe('workflowGetCommand', () => {
   it('emits the raw run as a single clean JSON object', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const metadata = {
-      total_cost_usd: 0.024,
+      ...serializeRunUsage({ costUsd: 0.024 }),
       total_tokens_in: null,
       total_tokens_out: 'historical',
       total_tokens_unknown: null,
