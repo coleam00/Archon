@@ -136,33 +136,53 @@ function sortArrows(
   arrows.forEach((arrow, index) => {
     const a = seats.get(arrow.from);
     const b = seats.get(arrow.to);
-    if (a === undefined || b === undefined) return;
+    if (a === undefined || b === undefined || a.card === b.card) return;
     const id = `decl:${index.toString()}`;
-    if (isSendBack(a, b)) {
-      // Inside one card it is the card's own retry, not a way back: not drawn.
-      if (a.card === b.card) return;
-      const key = `${a.card.toString()}>${b.card.toString()}`;
-      const into = sendBacks.get(key) ?? {
-        id,
-        from: cards[a.card]?.id ?? '',
-        to: cards[b.card]?.id ?? '',
-        words: [],
-      };
-      for (const word of wordsOf(arrow.label))
-        if (!into.words.includes(word)) into.words.push(word);
-      sendBacks.set(key, into);
-      return;
-    }
-    if (a.card === b.card) return;
-    const parts = forwardParts(arrow.label, b.card > a.card + 1 ? cards[b.card]?.label : undefined);
-    const into = forward.get(a.card) ?? { id, left: a.card, parts: [] };
-    for (const part of parts) if (!into.parts.includes(part)) into.parts.push(part);
-    forward.set(a.card, into);
+    if (isSendBack(a, b)) addSendBack(sendBacks, cards, a, b, id, arrow.label);
+    else addForward(forward, cards, a, b, id, arrow.label);
   });
   return {
     forward: [...forward.values()].sort((p, q) => p.left - q.left),
     sendBacks: [...sendBacks.values()],
   };
+}
+
+/**
+ * A send-back between two cards joins the one route from its card to that card, its words
+ * added once each. One inside a card is that card's own retry and is never passed here.
+ */
+function addSendBack(
+  sendBacks: Map<string, SendBackArrow>,
+  cards: readonly MapCardDecl[],
+  a: Seat,
+  b: Seat,
+  id: string,
+  label: string | undefined
+): void {
+  const key = `${a.card.toString()}>${b.card.toString()}`;
+  const into = sendBacks.get(key) ?? {
+    id,
+    from: cards[a.card]?.id ?? '',
+    to: cards[b.card]?.id ?? '',
+    words: [],
+  };
+  for (const word of wordsOf(label)) if (!into.words.includes(word)) into.words.push(word);
+  sendBacks.set(key, into);
+}
+
+/** A forward arrow joins its source card's one hand-off, its parts added once each. */
+function addForward(
+  forward: Map<number, Forward>,
+  cards: readonly MapCardDecl[],
+  a: Seat,
+  b: Seat,
+  id: string,
+  label: string | undefined
+): void {
+  const parts = forwardParts(label, b.card > a.card + 1 ? cards[b.card]?.label : undefined);
+  const into = forward.get(a.card) ?? { id, left: a.card, parts: [] };
+  for (const part of parts) if (!into.parts.includes(part)) into.parts.push(part);
+  forward.set(a.card, into);
 }
 
 /**
