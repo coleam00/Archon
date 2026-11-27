@@ -6,7 +6,8 @@ import {
   matchForgeEvent,
   readForgeEventField,
 } from '@archon/forge';
-import { normalizeGitHubWebhook, reviewState } from './normalize-event';
+import { normalizeGitHubWebhook } from './normalize-event';
+import { commitCheckEvents, type ObservedEvent, reviewEvents } from './observed-events';
 export { githubSourceCapabilities as capabilities } from './normalize-event';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import {
@@ -144,7 +145,11 @@ function targetOf(
   wait: ObservedWait & { remote: string }
 ): ObserveTarget | { reason: string } {
   const field = binding.wake?.about.field;
-  if (binding.selector.kind === 'check.changed' && field === 'check.revision')
+  // One read of a commit's checks serves both: its per-check events and its settled one.
+  if (
+    (binding.selector.kind === 'check.changed' && field === 'check.revision') ||
+    (binding.selector.kind === 'checks.settled' && field === 'checks.revision')
+  )
     return { kind: 'commit', remote: wait.remote, revision: wait.about };
   if (binding.selector.kind === 'review.changed' && field === 'review.commit') {
     const { subject } = wait;
@@ -158,74 +163,28 @@ function targetOf(
   return { reason: `${binding.selector.kind} wakes about ${String(field)} are not observed` };
 }
 
-/**
- * The events a webhook would have carried for what one target reads, each with the key that
- * makes it one delivery. Built in a fixed key order, so the same state digests the same on
- * every pass.
- */
+/** The events one target's read makes, each with the key that makes it one delivery. */
 async function targetEvents(
   target: ObserveTarget,
   forge: ObserveInput['forge']
-): Promise<{ host: string; events: { key: string; event: ForgeEvent }[] }> {
+): Promise<{ host: string; events: ObservedEvent[] }> {
   if (target.kind === 'commit') {
     const observed = await forge.commitChecks({ remote: target.remote, revision: target.revision });
-    const repo = { host: observed.repo.host, path: observed.repo.path };
-    const events = observed.units.map(unit => ({
-      key: `check:${repo.host}/${repo.path}@${observed.revision}:${unit.unit.kind}:${unit.unit.id}:${unit.phase}:${unit.nativeResult ?? ''}`,
-      event: {
-        kind: 'check.changed',
-        action: 'changed',
-        repo,
-        revision: observed.revision,
-        unit: { kind: unit.unit.kind, id: unit.unit.id, name: unit.unit.name },
-        nativeState: unit.nativeState,
-        phase: unit.phase,
-        nativeResult: unit.nativeResult,
-        result: unit.result,
-        // A check event names no subject; no binding field reads its pull requests.
-        pullRequests: [],
-      },
-    })) satisfies { key: string; event: ForgeEvent }[];
-    return { host: repo.host, events };
+    return { host: observed.repo.host, events: commitCheckEvents(observed) };
   }
   const observed = await forge.prReviews({ remote: target.remote, number: target.number });
-  const pr = {
-    repo: { host: observed.ref.repo.host, path: observed.ref.repo.path },
-    number: observed.ref.number,
-  };
-  const events: { key: string; event: ForgeEvent }[] = [];
-  for (const item of observed.items) {
-    // A pending review is not submitted yet; a webhook would not have carried it.
-    if (item.kind !== 'review' || item.state === null || /^pending$/i.test(item.state)) continue;
-    const nativeState = item.state.toLowerCase();
-    const action = nativeState === 'dismissed' ? 'dismissed' : 'submitted';
-    events.push({
-      key: `review:${pr.repo.host}/${pr.repo.path}#${String(pr.number)}:${item.id}:${action}`,
-      event: {
-        kind: 'review.changed',
-        action,
-        pr,
-        review: {
-          id: item.id,
-          state: reviewState(nativeState),
-          nativeState,
-          commit: item.commit,
-          author: item.author,
-        },
-      },
-    });
-  }
-  return { host: pr.repo.host, events };
+  return { host: observed.ref.repo.host, events: reviewEvents(observed) };
 }
 
 /**
- * The events a webhook would have delivered for the state each open wait names, as
- * acceptances of the bindings that wake those waits. Only a binding that wakes a wait is
- * evaluated here: observing checks and reviews must not start a binding nobody waits on,
- * which would also start twice on an install that receives webhooks too. (Label bindings
- * start without a wait; `observeLabels` handles them.) Each acceptance is for one binding
- * and the wait's item, so a wait that opens later on another item, or for another binding,
- * is a new delivery and not a replay of one made before it existed.
+ * The events a webhook would have delivered for the state each open wait names, and the
+ * settled state of a commit's checks, as acceptances of the bindings that wake those waits.
+ * Only a binding that wakes a wait is evaluated here: observing checks and reviews must not
+ * start a binding nobody waits on. On a source that receives webhooks only `checks.settled`
+ * wakes are observed; see `planTargets`. (Label bindings start without a wait;
+ * `observeLabels` handles them.) Each acceptance is for one binding and the wait's item, so
+ * a wait that opens later on another item, or for another binding, is a new delivery and not
+ * a replay of one made before it existed.
  */
 async function observeWaits(
   sourceInstanceId: string,
@@ -283,7 +242,14 @@ function planTargets(
       itemKey: wait.itemKey,
     };
     const bindings = config.bindings.filter(
-      binding => binding.wake?.workflow === wait.workflowName && binding.wake.wait === wait.event
+      binding =>
+        binding.wake?.workflow === wait.workflowName &&
+        binding.wake.wait === wait.event &&
+        // A source that receives webhooks gets checks and reviews by webhook. Observing them
+        // too would record the same state under a second delivery id, which can wake a stage
+        // that waits again at the same commit. No webhook carries `checks.settled`, so that
+        // wake is observed on every source. The others are not unserved: the webhook serves them.
+        (config.webhookSecretEnv === undefined || binding.selector.kind === 'checks.settled')
     );
     // Another source may serve a wait this one binds nothing to.
     if (bindings.length === 0) continue;
@@ -313,7 +279,7 @@ function waitAcceptances(
   receivedAt: string,
   wait: ObservedWaitRef,
   binding: GitHubSourceBinding,
-  events: readonly { key: string; event: ForgeEvent }[]
+  events: readonly ObservedEvent[]
 ): { acceptances: SourceReceiptAcceptance[]; unserved: SourceObservation['unserved'] } {
   const acceptances: SourceReceiptAcceptance[] = [];
   const rejections = new Set<string>();

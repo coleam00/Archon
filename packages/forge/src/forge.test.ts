@@ -6,6 +6,7 @@ import {
   forgeEventEnvelopeSchema,
   mapForgeInputs,
   matchForgeEvent,
+  settledChecks,
   sourceActorSchema,
 } from './index';
 
@@ -19,6 +20,28 @@ describe('source actor account type', () => {
   });
   test('refuses a value outside the named kinds', () => {
     expect(sourceActorSchema.safeParse({ ...base, type: 'Bot' }).success).toBe(false);
+  });
+});
+
+describe('settled checks', () => {
+  const summary = (
+    state: 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown',
+    counts: Partial<Record<'green' | 'red' | 'pending' | 'gated' | 'unknown', number>>
+  ) => {
+    const full = { green: 0, red: 0, pending: 0, gated: 0, unknown: 0, ...counts };
+    const total = Object.values(full).reduce((sum, count) => sum + count, 0);
+    return { state, counts: { total, ...full } };
+  };
+  test.each([
+    ['one check still pending', summary('pending', { green: 2, pending: 1 }), null, null],
+    ['a failure while another still runs', summary('red', { red: 1, pending: 1 }), null, null],
+    ['all concluded green', summary('green', { green: 3 }), null, 'green'],
+    ['all concluded with a failure', summary('red', { green: 2, red: 1 }), null, 'red'],
+    ['no checks registered yet', summary('none', {}), null, null],
+    ['workflow runs waiting for approval', summary('none', {}), true, 'gated'],
+    ['green with runs waiting for approval', summary('green', { green: 1 }), true, 'gated'],
+  ] as const)('%s', (_name, checks, approvalPending, expected) => {
+    expect(settledChecks({ summary: checks, approvalPending })).toBe(expected);
   });
 });
 

@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { checkChangedEventSchema, type CheckResult } from './events';
+import {
+  checkChangedEventSchema,
+  checksStateSchema,
+  type CheckResult,
+  type ChecksState,
+  type SettledChecksResult,
+} from './events';
 import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
   actorSelfRequestSchema,
@@ -53,8 +59,7 @@ import {
   rerunGroupSchema,
 } from './checks';
 
-export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
-export type ChecksState = z.infer<typeof checksStateSchema>;
+export { checksStateSchema, type ChecksState } from './events';
 
 /**
  * How a concluded check's result gates. `action_required` waits on a maintainer's
@@ -523,4 +528,22 @@ export function summarizeChecks(
     (['red', 'gated', 'unknown', 'pending', 'green'] as const).find(value => counts[value] > 0) ??
     'none';
   return { state, counts };
+}
+
+/**
+ * What a set of checks came to, or null while it has not settled. The pending count decides,
+ * not the state: the state is red as soon as one check fails, while others still run. No
+ * checks at all is not settled either: right after a push none may be registered yet.
+ * Workflow runs waiting for a maintainer's approval are not finished, but nothing more
+ * happens until someone acts, so they settle as gated.
+ */
+export function settledChecks(set: {
+  summary: z.infer<typeof checksSummarySchema>;
+  approvalPending?: boolean | null;
+}): SettledChecksResult | null {
+  const { state, counts } = set.summary;
+  if (counts.pending > 0) return null;
+  if (set.approvalPending === true && (state === 'green' || state === 'none')) return 'gated';
+  if (state === 'none' || state === 'pending') return null;
+  return state;
 }

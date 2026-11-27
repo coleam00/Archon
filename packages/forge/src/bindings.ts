@@ -48,6 +48,8 @@ export const forgeEventFieldSchema = z.enum([
   'check.nativeResult',
   'check.phase',
   'check.result',
+  'checks.revision',
+  'checks.result',
 ]);
 export type ForgeEventField = z.infer<typeof forgeEventFieldSchema>;
 
@@ -142,6 +144,10 @@ const rawForgeEventSelectorSchema = z.discriminatedUnion('kind', [
     kind: z.literal('check.changed'),
     actions: z.tuple([z.literal('changed')]),
   }),
+  selectorIdentitySchema.extend({
+    kind: z.literal('checks.settled'),
+    actions: z.tuple([z.literal('settled')]),
+  }),
 ]);
 const fieldsByKind = {
   'issue.lifecycle': new Set<ForgeEventField>([
@@ -218,6 +224,14 @@ const fieldsByKind = {
     'check.phase',
     'check.result',
   ]),
+  'checks.settled': new Set<ForgeEventField>([
+    'event.kind',
+    'event.action',
+    'repository.host',
+    'repository.path',
+    'checks.revision',
+    'checks.result',
+  ]),
 } as const;
 
 /** Whether events of `kind` can carry `field`, so a binding may read it. */
@@ -229,11 +243,14 @@ export function isForgeEventFieldAvailable(
 }
 
 export const forgeEventSelectorSchema = rawForgeEventSelectorSchema.superRefine((selector, ctx) => {
-  if (selector.kind === 'check.changed' && selector.subject !== undefined) {
+  if (
+    (selector.kind === 'check.changed' || selector.kind === 'checks.settled') &&
+    selector.subject !== undefined
+  ) {
     ctx.addIssue({
       code: 'custom',
       path: ['subject'],
-      message: 'check.changed has no single subject',
+      message: `${selector.kind} has no single subject`,
     });
   } else if (selector.kind === 'issue.lifecycle' && selector.subject?.kind === 'pr') {
     ctx.addIssue({
@@ -308,6 +325,7 @@ function eventRepo(event: ForgeEvent): RepoRef {
     case 'comment.changed':
       return event.subject.ref.repo;
     case 'check.changed':
+    case 'checks.settled':
       return event.repo;
   }
 }
@@ -323,6 +341,7 @@ function eventSubject(event: ForgeEvent): { kind: 'issue' | 'pr'; number: number
     case 'comment.changed':
       return { kind: event.subject.kind, number: event.subject.ref.number };
     case 'check.changed':
+    case 'checks.settled':
       return undefined;
   }
 }
@@ -380,6 +399,8 @@ const FIELD_READERS: Readonly<Record<ForgeEventField, FieldReader>> = {
   'check.nativeResult': fieldOf('check.changed', event => event.nativeResult),
   'check.phase': fieldOf('check.changed', event => event.phase),
   'check.result': fieldOf('check.changed', event => event.result),
+  'checks.revision': fieldOf('checks.settled', event => event.revision),
+  'checks.result': fieldOf('checks.settled', event => event.result),
 };
 
 /** The field's value on `event`, or undefined when the event does not carry it. */

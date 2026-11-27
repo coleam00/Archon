@@ -113,6 +113,26 @@ export const checkChangedEventSchema = z.object({
   pullRequests: z.array(prRefSchema),
 });
 
+/** The combined state of a set of checks, as `summarizeChecks` reports it. */
+export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
+export type ChecksState = z.infer<typeof checksStateSchema>;
+
+/** What a commit's checks came to once none is still pending; see `settledChecks`. */
+export const settledChecksResultSchema = checksStateSchema.exclude(['none', 'pending']);
+export type SettledChecksResult = z.infer<typeof settledChecksResultSchema>;
+
+/**
+ * A commit's checks have settled: none is still pending. No forge sends this; a source
+ * builds it from a read of the commit's checks, so it is observed, never received.
+ */
+export const checksSettledEventSchema = z.object({
+  kind: z.literal('checks.settled'),
+  action: z.literal('settled'),
+  repo: repoRefSchema,
+  revision: gitObjectIdSchema,
+  result: settledChecksResultSchema,
+});
+
 export const forgeEventSchema = z.discriminatedUnion('kind', [
   issueLifecycleEventSchema,
   prLifecycleEventSchema,
@@ -120,6 +140,7 @@ export const forgeEventSchema = z.discriminatedUnion('kind', [
   commentChangedEventSchema,
   reviewChangedEventSchema,
   checkChangedEventSchema,
+  checksSettledEventSchema,
 ]);
 export type ForgeEvent = z.infer<typeof forgeEventSchema>;
 
