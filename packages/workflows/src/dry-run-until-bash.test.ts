@@ -181,7 +181,7 @@ describe('dry-run until_bash', () => {
               : 'while :; do :; done';
       let pid: number | undefined;
       const alive = () => {
-        if (pid === undefined) return false;
+        if (pid === undefined || pid <= 0) return false;
         try {
           process.kill(pid, 0);
           return true;
