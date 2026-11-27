@@ -20,6 +20,9 @@ worktree:
   enabled: false
 mutates_checkout: false
 
+# It records metrics about many items and is a step of none.
+observes: true
+
 nodes:
   - id: cases
     script: cases
