@@ -40,6 +40,7 @@
     "./item-hold": "./src/item-hold.ts",
     "./start-limit": "./src/start-limit.ts",
     "./pack-graph": "./src/pack-graph.ts",
+    "./pack-binding-rule": "./src/pack-binding-rule.ts",
     "./workflow-notice": "./src/workflow-notice.ts",
     "./end-turn-request": "./src/end-turn-request.ts",
     "./run-attention-resolution": "./src/run-attention-resolution.ts",

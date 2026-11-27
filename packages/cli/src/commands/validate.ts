@@ -36,7 +36,7 @@ import { packWakeInputProblems } from '@archon/core/workflows/declared-inputs';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
-import { manifestBindingRefusals, rootPackDirs } from '@archon/workflows/pack-graph';
+import { manifestBindingRefusals, rootPackDirs } from '@archon/workflows/pack-binding-rule';
 import { PACK_DECLARATION_PATH } from '@archon/workflows/pack-settings';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { discoverInstalledForgePlugins } from './forge';

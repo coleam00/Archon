@@ -10,10 +10,10 @@ import {
   buildPackGraph,
   declaredStops,
   type InstalledArrow,
-  manifestBindingRefusals,
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
+import { manifestBindingRefusals } from './pack-binding-rule';
 import {
   packAsksSettledBindingSchema,
   packEventBindingSchema,

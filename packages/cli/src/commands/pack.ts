@@ -58,11 +58,10 @@ import {
   type PackGraph,
   type PackGraphLink,
   bindingWorkflowNames,
-  packBindingScope,
-  packBindingWorkflowMissing,
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
+import { packBindingScope, packBindingWorkflowMissing } from '@archon/workflows/pack-binding-rule';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
@@ -686,8 +685,7 @@ async function generateChecked(
     const binding = pack.bindings[id];
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
-    // A workflow the pack does not provide is refused before its inputs are read, as
-    // validate and an installed copy refuse it.
+    // An unprovided workflow is refused before its inputs are read, as validate refuses it.
     for (const name of bindingWorkflowNames(binding)) workflowNameFor(pack, id, name);
     assertWakeInputs(id, binding, pack);
     for (const item of generate(id, binding, pack, target)) {
