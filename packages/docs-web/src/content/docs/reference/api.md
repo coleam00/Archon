@@ -352,6 +352,9 @@ With `open=true`, unreadable failed candidates are excluded and server logs reco
 affected failed runs eligible; server logs record `open_work_ancestry_unreadable` with
 `workflowRunId` and `ancestorRunId`. These diagnostics omit stored contents and parser errors.
 Database query failures still return HTTP 500.
+Candidates with cyclic ancestry are excluded from the open inbox, with the ID-only
+`open_work_ancestry_cycle` diagnostic (`workflowRunId` and `ancestorRunId`).
+The stored run and its history remain unchanged and available through ordinary listing.
 
 For `open=true`, a supplied `limit` must convert to a positive finite integer;
 otherwise the request returns HTTP 400 (`Limit must be a positive integer`).

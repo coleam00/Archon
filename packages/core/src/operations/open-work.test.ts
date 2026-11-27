@@ -53,31 +53,41 @@ test('open work reuses reads per run and item only within one listing', async ()
   expect(store.getHoldingItemEnd).toHaveBeenCalledTimes(3);
 });
 
-test('open work rejects cyclic ancestry before repeating a read', async () => {
-  const cyclic = {
-    ...mockWorkflowRun,
-    id: 'cyclic',
-    status: 'failed' as const,
-    parent_run_id: 'cyclic',
-  };
-  const repeatedRead = new Error('Repeated ancestry read');
-  const result = readOpenWorkRuns(
-    {
-      findOpenWorkRuns: async () => [cyclic],
-      getWorkflowRunForAttention: async () => {
-        throw repeatedRead;
+test.each(['self', 'two-run'])(
+  'open work isolates %s cycles before applying the limit',
+  async mode => {
+    const cyclic = {
+      ...mockWorkflowRun,
+      id: 'cyclic',
+      status: 'failed' as const,
+      parent_run_id: mode === 'self' ? 'cyclic' : 'other',
+    };
+    const other = { ...cyclic, id: 'other', parent_run_id: cyclic.id };
+    const healthy = {
+      ...mockWorkflowRun,
+      id: 'healthy',
+      status: 'failed' as const,
+      item_id: null,
+      parent_run_id: null,
+    };
+    const ancestry = mock(async () => other);
+    const result = await readOpenWorkRuns(
+      {
+        findOpenWorkRuns: async () => [cyclic, healthy],
+        getWorkflowRunForAttention: ancestry,
+        getHoldingItemEnd: async () => null,
+        listItemStarts: async () => [],
       },
-      getHoldingItemEnd: async () => null,
-      listItemStarts: async () => [],
-    },
-    { limit: 1 }
-  );
-  await expect(result).rejects.toBeInstanceOf(Error);
-  await expect(result).rejects.not.toBe(repeatedRead);
-});
+      { limit: 1 }
+    );
+    expect(result).toEqual([healthy]);
+    expect(ancestry).toHaveBeenCalledTimes(mode === 'self' ? 0 : 1);
+  }
+);
 
 test('open work propagates an ancestor query failure', async () => {
-  const failure = new Error('Ancestor query failed');
+  // Matching prose must not turn a store failure into structural-corruption containment.
+  const failure = new Error('Cyclic workflow run ancestry at parent');
   await expect(
     readOpenWorkRuns(
       {

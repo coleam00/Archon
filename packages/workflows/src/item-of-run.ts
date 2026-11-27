@@ -1,6 +1,13 @@
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
 
+export class WorkflowRunAncestryCycleError extends Error {
+  constructor(readonly ancestorRunId: string) {
+    super(`Cyclic workflow run ancestry at ${ancestorRunId}`);
+    this.name = 'WorkflowRunAncestryCycleError';
+  }
+}
+
 /**
  * The item a run belongs to through its root, or null when its ancestry or root item is
  * unavailable. Cyclic ancestry rejects the read. A `workflow:` child carries no direct item id.
@@ -13,8 +20,7 @@ export async function readRunItemId(
   if (root === null) return null;
   const seen = new Set<string>([root.id]);
   while (root.parent_run_id !== null) {
-    if (seen.has(root.parent_run_id))
-      throw new Error(`Cyclic workflow run ancestry at ${root.parent_run_id}`);
+    if (seen.has(root.parent_run_id)) throw new WorkflowRunAncestryCycleError(root.parent_run_id);
     seen.add(root.parent_run_id);
     const parent = await store.getWorkflowRun(root.parent_run_id);
     if (parent === null) return null;

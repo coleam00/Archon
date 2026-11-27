@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
-import { readRunItemId } from './item-of-run';
+import { readRunItemId, WorkflowRunAncestryCycleError } from './item-of-run';
 import { heldRunOf } from './attention-queue';
 import type { ResourceStartRequestInspection } from './resource-start-store';
 import type { ItemMerge } from './schemas/item-merge';
@@ -58,7 +58,8 @@ test('root item resolution rejects a distinct-run cycle before a repeated read',
     },
     first
   );
-  await expect(result).rejects.toBeInstanceOf(Error);
+  await expect(result).rejects.toBeInstanceOf(WorkflowRunAncestryCycleError);
+  await expect(result).rejects.toMatchObject({ ancestorRunId: first.id });
   await expect(result).rejects.not.toBe(repeatedRead);
 });
 

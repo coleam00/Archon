@@ -113,6 +113,65 @@ async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> 
 }
 
 export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness>): void {
+  test.each(['self', 'two-run'] as const)(
+    'open work contains a persisted %s ancestry cycle and preserves independent work',
+    async mode => {
+      const harness = await makeHarness();
+      const logs: string[] = [];
+      const previousLevel = rootLogger.level;
+      rootLogger.level = 'error';
+      try {
+        const cyclic = await harness.store.createWorkflowRun({
+          workflow_name: 'cyclic',
+          user_message: 'private-cycle-sentinel',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+        });
+        const other =
+          mode === 'two-run'
+            ? await harness.store.createWorkflowRun({
+                workflow_name: 'other',
+                user_message: '',
+                codebase_id: CONFORMANCE_CODEBASE_ID,
+                parent_run_id: cyclic.id,
+              })
+            : null;
+        const healthy = await harness.store.createWorkflowRun({
+          workflow_name: 'healthy',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+        });
+        if (other !== null) {
+          await harness.store.claimPendingWorkflowRun(other.id);
+          await harness.store.completeWorkflowRun(other.id, { duration_ms: 1 });
+        }
+        await harness.store.failWorkflowRun(cyclic.id, 'failed');
+        await harness.store.failWorkflowRun(healthy.id, 'failed');
+        await backdate(harness, healthy.id, 1);
+        await harness.db.query(
+          'UPDATE remote_agent_workflow_runs SET parent_run_id = $1 WHERE id = $2',
+          [other?.id ?? cyclic.id, cyclic.id]
+        );
+        setLogSink(line => logs.push(line));
+        expect(await openWorkIds(harness, 1)).toEqual([healthy.id]);
+        expect(logs.map(line => JSON.parse(line))).toContainEqual(
+          expect.objectContaining({
+            msg: 'open_work_ancestry_cycle',
+            workflowRunId: cyclic.id,
+            ancestorRunId: cyclic.id,
+          })
+        );
+        expect(logs.join('')).not.toContain('private-cycle-sentinel');
+        expect((await harness.store.getWorkflowRun(cyclic.id))?.parent_run_id).toBe(
+          other?.id ?? cyclic.id
+        );
+      } finally {
+        setLogSink(undefined);
+        rootLogger.level = previousLevel;
+        await harness.close();
+      }
+    }
+  );
+
   test('open work contains an older unreadable candidate before applying a small limit', async () => {
     const harness = await makeHarness();
     try {
