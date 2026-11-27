@@ -247,7 +247,7 @@ describe('archon pack bindings', () => {
     expect(after.binding.resource).toBe('fixture:host-1:after');
     expect(after.binding.launch.inputs).toEqual({ sweep_binding: sweepPath });
     const printed = logSpy.mock.calls.flat().join('\n');
-    expect(printed).toContain(`archon trigger fire --config '${sweepPath}'`);
+    expect(printed).toContain(`archon trigger fire --binding '${sweepPath}'`);
     expect(printed).toContain(`archon trigger schedule install --config '${sweepPath}'`);
   });
 
@@ -262,7 +262,7 @@ describe('archon pack bindings', () => {
     expect(config.binding.resource).toBe('fixture:git.example.com/acme/widgets:follow-up');
     const printed = logSpy.mock.calls.flat().join('\n');
     expect(printed).toContain('Fire-only bindings');
-    expect(printed).toContain(`archon trigger fire --config '${join(out, file)}'`);
+    expect(printed).toContain(`archon trigger fire --binding '${join(out, file)}'`);
     expect(printed).not.toContain('schedule install');
   });
 

@@ -189,10 +189,29 @@ test('trigger.fire names the item, declines one, or leaves the host to inherit i
     trigger.fire('/bindings/next.json', {}, options);
     return JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
   };
-  const config = ['--config', '/bindings/next.json'];
-  expect(sent({ item: 'item-2' })).toEqual([...config, '--item', 'item-2']);
-  expect(sent({ item: null })).toEqual([...config, '--no-item']);
-  expect(sent({})).toEqual(config);
+  const binding = ['--binding', '/bindings/next.json'];
+  expect(sent({ item: 'item-2' })).toEqual([...binding, '--item', 'item-2']);
+  expect(sent({ item: null })).toEqual([...binding, '--no-item']);
+  expect(sent({})).toEqual(binding);
+});
+
+test('trigger.fire passes the config layer and the model rebindings it was given', () => {
+  const sent = (options: Parameters<typeof trigger.fire>[2]): unknown => {
+    trigger.fire('/bindings/next.json', {}, options);
+    return JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
+  };
+  // The binding file, then the two choices for these starts, in the order a reader expects.
+  expect(sent({ config: '/cfg/one-off.yaml', model: ['large=pi/x', '@reviewer=pi/y'] })).toEqual([
+    '--binding',
+    '/bindings/next.json',
+    '--config',
+    '/cfg/one-off.yaml',
+    '--model',
+    'large=pi/x',
+    '--model',
+    '@reviewer=pi/y',
+  ]);
+  expect(sent({ model: [] })).toEqual(['--binding', '/bindings/next.json']);
 });
 
 test('notice sends its text after the labels, and a refusal is the host error', () => {

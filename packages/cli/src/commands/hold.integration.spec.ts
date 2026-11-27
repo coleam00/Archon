@@ -119,11 +119,13 @@ test('a fire under the hold is listed as held and starts exactly once after the 
   const hold = (set as { hold: { setBy: string; setAt: string } }).hold;
   expect(hold.setBy).toBe('operator');
 
-  const [fired] = await jsonLines(() => triggerCommand(host, 'fire', [], { config }, { dispatch }));
+  const [fired] = await jsonLines(() =>
+    triggerCommand(host, 'fire', [], { binding: config }, { dispatch })
+  );
   expect(fired).toMatchObject({ hold, bindings: [{ status: 'pending', disposition: null }] });
   const receiptId = (fired as { id: string }).id;
   const [firedElsewhere] = await jsonLines(() =>
-    triggerCommand(host, 'fire', [], { config: elsewhere }, { dispatch })
+    triggerCommand(host, 'fire', [], { binding: elsewhere }, { dispatch })
   );
   const elsewhereId = (firedElsewhere as { id: string }).id;
   expect(dispatched).toEqual([]);

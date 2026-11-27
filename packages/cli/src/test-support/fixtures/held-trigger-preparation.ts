@@ -17,8 +17,8 @@ const dispatch = async (id: string): Promise<null> => {
   admitted.push(id);
   return null;
 };
-await triggerCommand(host, 'fire', [], { config }, { dispatch });
-await triggerCommand(host, 'fire', [], { config }, { dispatch });
+await triggerCommand(host, 'fire', [], { binding: config }, { dispatch });
+await triggerCommand(host, 'fire', [], { binding: config }, { dispatch });
 const [requestId] = admitted;
 if (admitted.length !== 1 || !requestId)
   throw new Error('Expected one admitted and one queued start');

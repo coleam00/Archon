@@ -225,7 +225,9 @@ export async function runTrigger({
     subcommand,
     positionals.slice(2),
     {
+      binding: typeof values.binding === 'string' ? values.binding : undefined,
       config: typeof values.config === 'string' ? values.config : undefined,
+      model: Array.isArray(values.model) ? (values.model as string[]) : undefined,
       host: typeof values.host === 'string' ? values.host : undefined,
       owner: typeof values.owner === 'string' ? values.owner : undefined,
       deliveryId: typeof values['delivery-id'] === 'string' ? values['delivery-id'] : undefined,

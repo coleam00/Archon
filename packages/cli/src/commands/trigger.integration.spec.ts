@@ -359,7 +359,7 @@ describe('trigger CLI durable execution', () => {
     const fire = await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
       'trigger',
       'fire',
-      '--config',
+      '--binding',
       configPath,
     ]);
     const failed = await waitFor(() => {
@@ -420,7 +420,7 @@ describe('trigger CLI durable execution', () => {
         fixture.cliPath,
         fixture.projectRoot,
         fixture.archonHome,
-        ['trigger', 'fire', '--config', configPath],
+        ['trigger', 'fire', '--binding', configPath],
         false
       );
       expect(fire.exitCode).not.toBe(0);
@@ -460,7 +460,7 @@ describe('trigger CLI durable execution', () => {
     // The first run fires one follow-up start and names no item for it, then holds the
     // slot until the test releases it, so the follow-up stays queued meanwhile.
     fixture.writeWorkflow(
-      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; for _ in $(seq 600); do [ -e '${release}' ] && break; sleep 0.1; done; [ -e '${release}' ] || exit 1; }`
+      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --binding '${configPath}'; for _ in $(seq 600); do [ -e '${release}' ] && break; sleep 0.1; done; [ -e '${release}' ] || exit 1; }`
     );
     const invoke = (args: string[], expectSuccess?: boolean) =>
       runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args, expectSuccess);
@@ -479,7 +479,7 @@ describe('trigger CLI durable execution', () => {
         `${String(count)} completed runs`
       );
 
-    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'item-1']);
+    await invoke(['trigger', 'fire', '--binding', configPath, '--item', 'item-1']);
     // The follow-up start shares the first run's checkout, so it waits for a drain.
     const follow = await waitFor(
       () => fixture.requests().find(request => request.status === 'queued'),
@@ -568,7 +568,7 @@ describe('trigger CLI durable execution', () => {
       );
     // Before anything is recorded, a run on the item is cut from the base as before. The
     // fire also registers the project, which the record commands resolve the item in.
-    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'WO-1']);
+    await invoke(['trigger', 'fire', '--binding', configPath, '--item', 'WO-1']);
     await completed(1, 'the first run to complete').catch(error => {
       throw new Error(`${String(error)} ${JSON.stringify(fixture.runs())}`);
     });
@@ -579,7 +579,7 @@ describe('trigger CLI durable execution', () => {
     // The file's static base is the same for every item it starts; the item's branch wins.
     config.binding.launch.isolation = { kind: 'worktree', baseOverride: 'main' };
     writeFileSync(configPath, JSON.stringify(config));
-    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'member']);
+    await invoke(['trigger', 'fire', '--binding', configPath, '--item', 'member']);
     await completed(2, 'the member run to complete');
     expect(readFileSync(out, 'utf8').trim()).toBe('feat/order from-feat');
     const read = itemReadSchema.parse(
@@ -596,7 +596,7 @@ describe('trigger CLI durable execution', () => {
     // A branch the remote does not have refuses the run before its node.
     writeFileSync(out, 'untouched');
     await invoke(['workflow', 'landing', '--item', 'lonely', '--branch', 'feat/missing']);
-    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'lonely']);
+    await invoke(['trigger', 'fire', '--binding', configPath, '--item', 'lonely']);
     const failed = await waitFor(
       () => fixture.runs().find(run => run.status === 'failed'),
       'the lonely run to be refused'
@@ -607,7 +607,7 @@ describe('trigger CLI durable execution', () => {
     // An in-place stage cannot be cut from the landing branch, so it is refused too.
     config.binding.launch.isolation = { kind: 'in-place' };
     writeFileSync(configPath, JSON.stringify(config));
-    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'member']);
+    await invoke(['trigger', 'fire', '--binding', configPath, '--item', 'member']);
     const inPlace = await waitFor(() => {
       const refused = fixture.runs().filter(run => run.status === 'failed');
       return refused.length === 2 ? refused.find(run => run.id !== failed.id) : undefined;
@@ -654,7 +654,7 @@ describe('trigger CLI durable execution', () => {
         fixture.cliPath,
         fixture.projectRoot,
         fixture.archonHome,
-        ['trigger', 'fire', '--config', configPath, ...args],
+        ['trigger', 'fire', '--binding', configPath, ...args],
         expectSuccess
       );
 
@@ -704,7 +704,7 @@ describe('trigger CLI durable execution', () => {
     const otherConfig = await writeOtherProject(root);
     // The run fires into the other project with no item while that project is unregistered
     // and again once it is registered, and in between with an item named.
-    const fire = `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${otherConfig}'`;
+    const fire = `'${process.execPath}' '${fixture.cliPath}' trigger fire --binding '${otherConfig}'`;
     const refusal = (name: string) => join(root, `refused-${name}`);
     const refusedFire = (name: string) =>
       `${fire} > '${refusal(name)}' 2>&1; echo "exit $?" >> '${refusal(name)}'`;
@@ -725,7 +725,7 @@ describe('trigger CLI durable execution', () => {
     await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
       'trigger',
       'fire',
-      '--config',
+      '--binding',
       join(root, 'trigger.json'),
       '--item',
       'item-1',
@@ -792,7 +792,7 @@ describe('trigger CLI durable execution', () => {
       [
         'trigger',
         'fire',
-        '--config',
+        '--binding',
         join(fixture.projectRoot, '..', 'trigger.json'),
         '--item',
         'x',
@@ -1104,7 +1104,7 @@ describe('trigger CLI durable execution', () => {
       cliPath,
       projectRoot,
       archonHome,
-      ['trigger', 'fire', '--config', configPath],
+      ['trigger', 'fire', '--binding', configPath],
       false
     );
     expect(initialize.exitCode).not.toBe(0);
@@ -1117,7 +1117,7 @@ describe('trigger CLI durable execution', () => {
       database.close();
     }
 
-    await runCli(cliPath, projectRoot, archonHome, ['trigger', 'fire', '--config', configPath]);
+    await runCli(cliPath, projectRoot, archonHome, ['trigger', 'fire', '--binding', configPath]);
     const firstRun = await waitFor(() => {
       const rows = readRows<RunRow>(
         databasePath,
@@ -1127,7 +1127,7 @@ describe('trigger CLI durable execution', () => {
     }, 'first trigger run to claim execution');
     activeRuns.add(firstRun.id);
 
-    const keyedFire = ['trigger', 'fire', '--config', configPath, '--delivery-id', 'queued-item'];
+    const keyedFire = ['trigger', 'fire', '--binding', configPath, '--delivery-id', 'queued-item'];
     const accepted = await runCli(cliPath, projectRoot, archonHome, keyedFire);
     const originalReceipt = JSON.parse(accepted.stdout) as { id: string };
     const queued = await waitFor(() => {
@@ -1627,7 +1627,7 @@ nodes:
           schedule: { intervalSeconds: 60, runAtLoad: false },
         })
       );
-      const fire = ['trigger', 'fire', '--config', configPath];
+      const fire = ['trigger', 'fire', '--binding', configPath];
       expect((await runCli(cliPath, projectRoot, archonHome, fire, false)).exitCode).not.toBe(0);
       const database = new Database(databasePath);
       try {
@@ -1748,7 +1748,7 @@ nodes:
         schedule: { intervalSeconds: 60, runAtLoad: false },
       })
     );
-    const fire = ['trigger', 'fire', '--config', configPath];
+    const fire = ['trigger', 'fire', '--binding', configPath];
     expect((await runCli(cliPath, projectRoot, archonHome, fire, false)).exitCode).not.toBe(0);
     const database = new Database(databasePath);
     try {
@@ -1909,7 +1909,7 @@ nodes:
         schedule: { intervalSeconds: 60, runAtLoad: false },
       })
     );
-    const fireArgs = ['trigger', 'fire', '--config', configPath];
+    const fireArgs = ['trigger', 'fire', '--binding', configPath];
     // The first DB-backed command creates the scratch schema, then fails closed because
     // the configured actor does not exist yet. Seed only that actor.
     expect((await runCli(cliPath, projectRoot, archonHome, fireArgs, false)).exitCode).not.toBe(0);

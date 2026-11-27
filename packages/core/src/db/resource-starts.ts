@@ -42,6 +42,7 @@ import {
   type ForgeRefusal,
 } from '@archon/workflows/schemas/resource-start';
 import { countStartLimits, storedLimitFields, type StartLimitColumns } from './start-limits';
+import { startOverridesSchema } from '@archon/workflows/schemas/start-overrides';
 export { readItemStartLimits } from './start-limits';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect } from './connection';
@@ -313,28 +314,37 @@ export function parseStoredJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;
 }
 
-/** Reverses `storableIntent` in `./start-receipt-writes`. */
-function readStoredIntent(
-  intent: unknown,
-  eventInputNames: unknown,
-  checkoutFrom: unknown,
-  itemKey: unknown,
-  startLimit: unknown,
-  grantsLimit: unknown
-): ResourceStartBindingIntent {
+/**
+ * Reverses `storableIntent` in `./start-receipt-writes`.
+ *
+ * The row is the argument rather than one parameter per column: the intent and the fields kept
+ * beside it are paired by construction, so a reader that gained a column could not be called
+ * with the arguments in a different order.
+ */
+function readStoredIntent(row: Record<string, unknown>): ResourceStartBindingIntent {
   const parsed = {
-    ...resourceStartBindingIntentSchema.parse(parseStoredJson(intent)),
-    ...storedLimitFields(startLimit, grantsLimit),
+    ...resourceStartBindingIntentSchema.parse(parseStoredJson(row.intent)),
+    ...storedLimitFields(row.start_limit, row.grants_limit),
   };
   const stored = withEventInputs(
-    typeof itemKey === 'string' ? { ...parsed, itemKey } : parsed,
-    eventInputNames
+    typeof row.item_key === 'string' ? { ...parsed, itemKey: row.item_key } : parsed,
+    row.event_input_names
   );
-  // A malformed hand-off throws like a malformed intent: read as absent, the start would
-  // run on the branch with no commit pin.
-  return checkoutFrom == null
-    ? stored
-    : { ...stored, checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(checkoutFrom)) };
+  const withOverrides =
+    row.start_overrides == null
+      ? stored
+      : {
+          ...stored,
+          startOverrides: startOverridesSchema.parse(parseStoredJson(row.start_overrides)),
+        };
+  // A malformed field beside the intent throws like a malformed intent: read as absent, the
+  // start would run on a config the operator did not choose, or with no commit pin.
+  return row.checkout_from == null
+    ? withOverrides
+    : {
+        ...withOverrides,
+        checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(row.checkout_from)),
+      };
 }
 
 function withEventInputs(
@@ -397,17 +407,7 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     ownerId: typeof row.preparation_owner === 'string' ? row.preparation_owner : null,
     error: typeof row.preparation_error === 'string' ? row.preparation_error : null,
     forgeRefusal: readForgeRefusal(row.forge_refusal),
-    intent:
-      row.intent == null
-        ? null
-        : readStoredIntent(
-            row.intent,
-            row.event_input_names,
-            row.checkout_from,
-            row.item_key,
-            row.start_limit,
-            row.grants_limit
-          ),
+    intent: row.intent == null ? null : readStoredIntent(row),
     requestStatus,
     disposition: requestDisposition,
   };

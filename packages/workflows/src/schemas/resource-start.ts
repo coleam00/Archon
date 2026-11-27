@@ -10,6 +10,7 @@ import {
 } from './binding-input-source';
 import { itemLinkKindSchema } from './item-link';
 import { itemWaitSubjectSchema } from './item-wait';
+import { startOverridesField } from './start-overrides';
 import { handoffRefusalSchema } from './run-metadata';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
@@ -577,6 +578,7 @@ export const resourceStartBindingIntentSchema = z
      * how an operator allows one more round. Kept out of the `intent` column like `limit`.
      */
     grants: z.string().min(1).optional(),
+    ...startOverridesField,
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
@@ -841,6 +843,8 @@ export const triggerConfigSchema = z
       checkoutFrom: true,
       itemKey: true,
       wake: true,
+      // A binding file cannot choose the config and models of its starts.
+      startOverrides: true,
     }),
     item: itemMappingSchema.optional(),
     schedule: z

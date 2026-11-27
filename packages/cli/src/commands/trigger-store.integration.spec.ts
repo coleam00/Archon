@@ -563,7 +563,7 @@ test('receipt preparation and real engine execution use supplied ports without S
         schedule: { intervalSeconds: 60, runAtLoad: false },
       })
     );
-    await triggerCommand(host, 'fire', [], { config: configPath }, { env: NO_RUN });
+    await triggerCommand(host, 'fire', [], { binding: configPath }, { env: NO_RUN });
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\nexecuted\nexecuted\n');
     expect(accesses).toBe(0);
   } finally {
@@ -1193,7 +1193,7 @@ test('fire reports the disposition of its binding when another process prepares 
         host,
         'fire',
         [],
-        { config: configPath },
+        { binding: configPath },
         { dispatch: noDispatch, env: NO_RUN }
       )
     );
@@ -1227,7 +1227,7 @@ test('fire exits 0 naming the owner when another process holds preparation past 
         host,
         'fire',
         [],
-        { config: configPath },
+        { binding: configPath },
         {
           dispatch: noDispatch,
           env: NO_RUN,
@@ -1264,7 +1264,7 @@ test("fire fails when another process's preparation of its binding fails", async
         host,
         'fire',
         [],
-        { config: configPath },
+        { binding: configPath },
         { dispatch: noDispatch, env: NO_RUN }
       )
     ).rejects.toThrow('launch_preparation_failed');
@@ -1276,7 +1276,7 @@ test("fire fails when another process's preparation of its binding fails", async
 test('a replayed delivery whose preparation failed reports the stored receipt', async () => {
   const { host, configPath, inputsPath, restore } = await fireFixture();
   await writeFile(inputsPath, JSON.stringify({ order_id: 'from-the-event' }));
-  const options = { config: configPath, inputs: inputsPath, deliveryId: 'refused-once' };
+  const options = { binding: configPath, inputs: inputsPath, deliveryId: 'refused-once' };
   const deps = { dispatch: noDispatch, env: NO_RUN };
   try {
     await expect(triggerCommand(host, 'fire', [], options, deps)).rejects.toThrow(
@@ -1297,7 +1297,7 @@ test('fire reports why preparation refused while the receipt keeps only the stag
       host,
       'fire',
       [],
-      { config: configPath, inputs: inputsPath },
+      { binding: configPath, inputs: inputsPath },
       { dispatch: noDispatch, env: NO_RUN }
     ).then(
       () => undefined,
@@ -1329,7 +1329,7 @@ test('fire redacts credential values from the refusal it prints', async () => {
       host,
       'fire',
       [],
-      { config: configPath, inputs: inputsPath },
+      { binding: configPath, inputs: inputsPath },
       { dispatch: noDispatch, env: NO_RUN }
     ).then(
       () => undefined,
@@ -1382,7 +1382,7 @@ test("fire does not blame its receipt for another binding's preparation failure"
       host,
       'fire',
       [],
-      { config: configPath },
+      { binding: configPath },
       { dispatch: noDispatch, env: NO_RUN }
     );
     const written = stderr.mock.calls.map(call => String(call[0])).join('');
@@ -1427,7 +1427,7 @@ test.each([true, false])(
         host,
         'fire',
         [],
-        { config: configPath },
+        { binding: configPath },
         { dispatch: noDispatch, env: NO_RUN }
       );
       const [older] = await store.listStartReceipts(10);
@@ -1456,7 +1456,7 @@ test.each([true, false])(
         host,
         'fire',
         [],
-        { config: configPath },
+        { binding: configPath },
         {
           dispatch: async requestId => {
             started.push(requestId);
@@ -1562,7 +1562,7 @@ test('keyed replays fail for every receipt queued on a resource whose drain fail
         host,
         'fire',
         [],
-        { config: configPath, deliveryId },
+        { binding: configPath, deliveryId },
         { dispatch: noDispatch, env: NO_RUN }
       );
     const queued = await store.listQueuedResourceStartsForHost('host');
@@ -1586,7 +1586,7 @@ test('keyed replays fail for every receipt queued on a resource whose drain fail
           host,
           'fire',
           [],
-          { config: configPath, deliveryId },
+          { binding: configPath, deliveryId },
           { dispatch: noDispatch, env: NO_RUN }
         )
       ).rejects.toThrow("Resource 'portable' drain failed");
@@ -1804,6 +1804,50 @@ test('a triggered run pauses at a gate and an attention wait and continues after
   }
 });
 
+test("a fire's config and models are stored with the receipt, and the start it executes runs on them", async () => {
+  // The file store keeps the whole host: a run config layer is sealed and unsealed there.
+  const { host, project, configPath, restore } = await fireFixture(true);
+  // The node the start runs proves which config layer reached it.
+  await writeFile(
+    join(project, '.archon/workflows/portable.yaml'),
+    'name: portable\ndescription: Portable trigger\nworktree:\n  enabled: false\nnodes:\n  - id: result\n    bash: printf %s "$CONFIG_PROOF" > proof\n'
+  );
+  await writeFile(join(project, '.archon/config.yaml'), 'assistant: codex\n');
+  const layer = join(project, '..', 'one-off.yaml');
+  await writeFile(layer, 'env:\n  CONFIG_PROOF: one-off\n');
+  try {
+    // Recorded, not executed: the request is read back before anything runs.
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { binding: configPath, config: layer, model: ['@reviewer=codex/gpt-5.5'] },
+      { dispatch: noDispatch }
+    );
+    const [receipt] = await host.deps.store.listStartReceipts(10);
+    const stored = await host.deps.store.getStartReceipt(receipt.id);
+    expect(stored?.bindings[0]?.intent?.startOverrides).toEqual({
+      config: { path: layer },
+      models: { aliases: { '@reviewer': 'codex/gpt-5.5' } },
+    });
+    const disposition = stored?.bindings[0]?.disposition;
+    if (disposition?.status !== 'admitted') throw new Error('Expected the start to be admitted');
+    expect(await stat(join(project, 'proof')).catch(() => null)).toBeNull();
+
+    await triggerCommand(host, 'execute', [disposition.requestId], { host: 'host' });
+    const deadline = Date.now() + 30_000;
+    while (
+      (await host.deps.store.getWorkflowRun(disposition.runId))?.status !== 'completed' &&
+      Date.now() < deadline
+    )
+      await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await host.deps.store.getWorkflowRun(disposition.runId))?.status).toBe('completed');
+    expect(await readFile(join(project, 'proof'), 'utf8')).toBe('one-off');
+  } finally {
+    restore();
+  }
+}, 60_000);
+
 test('a fire from inside a run records that run, and the started run and its request show it', async () => {
   const { host, configPath, restore } = await fireFixture();
   const requester = await host.deps.store.createWorkflowRun({
@@ -1830,7 +1874,7 @@ test('a fire from inside a run records that run, and the started run and its req
         host,
         'fire',
         [],
-        { config: configPath },
+        { binding: configPath },
         { dispatch: noDispatch, env: node(randomUUID()) }
       )
     ).rejects.toThrow('does not know WORKFLOW_ID');
@@ -1840,7 +1884,7 @@ test('a fire from inside a run records that run, and the started run and its req
       host,
       'fire',
       [],
-      { config: configPath },
+      { binding: configPath },
       { dispatch: noDispatch, env: node(requester.id) }
     );
     const [receipt] = await host.deps.store.listStartReceipts(10);
@@ -1922,7 +1966,7 @@ test('a skipped hand-off from an ended run appears in the notice window and watc
       host,
       'fire',
       [],
-      { config: configPath, deliveryId: 'handoff' },
+      { binding: configPath, deliveryId: 'handoff' },
       {
         dispatch: noDispatch,
         env: {
@@ -2025,7 +2069,7 @@ test('a hand-off at the notice limit is skipped and remains inspectable', async 
       host,
       'fire',
       [],
-      { config: configPath, deliveryId: 'limited-handoff' },
+      { binding: configPath, deliveryId: 'limited-handoff' },
       {
         dispatch: noDispatch,
         env: {
@@ -2088,7 +2132,7 @@ test('launch diagnostics retain all lines in both inspect forms and workflow get
       host,
       'fire',
       [],
-      { config: configPath },
+      { binding: configPath },
       { dispatch: noDispatch, env: NO_RUN }
     );
     const [receipt] = await host.deps.store.listStartReceipts();

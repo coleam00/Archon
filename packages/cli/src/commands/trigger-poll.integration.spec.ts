@@ -170,7 +170,7 @@ test('poll-style fires deduplicate keyed event inputs and reject bad ones', asyn
   const stdout = silenceStdout();
   const runs = async () => (await host.deps.store.listWorkflowRuns()).runs;
   const receipts = () => host.deps.store.listStartReceipts(10);
-  const fire = { config: configPath, inputs: inputsPath };
+  const fire = { binding: configPath, inputs: inputsPath };
   const keyed = { ...fire, deliveryId: 'order-123@1' };
   try {
     await writeFile(inputsPath, JSON.stringify({ order_id: 'order-123' }));
@@ -237,7 +237,7 @@ test('poll-style fires preserve unkeyed starts', async () => {
   const runs = async () => (await host.deps.store.listWorkflowRuns()).runs;
   try {
     await writeFile(inputsPath, JSON.stringify({ order_id: 'unkeyed-event' }));
-    await fireAndExecute(host, { config: configPath, inputs: inputsPath });
+    await fireAndExecute(host, { binding: configPath, inputs: inputsPath });
     expect(await runs()).toMatchObject([
       { status: 'completed', metadata: { inputs: { order_id: 'unkeyed-event' } } },
     ]);
@@ -245,11 +245,11 @@ test('poll-style fires preserve unkeyed starts', async () => {
     await writeFile(workflowPath, undeclaredWorkflow);
     await writeFile(inputsPath, JSON.stringify({ order_id: 'event' }));
     await expect(
-      fireAndExecute(host, { config: configPath, inputs: inputsPath, deliveryId: 'undeclared@2' })
+      fireAndExecute(host, { binding: configPath, inputs: inputsPath, deliveryId: 'undeclared@2' })
     ).rejects.toThrow('declares no inputs');
     expect(await runs()).toHaveLength(1);
 
-    for (let tick = 0; tick < 2; tick++) await fireAndExecute(host, { config: configPath });
+    for (let tick = 0; tick < 2; tick++) await fireAndExecute(host, { binding: configPath });
     const unkeyed = (await host.deps.store.listStartReceipts(10)).filter(
       receipt => receipt.deliveryId === null
     );
@@ -273,7 +273,7 @@ test('a fire-only binding starts a run on fire and has no timer to install', asy
     const { schedule: _schedule, ...fireOnly } = config;
     await writeFile(configPath, JSON.stringify(fireOnly));
 
-    await fireAndExecute(host, { config: configPath });
+    await fireAndExecute(host, { binding: configPath });
     const { runs } = await host.deps.store.listWorkflowRuns();
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
@@ -282,11 +282,11 @@ test('a fire-only binding starts a run on fire and has no timer to install', asy
     });
 
     await expect(
-      triggerCommand(host, 'schedule', ['install'], { config: configPath })
+      triggerCommand(host, 'schedule', ['install'], { binding: configPath })
     ).rejects.toThrow("Binding 'fired' is fire-only");
     // Status needs no schedule, so it still answers for a fire-only file.
     const written = stdout.mock.calls.length;
-    await triggerCommand(host, 'schedule', ['status'], { config: configPath });
+    await triggerCommand(host, 'schedule', ['status'], { binding: configPath });
     const lines = stdout.mock.calls.slice(written).map(([chunk]) => String(chunk));
     expect(JSON.parse(lines.join(''))).toEqual({
       bindingId: 'fired',
@@ -296,7 +296,7 @@ test('a fire-only binding starts a run on fire and has no timer to install', asy
 
     // A schedule that is present but incomplete is a broken timer, not a fire-only binding.
     await writeFile(configPath, JSON.stringify({ ...fireOnly, schedule: {} }));
-    await expect(fireAndExecute(host, { config: configPath })).rejects.toThrow(
+    await expect(fireAndExecute(host, { binding: configPath })).rejects.toThrow(
       'Invalid trigger configuration fields: schedule.intervalSeconds'
     );
   } finally {
@@ -313,7 +313,7 @@ test("a binding start holds its workflow's declared resource instead of the bind
   const stdout = silenceStdout();
   try {
     await writeFile(workflowPath, orderWorkflow.replace('worktree:', 'resource: build\nworktree:'));
-    await fireAndExecute(host, { config: configPath });
+    await fireAndExecute(host, { binding: configPath });
     const { runs } = await host.deps.store.listWorkflowRuns();
     expect(runs).toMatchObject([{ status: 'completed' }]);
     expect(await host.deps.store.getResourceStartRequest(runs[0]?.id ?? '')).toMatchObject({

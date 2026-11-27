@@ -16,9 +16,29 @@ export interface WebhookSourceRequest {
   receivedAt: string;
 }
 
+/**
+ * A source plugin's bindings carry no `startOverrides`. A run config layer names `env:`
+ * values and provider settings for a start, and `--model` rebinds its tiers, so choosing
+ * either is the operator's decision about that start rather than something a webhook
+ * payload's handler may take. `trigger fire --config|--model` is the only producer, and a
+ * plugin that sends the field is refused rather than having it dropped.
+ *
+ * Every acceptance a plugin returns is this one schema — a webhook's, an observation's, and
+ * each label read's inside it — so a refusal names the field that carried it and no second
+ * walk has to repeat the rule.
+ */
+export const sourcePluginAcceptanceSchema = sourceReceiptAcceptanceSchema.refine(
+  acceptance => acceptance.bindings.every(binding => binding.startOverrides === undefined),
+  {
+    message:
+      "a source plugin's binding cannot choose a run config or models; only `trigger fire --config` and `--model` set them",
+    path: ['bindings'],
+  }
+);
+
 export const webhookSourceResultSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('rejected'), reason: z.literal('unauthenticated') }).strict(),
-  z.object({ status: z.literal('received'), acceptance: sourceReceiptAcceptanceSchema }).strict(),
+  z.object({ status: z.literal('received'), acceptance: sourcePluginAcceptanceSchema }).strict(),
 ]);
 export type WebhookSourceResult = z.infer<typeof webhookSourceResultSchema>;
 
@@ -124,7 +144,7 @@ const observedWaitSchema = z
 
 export const sourceObservationSchema = z
   .object({
-    acceptances: z.array(sourceReceiptAcceptanceSchema),
+    acceptances: z.array(sourcePluginAcceptanceSchema),
     /** Waits this source binds but cannot observe, with why. */
     unserved: z.array(z.object({ wait: observedWaitSchema, reason: z.string().min(1) }).strict()),
     /** Reads that failed; the other waits are still observed. */
@@ -139,7 +159,7 @@ export const sourceObservationSchema = z
           .object({
             bindingId: z.string().min(1),
             label: z.string().min(1),
-            acceptance: sourceReceiptAcceptanceSchema,
+            acceptance: sourcePluginAcceptanceSchema,
           })
           .strict()
       )
@@ -166,6 +186,7 @@ export const sourceObservationSchema = z
   })
   .strict();
 export type SourceObservation = z.infer<typeof sourceObservationSchema>;
+
 /**
  * What a plugin's `observe` returns: `openedIssueFailures` only when the engine passed
  * `openedIssues`, so an engine that predates them still parses the result.

@@ -126,17 +126,17 @@ async function fixture() {
     ...(schedule ? { schedule: { intervalSeconds: 1800, runAtLoad: false } } : {}),
   });
   /** A timer whose config file is outside the triggers directory, as `schedule install` leaves it. */
-  const installTimer = async (path: string): Promise<void> => {
+  const installTimer = async (path: string, flag = '--binding'): Promise<void> => {
     await installNativeSchedule(
       {
         id: 'timer',
-        programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', '--config', path],
+        programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', flag, path],
         workingDirectory: project,
         archonHome,
         path: '/usr/bin:/bin',
         schedule: { intervalSeconds: 1800, runAtLoad: false },
         output: 'log',
-        removeCommand: `archon trigger schedule remove --config ${path}`,
+        removeCommand: `archon trigger schedule remove ${flag} ${path}`,
       },
       schedules
     );
@@ -189,38 +189,45 @@ async function fixture() {
   };
 }
 
-test('reports an installed timer outside the triggers directory that passes an undeclared input', async () => {
-  const { root, archonHome, config, installTimer, check, scheduled, timerPrefix } = await fixture();
-  const path = join(root, 'bindings', 'merge-queue.json');
-  await mkdir(join(root, 'bindings'));
-  await writeFile(path, JSON.stringify(config({ a: 1, b: 1 })));
-  await installTimer(path);
-  scheduled.length = 0;
-  // The home holds no config.yaml yet; check must not create one.
-  const listing = async () => [
-    await readdir(join(archonHome, 'triggers')),
-    await readdir(archonHome),
-    await readdir(root),
-  ];
-  const before = await listing();
+// `schedule install` writes the job with `--config`, the spelling a timer installed before the
+// run-config flags existed still carries, and `fire` also names the file `--binding`. A
+// discovery that knows only one of them silently stops reporting a working timer.
+test.each(['--config', '--binding'])(
+  'reports an installed timer outside the triggers directory that passes an undeclared input (%s)',
+  async flag => {
+    const { root, archonHome, config, installTimer, check, scheduled, timerPrefix } =
+      await fixture();
+    const path = join(root, 'bindings', 'merge-queue.json');
+    await mkdir(join(root, 'bindings'));
+    await writeFile(path, JSON.stringify(config({ a: 1, b: 1 })));
+    await installTimer(path, flag);
+    scheduled.length = 0;
+    // The home holds no config.yaml yet; check must not create one.
+    const listing = async () => [
+      await readdir(join(archonHome, 'triggers')),
+      await readdir(archonHome),
+      await readdir(root),
+    ];
+    const before = await listing();
 
-  const { bindings, error } = await check();
+    const { bindings, error } = await check();
 
-  expect(bindings).toEqual([
-    expect.objectContaining({
-      file: path,
-      workflowName: 'stage',
-      timer: expect.stringContaining(timerPrefix),
-      problems: [
-        expect.stringContaining("Cannot run workflow 'stage': it does not declare input 'b'"),
-      ],
-    }),
-  ]);
-  expect(error).toBeInstanceOf(Error);
-  // Reading only: no scheduler command, no file written.
-  expect(scheduled).toEqual([]);
-  expect(await listing()).toEqual(before);
-});
+    expect(bindings).toEqual([
+      expect.objectContaining({
+        file: path,
+        workflowName: 'stage',
+        timer: expect.stringContaining(timerPrefix),
+        problems: [
+          expect.stringContaining("Cannot run workflow 'stage': it does not declare input 'b'"),
+        ],
+      }),
+    ]);
+    expect(error).toBeInstanceOf(Error);
+    // Reading only: no scheduler command, no file written.
+    expect(scheduled).toEqual([]);
+    expect(await listing()).toEqual(before);
+  }
+);
 
 test('reports a timer that omits a required input, naming it', async () => {
   const { root, config, installTimer, check } = await fixture();
@@ -413,7 +420,10 @@ describe('schedule finds the binding timer however ARCHON_HOME is spelled', () =
     await writeFile(path, JSON.stringify(timerConfig));
     const alias = join(base.root, 'home-link');
     await symlink(base.archonHome, alias, 'junction');
-    const schedule = async (operation: string): Promise<Record<string, unknown>> => {
+    const schedule = async (
+      operation: string,
+      options: { binding?: string; config?: string } = { binding: path }
+    ): Promise<Record<string, unknown>> => {
       let printed = '';
       const stdout = spyOn(process.stdout, 'write').mockImplementation(((
         chunk: unknown,
@@ -427,13 +437,9 @@ describe('schedule finds the binding timer however ARCHON_HOME is spelled', () =
         return true;
       }) as typeof process.stdout.write);
       try {
-        await triggerCommand(
-          host,
-          'schedule',
-          [operation],
-          { config: path },
-          { schedules: base.schedules }
-        );
+        await triggerCommand(host, 'schedule', [operation], options, {
+          schedules: base.schedules,
+        });
       } finally {
         stdout.mockRestore();
       }
@@ -472,6 +478,23 @@ describe('schedule finds the binding timer however ARCHON_HOME is spelled', () =
       await schedule('install');
       expect(await timerFiles()).toEqual(installed);
     }
+  });
+
+  // A job an earlier release installed spells the binding file `--config`; `fire` also
+  // accepts `--binding`, so schedule keeps the first spelling and writes new jobs with it too.
+  test('a binding file named with --config is the timer schedule installs and reports', async () => {
+    const { path, schedule, timerFiles, scheduled, timerPrefix } = await scheduleFixture();
+    expect(await schedule('install', { config: path })).toMatchObject({ bindingId: 'timer' });
+    expect(await schedule('status', { config: path })).toMatchObject({ installed: true });
+    expect(await timerFiles()).toHaveLength(1);
+    if (process.platform === 'win32') {
+      expect(JSON.stringify(scheduled)).toContain('--config');
+    } else {
+      const plist = await Bun.file(join(dirname(timerPrefix), (await timerFiles())[0]!)).text();
+      expect(plist).toContain('--config');
+    }
+    expect(await schedule('remove', { config: path })).toMatchObject({ bindingId: 'timer' });
+    expect(await timerFiles()).toEqual([]);
   });
 
   test('remove with no timer installed says nothing was removed', async () => {

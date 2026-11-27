@@ -335,3 +335,87 @@ describe('item mapping', () => {
     ]);
   });
 });
+
+describe('a fire’s own choices for its starts', () => {
+  test('a config path and model rebindings are the only things it may hold', async () => {
+    const { startOverridesSchema } = await import('./schemas/start-overrides');
+    expect(
+      startOverridesSchema.safeParse({
+        config: { path: '/srv/archon/one-off.yaml' },
+        models: { tiers: { large: 'pi/sonnet' }, aliases: { '@reviewer': 'pi/haiku' } },
+      }).success
+    ).toBe(true);
+    // Either half alone, and models alone with no tier.
+    expect(startOverridesSchema.safeParse({ config: { path: '/cfg.yaml' } }).success).toBe(true);
+    expect(startOverridesSchema.safeParse({ models: { aliases: { '@a': 'pi/x' } } }).success).toBe(
+      true
+    );
+    // A resolved profile is not what a start stores: the specs stay raw until preparation.
+    expect(
+      startOverridesSchema.safeParse({ models: { tiers: { large: { provider: 'pi' } } } }).success
+    ).toBe(false);
+    expect(startOverridesSchema.safeParse({ config: {} }).success).toBe(false);
+    expect(startOverridesSchema.safeParse({ config: '/cfg.yaml' }).success).toBe(false);
+  });
+
+  test('a stored shape drops a key it does not know, so an older reader still parses it', async () => {
+    const { startOverridesSchema } = await import('./schemas/start-overrides');
+    const { runModelOverridesSchema } = await import('./schemas/model-binding');
+    // More than one binary reads these: a later release may add a key, and this one must
+    // still prepare and inspect the start rather than refuse it.
+    expect(
+      startOverridesSchema.parse({
+        config: { path: '/cfg.yaml', profile: 'large' },
+        env: { A: '1' },
+      })
+    ).toEqual({ config: { path: '/cfg.yaml' } });
+    expect(
+      runModelOverridesSchema.parse({ tiers: { large: 'pi/sonnet' }, reasoning: 'high' })
+    ).toEqual({ tiers: { large: 'pi/sonnet' } });
+  });
+
+  test('a binding carries them beside the intent fields a store keeps apart', async () => {
+    const { resourceStartBindingIntentSchema } = await import('./schemas/resource-start');
+    const intent = {
+      bindingId: 'b',
+      bindingRevision: null,
+      hostId: 'h',
+      runAsUserId: 'u',
+      resource: 'r',
+      overlap: 'queue',
+      launch: { cwd: '/repo', workflowName: 'w', inputs: {}, isolation: { kind: 'default' } },
+      startOverrides: { models: { tiers: { small: 'pi/haiku' } } },
+    };
+    expect(resourceStartBindingIntentSchema.safeParse(intent).success).toBe(true);
+    expect(
+      resourceStartBindingIntentSchema.safeParse({ ...intent, startOverrides: { config: {} } })
+        .success
+    ).toBe(false);
+  });
+});
+
+describe('a binding file cannot choose its starts’ config', () => {
+  test('a trigger file that carries startOverrides is refused', async () => {
+    const { triggerConfigSchema } = await import('./schemas/resource-start');
+    const file = {
+      version: 1,
+      sourceInstanceId: 'source',
+      binding: {
+        bindingId: 'b',
+        bindingRevision: null,
+        hostId: 'h',
+        runAsUserId: 'u',
+        resource: 'r',
+        overlap: 'queue',
+        launch: { cwd: '/repo', workflowName: 'w', inputs: {}, isolation: { kind: 'default' } },
+      },
+    };
+    expect(triggerConfigSchema.safeParse(file).success).toBe(true);
+    expect(
+      triggerConfigSchema.safeParse({
+        ...file,
+        binding: { ...file.binding, startOverrides: { config: { path: '/cfg.yaml' } } },
+      }).success
+    ).toBe(false);
+  });
+});

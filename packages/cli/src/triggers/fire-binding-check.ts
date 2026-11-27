@@ -85,20 +85,27 @@ async function readDirectoryBindings(): Promise<FireBindingFile[]> {
   return files;
 }
 
-/** The config path of a `trigger fire --config <path>` job, as `schedule install` wrote it. */
+/** The config path of a `trigger fire --binding <path>` job, as `schedule install` wrote it. */
 function timerConfigPath(programArguments: readonly string[]): string | undefined {
   const fire = programArguments.findIndex(
     (argument, index) => argument === 'trigger' && programArguments[index + 1] === 'fire'
   );
   if (fire === -1) return undefined;
-  const flag = programArguments.indexOf('--config', fire + 2);
-  const path = flag === -1 ? undefined : programArguments[flag + 1];
+  // Timers written before the flag was renamed still carry `--config`; a job is read as it
+  // was written, so both spellings name the binding file here.
+  const flag = [
+    programArguments.indexOf('--binding', fire + 2),
+    programArguments.indexOf('--config', fire + 2),
+  ]
+    .filter(index => index !== -1)
+    .sort((left, right) => left - right)[0];
+  const path = flag === undefined ? undefined : programArguments[flag + 1];
   return path === undefined ? undefined : resolve(path);
 }
 
 /** Why every tick of a timer fails when its config file cannot be read as a binding. */
 function brokenTimer(job: InstalledSchedule, configPath: string, why: string): string {
-  return `timer ${job.definition} runs trigger fire --config ${configPath}, which ${why}; every tick fails. Restore the file, or remove the timer by hand: ${job.removeByHand}`;
+  return `timer ${job.definition} runs trigger fire --binding ${configPath}, which ${why}; every tick fails. Restore the file, or remove the timer by hand: ${job.removeByHand}`;
 }
 
 /** A timer's config file, read as `trigger fire` reads it at each tick. */
@@ -175,7 +182,7 @@ async function fireBindingProblems(
 
 /**
  * Every binding without `on`, checked as a start of it would be. A timer's job runs
- * `trigger fire --config` alone, with no `--inputs`, so a timer, or a file with `schedule`,
+ * `trigger fire --binding` alone, with no `--inputs`, so a timer, or a file with `schedule`,
  * must supply every required input itself; a fire-only file may leave one to `--inputs`.
  * `readable` is each binding that could be read, for the reports that read what it starts.
  */

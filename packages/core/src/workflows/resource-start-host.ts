@@ -67,12 +67,10 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
+import type { RunModelOverrides } from '@archon/workflows/schemas/model-binding';
+import { startConfiguration } from './start-configuration';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
-import {
-  itemRunConfig,
-  loadWorkflowRunConfigFile,
-  unsealWorkflowRunConfig,
-} from '../config/run-config';
+import { unsealWorkflowRunConfig } from '../config/run-config';
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
@@ -243,7 +241,8 @@ async function prepareBinding(
   intent: ResourceStartBindingIntent,
   identity: BindingIdentity,
   item: WorkflowItem | null,
-  runConfig: WorkflowRunConfigInput | undefined
+  runConfig: WorkflowRunConfigInput | undefined,
+  models: RunModelOverrides | undefined
 ): Promise<PreparationResult> {
   const cwd = await canonicalizeProjectPath(intent.launch.cwd);
 
@@ -288,6 +287,9 @@ async function prepareBinding(
       codebaseId: codebase.id,
       userId: intent.runAsUserId,
       runConfig,
+      ...(models === undefined
+        ? {}
+        : { modelOverrideLayer: { kind: 'raw' as const, overrides: models } }),
     });
     // Before admission, so a binding its forge cannot serve never takes a slot.
     const site = { cwd, settingsCwd: cwd, codebaseId: codebase.id, supplied: bindingInputs };
@@ -339,17 +341,10 @@ async function prepareClaimedBinding(
       throw new Error('The configured run-as user no longer exists.');
     }
     stage = 'run_configuration';
-    // The item's own config wins over `configSource`: a binding file's config is written
-    // once for the install (`pack bindings --config`), a default for an item's first run,
-    // not a change to this item's config.
     const found = await bindingItem(host, intent, identity.receiptId);
-    const runConfig =
-      (found ? itemRunConfig(found.item.key, found.runs) : undefined) ??
-      (intent.launch.configSource
-        ? await loadWorkflowRunConfigFile(intent.launch.configSource)
-        : undefined);
+    const { runConfig, models } = await startConfiguration(intent, found);
     stage = 'launch_preparation';
-    return await prepareBinding(host, intent, identity, found?.item ?? null, runConfig);
+    return await prepareBinding(host, intent, identity, found?.item ?? null, runConfig, models);
   } catch (error) {
     if (host.engineChanged?.())
       return await leaveForInstalledEngine(

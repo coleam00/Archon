@@ -163,7 +163,7 @@ describe('a work order from the run\'s message', () => {
     });
     const fires = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[0] === 'trigger');
     expect(fires).toHaveLength(1);
-    expect(fires[0]).toEqual(expect.arrayContaining(['--config', '/bindings/intake.json', '--item', 'issue-8']));
+    expect(fires[0]).toEqual(expect.arrayContaining(['--binding', '/bindings/intake.json', '--item', 'issue-8']));
   }, 60_000);
 
   test('an id that exists is refused and the approved order is left as it was', () => {

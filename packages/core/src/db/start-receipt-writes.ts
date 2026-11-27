@@ -151,8 +151,8 @@ async function insertReceiptBindings(
   for (const binding of recorded.bindings) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
-       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,checkout_from,item_key,start_limit,grants_limit,preparation_status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')`,
+       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,checkout_from,item_key,start_limit,grants_limit,start_overrides,preparation_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending')`,
       [
         recorded.receipt.id,
         binding.bindingId,
@@ -162,6 +162,7 @@ async function insertReceiptBindings(
         binding.itemKey ?? null,
         binding.limit ? JSON.stringify(binding.limit) : null,
         binding.grants ?? null,
+        binding.startOverrides ? JSON.stringify(binding.startOverrides) : null,
       ]
     );
   }
@@ -194,7 +195,8 @@ async function insertReceiptBindings(
  * the stage on that branch without the commit pin or a read-only copy. The binding's item
  * key goes to its own `item_key` column, and a start limit and the limit it grants to
  * `start_limit` and `grants_limit`; an older binary admits such a start without counting
- * it. `readStoredIntent` reverses it.
+ * it. A fire's `startOverrides` go to `start_overrides`, so an older binary runs the start
+ * on the config it would have chosen; `readStoredIntent` reverses them.
  */
 export function storableIntent(
   binding: ResourceStartBindingIntent
@@ -207,6 +209,7 @@ export function storableIntent(
     wake: _wake,
     limit: _limit,
     grants: _grants,
+    startOverrides: _startOverrides,
     ...intent
   } = binding;
   const handoff = checkoutFrom ? JSON.stringify(checkoutFrom) : null;

@@ -3,7 +3,6 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { z } from '@hono/zod-openapi';
 import {
   drainResourceStartHost,
   findOrRegisterCodebase,
@@ -15,8 +14,6 @@ import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import { getTriggersPath, triggerRevision } from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
-import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import {
   awaitingExecution,
   SourceReceiptDigestConflictError,
@@ -26,13 +23,18 @@ import {
 import {
   describeInstallHold,
   mappedItemKey,
-  resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
   requestingRun,
   type SourceReceiptInput,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
-import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
+import {
+  assertItemOptions,
+  fireBindingFile,
+  fireStartOverrides,
+  readEventInputs,
+  type FireFlagOptions,
+} from './trigger-fire-flags';
 import { releaseQueuedLaunchSource } from '@archon/core/workflows/queued-launch-source';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
@@ -81,19 +83,11 @@ export function drainHost(
   });
 }
 
-type TriggerOptions = {
-  config?: string;
+type TriggerOptions = FireFlagOptions & {
   host?: string;
   owner?: string;
   yes?: boolean;
   limit?: string;
-  deliveryId?: string;
-  inputs?: string;
-  input?: readonly string[];
-  item?: string;
-  noItem?: boolean;
-  /** Give the start's item priority when the fire is first accepted. */
-  priority?: boolean;
 };
 
 /**
@@ -259,12 +253,6 @@ async function firePriority(
   return true;
 }
 
-function assertItemOptions(options: TriggerOptions): void {
-  if (options.item === undefined) return;
-  if (options.noItem) throw new Error('--item and --no-item are mutually exclusive.');
-  assertItemKey(options.item);
-}
-
 /**
  * The item a fire's start is on: `--item` first, none with `--no-item`, then the
  * binding's `item` mapping read from the event inputs (`--inputs` and `--input`), then
@@ -297,39 +285,6 @@ export async function fireItemKey(fire: {
   return mapped.key;
 }
 
-/**
- * A fire's event inputs: the `--inputs` JSON file and each `--input name=value`, in the
- * grammar `workflow run --input` speaks, so their values are text. A name given by both is
- * refused rather than merged, as `workflow run` refuses one given by `--input` and
- * `--input-file`. Neither flag reads as undefined, not `{}`, so a fire without inputs
- * records the intent it always has and a redelivery of it still replays.
- *
- * @throws on an unreadable or invalid file, a malformed assignment, or a name given twice.
- */
-async function readEventInputs(
-  options: Pick<TriggerOptions, 'inputs' | 'input'>
-): Promise<z.infer<typeof resourceStartBindingIntentSchema>['eventInputs']> {
-  let fromFile: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];
-  if (options.inputs !== undefined) {
-    try {
-      fromFile = z
-        .record(z.string().min(1), jsonValueSchema)
-        .parse(JSON.parse(await readFile(options.inputs, 'utf8')) as unknown);
-    } catch (error) {
-      throw new Error(
-        '--inputs must name a readable file containing a JSON object with non-empty input names.',
-        { cause: error }
-      );
-    }
-  }
-  if (!options.input?.length) return fromFile;
-  const assigned = parseInputAssignments(options.input);
-  for (const name of Object.keys(assigned))
-    if (fromFile && Object.hasOwn(fromFile, name))
-      throw new Error(`Input '${name}' is given by both --inputs and --input: supply it once.`);
-  return { ...fromFile, ...assigned };
-}
-
 async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
@@ -337,21 +292,25 @@ async function triggerFire(
   env: NodeJS.ProcessEnv,
   wait: PreparationWait
 ): Promise<void> {
-  if (!options.config) throw new Error('Usage: archon trigger fire --config <timer-binding.json>');
+  const bindingFile = fireBindingFile(options);
+  if (bindingFile === undefined)
+    throw new Error(
+      'Usage: archon trigger fire --binding <timer-binding.json> [--config <run-config.yaml>] [--model <tier|@alias>=<model>]'
+    );
   if (options.deliveryId !== undefined && options.deliveryId.length === 0)
     throw new Error('--delivery-id must not be empty.');
   const eventInputs = await readEventInputs(options);
   assertItemOptions(options);
-  const config = await loadFireConfig(options.config);
+  const config = await loadFireConfig(bindingFile);
   // A fire has no ended or asking run to take the checkout from; starting the stage anyway would
   // cut it from the base branch, which is the one place this binding must never run.
   if (config.on?.runEnded?.checkout !== undefined)
     throw new Error(
-      `${options.config} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
+      `${bindingFile} takes its checkout from the run that ended (on.runEnded.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on a run's checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <run-id> --item <key>, naming the run that holds the branch: after a read-only check, the run in the check's metadata.checkout_handoff.runId (archon workflow get <check-run-id> --json), not the check.`
     );
   if (config.on?.asksSettled?.checkout !== undefined)
     throw new Error(
-      `${options.config} takes its checkout from the run that left the asks (on.asksSettled.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on that checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <holder-run-id> --item <key>, naming the run that holds the checkout: metadata.asks_checkout.handoff.runId in archon workflow get <asking-run-id> --json, which after a read-only asking stage is the run it was given, not the asking run. When asks_checkout records a refusal, or none, no checkout is left: run the asking workflow again on the item. Pass an --input <name>=<value> for each input the file maps (${mappedNames(config.on.asksSettled.inputs)}): --adopt carries the checkout, not the answers. Read the answers from archon workflow runs --item <key> --json (its answers of kind 'ask': the asking run's for an input read from { answers: true }, all of them for { item: answers }) and the asking run's inputs from archon workflow get <asking-run-id> --json.`
+      `${bindingFile} takes its checkout from the run that left the asks (on.asksSettled.checkout), so a fire has none to give it. To start '${config.binding.launch.workflowName}' on that checkout by hand, run archon workflow run ${config.binding.launch.workflowName} --adopt <holder-run-id> --item <key>, naming the run that holds the checkout: metadata.asks_checkout.handoff.runId in archon workflow get <asking-run-id> --json, which after a read-only asking stage is the run it was given, not the asking run. When asks_checkout records a refusal, or none, no checkout is left: run the asking workflow again on the item. Pass an --input <name>=<value> for each input the file maps (${mappedNames(config.on.asksSettled.inputs)}): --adopt carries the checkout, not the answers. Read the answers from archon workflow runs --item <key> --json (its answers of kind 'ask': the asking run's for an input read from { answers: true }, all of them for { item: answers }) and the asking run's inputs from archon workflow get <asking-run-id> --json.`
     );
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
@@ -363,6 +322,7 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
+  const startOverrides = await fireStartOverrides(options, recorded);
   const itemKey = await fireItemKey({
     config,
     explicit: options.item,
@@ -375,6 +335,7 @@ async function triggerFire(
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
+    ...(startOverrides === undefined ? {} : { startOverrides }),
     bindingRevision: triggerRevision(config),
   };
   const receipt = await host.deps.store
@@ -706,18 +667,18 @@ async function scheduleTrigger(
   schedules: NativeScheduleOptions
 ): Promise<void> {
   const operation = args[0];
-  if (
-    !options.config ||
-    (operation !== 'install' && operation !== 'remove' && operation !== 'status')
-  )
+  // An installed timer's job is written with `--config`, so schedule keeps that spelling; a
+  // fire's own `--config` is a run config layer, which is where the two commands differ.
+  const bindingFile = options.binding ?? options.config;
+  if (!bindingFile || (operation !== 'install' && operation !== 'remove' && operation !== 'status'))
     throw new Error(
       'Usage: archon trigger schedule <install|remove|status> --config <timer-binding.json>'
     );
-  const config = await loadFireConfig(options.config);
+  const config = await loadFireConfig(bindingFile);
   await scheduleTimer({
     operation,
     config,
-    configPath: resolve(options.config),
+    configPath: resolve(bindingFile),
     schedules,
     assertKnownRunAsUser: () => assertKnownRunAsUser(host, config),
   });

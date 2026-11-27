@@ -467,6 +467,16 @@ export interface TriggerFireOptions {
    * Left out, a fire from a run on an item inherits it.
    */
   readonly item?: string | null;
+  /**
+   * The run config layer these starts run on (`--config`), outranking the config the item
+   * carries. Relative paths resolve against the script's working directory.
+   */
+  readonly config?: string;
+  /**
+   * Tier and `@alias` rebindings for these starts (`--model <name>=<spec>`), as the flag
+   * takes them.
+   */
+  readonly model?: readonly string[];
 }
 
 /** A fire's receipt and the admission its binding's request got; null when it got none. */
@@ -497,8 +507,19 @@ export const trigger = {
         : options.item === null
           ? ['--no-item']
           : ['--item', options.item];
+    const config = options.config === undefined ? [] : ['--config', options.config];
+    const model = (options.model ?? []).flatMap(spec => ['--model', spec]);
     const answer = withJsonFile(sorted, path =>
-      archon('trigger fire', ['--config', binding, ...delivery, ...item, '--inputs', path])
+      archon('trigger fire', [
+        '--binding',
+        binding,
+        ...config,
+        ...model,
+        ...delivery,
+        ...item,
+        '--inputs',
+        path,
+      ])
     );
     const receipt = answer.value;
     if (answer.code !== 0 || !isRecord(receipt) || typeof receipt.id !== 'string')

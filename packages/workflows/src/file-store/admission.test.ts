@@ -8,7 +8,10 @@ import { tmpdir } from 'node:os';
 import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { WorkflowResourceBusyError, WorkflowNotResumableError } from '../store';
-import type { ResourceStartIntent } from '../schemas/resource-start';
+import {
+  resourceStartBindingIntentSchema,
+  type ResourceStartIntent,
+} from '../schemas/resource-start';
 import { FileStoreUnsupportedError } from './errors';
 import { createFileWorkflowStore } from './store';
 import * as commitModule from './commit';
@@ -238,6 +241,53 @@ test('receipt-linked requests validate their binding and inspection follows ever
   expect(receipt).not.toHaveProperty('createdAt');
   expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
   expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');
+});
+
+test("a fire's overrides sit beside the stored intent, not inside it", async () => {
+  const { root, store } = await fixture();
+  const receiptId = randomUUID();
+  const overrides = {
+    config: { path: '/srv/archon/one-off.yaml' },
+    models: { tiers: { large: 'codex/gpt-6.1-sol' } },
+  };
+  await store.acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'source',
+      deliveryId: null,
+      contentDigest: 'digest',
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'binding',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: 'resource',
+        overlap: 'queue',
+        launch: { cwd: '/test', workflowName: 'test', inputs: {}, isolation: { kind: 'in-place' } },
+        startOverrides: overrides,
+      },
+    ],
+  });
+  // The document on disk: the overrides on the binding, the intent as an older binary reads it.
+  const [path] = (await readdir(join(root, 'resource/receipts'))).filter(name =>
+    name.endsWith('.json')
+  );
+  const document = JSON.parse(await readFile(join(root, 'resource/receipts', path!), 'utf8'));
+  expect(document.bindings[0].startOverrides).toEqual(overrides);
+  // A binary that predates the field parses the intent strictly, so it must not carry it.
+  expect(document.bindings[0].intent).not.toHaveProperty('startOverrides');
+  expect(resourceStartBindingIntentSchema.safeParse(document.bindings[0].intent).success).toBe(
+    true
+  );
+  // And the store hands them back with the intent, so preparation runs on the operator's config.
+  const [binding] = (await store.getStartReceipt(receiptId))!.bindings;
+  expect(binding?.intent?.startOverrides).toEqual(overrides);
 });
 
 test('admission cannot reuse a deleted run ID', async () => {

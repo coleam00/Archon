@@ -551,7 +551,7 @@ test('trigger execution in a cold child delivers repository-scoped App credentia
       schedule: { intervalSeconds: 60, runAtLoad: false },
     })
   );
-  expect((await run(f, ['trigger', 'fire', '--config', config])).code).toBe(0);
+  expect((await run(f, ['trigger', 'fire', '--binding', config])).code).toBe(0);
   const deadline = Date.now() + 20000;
   while (!['completed', 'failed'].includes(row(f)?.status ?? '') && Date.now() < deadline)
     await Bun.sleep(25);

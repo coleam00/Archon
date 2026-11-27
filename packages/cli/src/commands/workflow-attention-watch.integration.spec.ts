@@ -260,7 +260,7 @@ test('a launch failure reaches protocol and text watchers without diagnostics', 
   };
   try {
     await readUntil('Ctrl-C stops.');
-    const fire = await runCli(fixture, ['trigger', 'fire', '--config', config]);
+    const fire = await runCli(fixture, ['trigger', 'fire', '--binding', config]);
     expect(fire.exitCode).toBe(0);
     const terminal = await watch.next('launch failure', line => line.type === 'terminal', 10_000);
     expect(terminal).toMatchObject({

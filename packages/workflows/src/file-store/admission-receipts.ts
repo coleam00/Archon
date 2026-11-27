@@ -64,7 +64,12 @@ export function createReceiptOperations(
     item: z.infer<typeof bindingSchema>,
     requestId: string | null = null
   ): Promise<StartBindingInspection> {
-    const inspection = startBindingInspectionSchema.parse(item);
+    // Rejoin the overrides the stored document keeps beside the intent (see `bindingSchema`).
+    const { startOverrides, ...stored } = item;
+    const inspection = startBindingInspectionSchema.parse({
+      ...stored,
+      intent: item.intent && startOverrides ? { ...item.intent, startOverrides } : item.intent,
+    });
     const request = requestId ? await tx.request(requestId) : null;
     return {
       ...inspection,
@@ -104,18 +109,22 @@ export function createReceiptOperations(
           reason: input.reason ?? null,
           createdAt: new Date().toISOString(),
           bindings: [
-            ...input.bindings.map(intent => ({
-              receiptId: input.receipt.id,
-              bindingId: intent.bindingId,
-              bindingRevision: intent.bindingRevision,
-              hostId: intent.hostId,
-              status: 'pending' as const,
-              ownerId: null,
-              error: null,
-              forgeRefusal: null,
-              intent,
-              requestIds: [],
-            })),
+            ...input.bindings.map(intent => {
+              const { startOverrides, ...storedIntent } = intent;
+              return {
+                receiptId: input.receipt.id,
+                bindingId: intent.bindingId,
+                bindingRevision: intent.bindingRevision,
+                hostId: intent.hostId,
+                status: 'pending' as const,
+                ownerId: null,
+                error: null,
+                forgeRefusal: null,
+                intent: storedIntent,
+                startOverrides: startOverrides ?? null,
+                requestIds: [],
+              };
+            }),
             ...(input.evaluatedBindings ?? []).map(item => ({
               receiptId: input.receipt.id,
               bindingId: item.bindingId,
@@ -126,6 +135,7 @@ export function createReceiptOperations(
               error: item.reason,
               forgeRefusal: null,
               intent: null,
+              startOverrides: null,
               requestIds: [],
             })),
           ],
