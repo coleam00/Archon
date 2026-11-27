@@ -3221,6 +3221,103 @@ it('validate names unknown keys in the manifest of the plugin directory it runs 
   }
 }, 30_000);
 
+// A binding to a workflow its pack's manifest does not list is refused the same way from
+// every directory of a project, once, beside the project's other errors, and from an
+// explicit source, whatever the checkout's own manifest lists.
+it('validate refuses an unlisted pack binding from any directory, once', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-pack-binding-'));
+  const flow = (name: string) =>
+    `name: ${name}\ndescription: d\nnodes:\n  - id: a\n    bash: "true"\n`;
+  /** A pack `name` at `dir` holding plan and triage, listing `listed`, bound to triage. */
+  const pack = (dir: string, name: string, listed: string[]) => {
+    for (const workflow of ['plan', 'triage']) {
+      mkdirSync(join(dir, workflow), { recursive: true });
+      writeFileSync(join(dir, workflow, `${workflow}.yaml`), flow(workflow));
+    }
+    mkdirSync(join(dir, '.pack'), { recursive: true });
+    writeFileSync(
+      join(dir, '.pack', 'pack.yaml'),
+      'bindings:\n  sweep:\n    workflow: triage\n    resource: s\n    overlap: queue\n'
+    );
+    writeFileSync(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name,
+        description: 'd',
+        entrypoints: Object.fromEntries(listed.map(w => [w, `${w}/${w}.yaml`])),
+      })
+    );
+  };
+  const repo = (dir: string) => {
+    mkdirSync(join(dir, '.archon', 'workflows'), { recursive: true });
+    expect(spawnSync('git', ['init', '-q', dir]).status).toBe(0);
+    writeFileSync(
+      join(dir, '.archon', 'config.yaml'),
+      'defaults:\n  loadDefaultCommands: false\n  loadDefaultWorkflows: false\n'
+    );
+  };
+  // A project with a broken workflow, a pack under .archon/workflows, and a plugin folder
+  // discovery does not read; a checkout whose own manifest lists triage; and a source pack.
+  const project = join(root, 'project');
+  repo(project);
+  writeFileSync(join(project, '.archon', 'workflows', 'bad.yaml'), 'name: bad\n');
+  const nested = join(project, '.archon', 'workflows', 'factory');
+  pack(nested, 'factory', ['plan']);
+  pack(join(project, 'plugins', 'kit'), 'kit', ['plan']);
+  const checkout = join(root, 'checkout');
+  repo(checkout);
+  pack(checkout, 'factory', ['plan', 'triage']);
+  const source = join(root, 'source');
+  pack(source, 'factory', ['plan']);
+  const validate = (cwd: string, args: string[] = []) => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'validate', 'workflows', ...args, '--json'],
+      {
+        cwd,
+        encoding: 'utf8',
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          ARCHON_HOME: join(root, 'home'),
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      }
+    );
+    expect(result.status, `${cwd}: ${result.stdout}${result.stderr}`).toBe(1);
+    const { results } = JSON.parse(result.stdout) as {
+      results: { workflowName: string; valid: boolean; issues: { field: string }[] }[];
+    };
+    const refusals = (pack: string) =>
+      results
+        .filter(r => r.workflowName === `${pack}: .pack/pack.yaml`)
+        .flatMap(r => r.issues.filter(i => i.field === 'pack_bindings'));
+    return { results, refusals };
+  };
+  try {
+    for (const cwd of [
+      project,
+      nested,
+      join(nested, 'plan'),
+      join(project, 'plugins', 'kit', 'plan'),
+    ]) {
+      const { results, refusals } = validate(cwd);
+      expect(refusals('factory')).toHaveLength(1);
+      expect(results.some(r => r.workflowName === 'bad' && !r.valid)).toBe(true);
+      if (cwd.includes('plugins')) expect(refusals('kit')).toHaveLength(1);
+    }
+    // A workflow name keeps the pack's result.
+    expect(validate(project, ['plan']).refusals('factory')).toHaveLength(1);
+    // The explicit source's manifest decides, not the checkout's.
+    expect(validate(checkout, ['--workflow-source', source]).refusals('factory')).toHaveLength(1);
+  } finally {
+    await removeTempTree(root);
+  }
+}, 60_000);
+
 it.each([true, false])(
   'file-only commands inspect local files without a registry (Git: %s)',
   async initGit => {

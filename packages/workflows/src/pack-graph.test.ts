@@ -10,7 +10,7 @@ import {
   buildPackGraph,
   declaredStops,
   type InstalledArrow,
-  packBindableNames,
+  packBindingScope,
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
@@ -658,14 +658,15 @@ describe('the names a pack lets its bindings name', () => {
       { name, nodes: [{ id: 'a', bash: 'true' }] },
       'project'
     );
-    entry.workflow.pack = { key: 'factory', source: 'project', workflow: name };
+    entry.workflow.pack = { key: 'factory', source: 'project', workflow: name, bindings: {} };
     return entry;
   };
 
   test("are a pack folder's manifest entrypoints, or every stage without a manifest", async () => {
     const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'pack-bindable-')));
     const stages = [stage('plan'), stage('triage')];
-    expect(await packBindableNames(liveSourceRoots(dir), stages)).toEqual(['plan', 'triage']);
+    const names = async () => (await packBindingScope(liveSourceRoots(dir), stages))?.names;
+    expect(await names()).toEqual(['plan', 'triage']);
     await writeFile(
       join(dir, 'archon-plugin.json'),
       JSON.stringify({
@@ -676,6 +677,6 @@ describe('the names a pack lets its bindings name', () => {
         entrypoints: { plan: 'plan/plan.yaml' },
       })
     );
-    expect(await packBindableNames(liveSourceRoots(dir), stages)).toEqual(['plan']);
+    expect(await names()).toEqual(['plan']);
   });
 });

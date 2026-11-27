@@ -18,12 +18,11 @@ import {
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
 import {
-  bindingWorkflowNames,
   declaredStops,
   nearestPackBindings,
-  packBindableNames,
-  packBindingWorkflowMissing,
-  packWorkflowName,
+  packBindingRefusals,
+  packBindingScope,
+  readPackManifest,
 } from '@archon/workflows/pack-graph';
 import { writeStdout } from '../utils/stdout';
 import {
@@ -47,7 +46,12 @@ import { packWakeInputProblems } from '@archon/core/workflows/declared-inputs';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
-import { PACK_DECLARATION_PATH } from '@archon/workflows/pack-settings';
+import {
+  loadPackDeclaration,
+  PACK_DECLARATION_PATH,
+  PackSettingsError,
+} from '@archon/workflows/pack-settings';
+import { canonicalizeProjectPath } from '@archon/paths';
 import { discoverInstalledForgePlugins } from './forge';
 import {
   PLUGIN_MANIFEST_FILE,
@@ -55,7 +59,7 @@ import {
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
 import { readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 /**
  * Build ValidationConfig from the repo's .archon/config.yaml
@@ -134,7 +138,13 @@ export async function validateWorkflowsCommand(
   source?: string
 ): Promise<number> {
   const config = await buildValidationConfig(source ?? cwd);
-  const results = await collectWorkflowResults(cwd, source, config, forgeTrustedEnv);
+  const { results, packs } = await collectWorkflowResults(
+    cwd,
+    source,
+    config,
+    forgeTrustedEnv,
+    pluginRoot
+  );
   if (source !== undefined && results.length === 0) {
     const message = `Error: no workflows found in --workflow-source ${source}`;
     if (json) await writeStdout(`${JSON.stringify({ error: message, source })}\n`);
@@ -151,8 +161,8 @@ export async function validateWorkflowsCommand(
       return 1;
     }
   }
-  // The manifest is not a workflow, so the name filter does not apply to it.
-  filteredResults.push(...(await manifestResults(source ?? pluginRoot)));
+  // A pack's bindings and the manifest are not workflows, so the name filter does not apply.
+  filteredResults.push(...packs, ...(await manifestResults(source ?? pluginRoot)));
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -209,8 +219,9 @@ async function collectWorkflowResults(
   cwd: string,
   workflowSource: string | undefined,
   config: ValidationConfig,
-  forgeTrustedEnv: NodeJS.ProcessEnv
-): Promise<WorkflowValidationResult[]> {
+  forgeTrustedEnv: NodeJS.ProcessEnv,
+  pluginRoot: string
+): Promise<{ results: WorkflowValidationResult[]; packs: WorkflowValidationResult[] }> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
   const { workflowEntries, loadErrors, roots } = await discoverForValidation(cwd, workflowSource);
@@ -229,7 +240,12 @@ async function collectWorkflowResults(
     );
   }
 
-  results.push(...(await packBindingResults(roots, workflowEntries)));
+  // Under an explicit source the source's packs are discovered; the invocation directory is not read.
+  const packs = await packBindingResults(
+    roots,
+    workflowEntries,
+    workflowSource === undefined ? { pluginRoot, projectRoot: cwd } : undefined
+  );
   const stops = stopIssues(workflowEntries);
   const wakeInputs = wakeInputIssues(workflowEntries);
   for (const { workflow, source, parseWarnings } of workflowEntries) {
@@ -267,7 +283,7 @@ async function collectWorkflowResults(
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
-  return results;
+  return { results, packs };
 }
 
 /** The workflows by pack key; a workflow outside a pack is a group of its own. */
@@ -281,36 +297,81 @@ function packGroups(entries: readonly WorkflowWithSource[]): Map<string, Workflo
 }
 
 /**
- * Each discovered pack whose bindings name a workflow it does not let them bind
- * (`packBindableNames`), with the refusal `archon pack bindings` gives. Discovery is the one
- * context, so the result is the same from whatever directory validation runs in.
+ * Each pack whose bindings name a workflow it does not let them bind (`packBindingScope`),
+ * with the refusal `archon pack bindings` gives: every pack discovery returns, so the
+ * result is the same from whatever directory of the project validation runs in. A plugin
+ * kept in a repository subdirectory is no pack discovery reads, so the workflow-pack
+ * manifest at or above `invokedFrom.pluginRoot` names it, unless discovery checked it.
  */
 async function packBindingResults(
   roots: WorkflowSourceRoots,
-  entries: readonly WorkflowWithSource[]
+  entries: readonly WorkflowWithSource[],
+  invokedFrom: { pluginRoot: string; projectRoot: string } | undefined
 ): Promise<WorkflowValidationResult[]> {
   const results: WorkflowValidationResult[] = [];
+  const checked = new Set<string>();
   for (const workflows of packGroups(entries).values()) {
-    const pack = workflows[0]?.workflow.pack;
-    const bindings = nearestPackBindings(workflows);
-    if (pack === undefined || bindings === undefined) continue;
-    const names = await packBindableNames(roots, workflows);
-    const issues = Object.entries(bindings).flatMap(([id, binding]) =>
-      bindingWorkflowNames(binding)
-        .filter(declared => packWorkflowName(names, declared) === undefined)
-        .map(
-          (declared): ValidationIssue => ({
-            level: 'error',
-            field: 'pack_bindings',
-            message: packBindingWorkflowMissing(pack.key, id, declared),
-            hint: `A pack copy dispatches only its manifest entrypoints. Bind one it provides (${names.join(', ')}), or list it under entrypoints in ${PLUGIN_MANIFEST_FILE}.`,
-          })
+    const key = workflows[0]?.workflow.pack?.key;
+    if (key === undefined) continue;
+    try {
+      const scope = await packBindingScope(roots, workflows);
+      if (scope === undefined) continue;
+      if (scope.dir !== null) checked.add(await canonicalizeProjectPath(scope.dir));
+      results.push(...refusalResult(key, packBindingRefusals(key, scope.bindings, scope.names)));
+    } catch (error) {
+      results.push(...refusalResult(key, [(error as Error).message]));
+    }
+  }
+  if (invokedFrom === undefined) return results;
+  try {
+    const dir = await invokedPackDir(invokedFrom.pluginRoot, invokedFrom.projectRoot);
+    if (dir === undefined || checked.has(dir)) return results;
+    const manifest = await readPackManifest(dir);
+    const declaration = await loadPackDeclaration(dir, '.').catch((error: unknown) => {
+      // An invalid declaration is reported where the pack is used; nothing binds here.
+      if (error instanceof PackSettingsError) return undefined;
+      throw error;
+    });
+    if (manifest !== undefined && declaration?.bindings !== undefined)
+      results.push(
+        ...refusalResult(
+          manifest.name,
+          packBindingRefusals(manifest.name, declaration.bindings, manifest.entrypoints)
         )
-    );
-    if (issues.length > 0)
-      results.push(makeWorkflowResult(`${pack.key}: ${PACK_DECLARATION_PATH}`, issues));
+      );
+  } catch (error) {
+    results.push(...refusalResult(invokedFrom.pluginRoot, [(error as Error).message]));
   }
   return results;
+}
+
+/** One pack's refusals as a result under its declaration, or nothing when there are none. */
+function refusalResult(key: string, messages: readonly string[]): WorkflowValidationResult[] {
+  const issues = messages.map(
+    (message): ValidationIssue => ({
+      level: 'error',
+      field: 'pack_bindings',
+      message,
+      hint: `A pack copy dispatches only the entrypoints its ${PLUGIN_MANIFEST_FILE} lists: bind one of them, or list this workflow there.`,
+    })
+  );
+  return issues.length > 0 ? [makeWorkflowResult(`${key}: ${PACK_DECLARATION_PATH}`, issues)] : [];
+}
+
+/**
+ * The directory at or above `from`, up to `projectRoot`, whose `archon-plugin.json` is a
+ * workflow pack's, or undefined. Only `from` is asked when it is outside the project. Paths
+ * are canonicalized: the root comes from git resolution, `from` may not.
+ */
+async function invokedPackDir(from: string, projectRoot: string): Promise<string | undefined> {
+  const root = await canonicalizeProjectPath(projectRoot);
+  let dir = await canonicalizeProjectPath(from);
+  const inside = dir === root || !relative(root, dir).startsWith('..');
+  for (;;) {
+    if ((await readPackManifest(dir)) !== undefined) return dir;
+    if (!inside || dir === root || dirname(dir) === dir) return undefined;
+    dir = dirname(dir);
+  }
 }
 
 /**

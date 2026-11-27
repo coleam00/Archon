@@ -53,12 +53,11 @@ import {
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
-  nearestPackBindings,
   type PackCopy,
   packCopies,
   type PackGraph,
   type PackGraphLink,
-  packBindableNames,
+  packBindingScope,
   packBindingWorkflowMissing,
   packWorkflowName,
   packWorkflows,
@@ -415,7 +414,7 @@ interface DeclaredPack {
   key: string;
   copies: Awaited<ReturnType<typeof packCopies>>;
   bindings: Readonly<Record<string, PackBinding>>;
-  /** The workflow names a binding may name (`packBindableNames`), as it must spell them. */
+  /** The workflow names a binding may name (`packBindingScope`), as it must spell them. */
   workflowNames: readonly string[];
   /** The pack's workflows as loaded, for what a binding reads of them. */
   workflows: readonly ResolvedWorkflow[];
@@ -429,8 +428,8 @@ async function findPack(
   const discovered = await loadWorkflows(cwd);
   const workflows = packWorkflows(discovered, packKey, cwd);
   const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
-  const bindings = nearestPackBindings(workflows);
-  if (bindings === undefined)
+  const scope = await packBindingScope(liveSourceRoots(cwd), workflows);
+  if (scope === undefined)
     throw new Error(
       [
         `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
@@ -440,8 +439,8 @@ async function findPack(
   return {
     key: packKey,
     copies,
-    bindings,
-    workflowNames: await packBindableNames(liveSourceRoots(cwd), workflows),
+    bindings: scope.bindings,
+    workflowNames: scope.names,
     workflows: workflows.map(entry => entry.workflow),
   };
 }

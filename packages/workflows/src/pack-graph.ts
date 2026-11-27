@@ -320,9 +320,14 @@ export function packWorkflows(
 export function nearestPackBindings(
   workflows: readonly WorkflowWithSource[]
 ): Readonly<Record<string, PackBinding>> | undefined {
+  return declaringPack(workflows)?.bindings;
+}
+
+/** The nearest copy of the pack that declares bindings, whose declaration is the one that binds. */
+function declaringPack(workflows: readonly WorkflowWithSource[]) {
   return workflows
     .flatMap(({ workflow: { pack } }) => (pack?.bindings !== undefined ? [pack] : []))
-    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0]?.bindings;
+    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0];
 }
 
 /**
@@ -345,36 +350,66 @@ export function packWorkflowName(names: readonly string[], declared: string): st
 }
 
 /**
- * The names of one pack's `workflows` its bindings may name: those its `archon-plugin.json`
- * lists as entrypoints, or all of them when its directory holds no workflow-pack manifest.
- * Discovery reads a pack folder's every workflow while an installed copy holds only its
- * entrypoints, so this is what makes a folder refuse what an installed copy refuses. An
- * entrypoint whose manifest key differs from its YAML `name:` is not found from a folder.
+ * A pack's bindings and the names they may name, both from the copy that declares the
+ * bindings: the entrypoints its directory's `archon-plugin.json` lists, or every stage of the
+ * pack when there is no workflow-pack manifest. Discovery reads a pack folder's every
+ * workflow while an installed copy holds only its entrypoints, so this is what makes a folder
+ * refuse what an installed copy refuses. An entrypoint whose manifest key differs from its
+ * YAML `name:` is not found from a folder. `dir` is that copy's directory. Undefined when no
+ * copy declares bindings; throws when the manifest cannot be read.
  */
-export async function packBindableNames(
+export async function packBindingScope(
   roots: WorkflowSourceRoots,
   workflows: readonly WorkflowWithSource[]
-): Promise<string[]> {
-  const names = workflows.map(entry => entry.workflow.name);
-  // The nearest copy's directory, as its declaration is the one that binds (`nearestPackBindings`).
-  const [pack] = workflows
-    .flatMap(({ workflow }) => (workflow.pack ? [workflow.pack] : []))
-    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source]);
-  const dir = pack === undefined ? null : await packDirectory(roots, pack);
-  if (dir === null) return names;
+): Promise<
+  | { bindings: Readonly<Record<string, PackBinding>>; names: string[]; dir: string | null }
+  | undefined
+> {
+  const pack = declaringPack(workflows);
+  if (pack?.bindings === undefined) return undefined;
+  const all = workflows.map(entry => entry.workflow.name);
+  const dir = await packDirectory(roots, pack);
+  const manifest = dir === null ? undefined : await readPackManifest(dir);
+  const names =
+    manifest === undefined
+      ? all
+      : manifest.entrypoints.flatMap(key => packWorkflowName(all, key) ?? []);
+  return { bindings: pack.bindings, names, dir };
+}
+
+/**
+ * The name and entrypoint keys of the workflow-pack `archon-plugin.json` in `dir`, or
+ * undefined when it holds none (or another kind's). Throws when it cannot be read.
+ */
+export async function readPackManifest(
+  dir: string
+): Promise<{ name: string; entrypoints: string[] } | undefined> {
   const file = join(dir, PLUGIN_MANIFEST_FILE);
   let raw: unknown;
   try {
     raw = JSON.parse(await readFile(file, 'utf-8'));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT' || code === 'ENOTDIR') return names;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
     throw new Error(`Cannot read ${file}: ${(error as Error).message}`, { cause: error });
   }
   if (typeof raw !== 'object' || raw === null || !('kind' in raw) || raw.kind !== 'workflow-pack')
-    return names;
-  const { entrypoints } = workflowPackManifestSchema.parse(raw);
-  return Object.keys(entrypoints).flatMap(key => packWorkflowName(names, key) ?? []);
+    return undefined;
+  const { name, entrypoints } = workflowPackManifestSchema.parse(raw);
+  return { name, entrypoints: Object.keys(entrypoints) };
+}
+
+/** The refusal of each workflow `bindings` name that `names`, what the pack lets them bind, lacks. */
+export function packBindingRefusals(
+  packKey: string,
+  bindings: Readonly<Record<string, PackBinding>>,
+  names: readonly string[]
+): string[] {
+  return Object.entries(bindings).flatMap(([id, binding]) =>
+    bindingWorkflowNames(binding)
+      .filter(declared => packWorkflowName(names, declared) === undefined)
+      .map(declared => packBindingWorkflowMissing(packKey, id, declared))
+  );
 }
 
 /** The refusal of a binding that names a workflow its pack does not let it bind. */
