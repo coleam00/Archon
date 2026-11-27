@@ -1,16 +1,66 @@
 // @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join, sep } from 'node:path';
 import { triggerCheckFixtures } from '../test-support/trigger-check-fixture';
 import {
   installNativeSchedule,
+  inspectNativeSchedule,
   scheduleLabel,
   type NativeScheduleOptions,
 } from '../triggers/native-schedule';
+import { workflowWakeScheduleConfig, workflowWakeScheduleTarget } from './wake-schedule';
 
 const { fixture, scheduleFixture } = triggerCheckFixtures();
+
+test.skipIf(process.platform === 'win32')(
+  'a source-free check does not require watcher log metadata across home spellings',
+  async () => {
+    const { root, archonHome, schedules, check } = await fixture();
+    delete process.env.ARCHON_WEBHOOK_SOURCES;
+    const recordedHome = `${archonHome}${sep}`;
+    process.env.ARCHON_HOME = recordedHome;
+    const target = workflowWakeScheduleTarget();
+    await installNativeSchedule(workflowWakeScheduleConfig(), schedules);
+    const alias = join(root, 'home-link');
+    await symlink(archonHome, alias);
+    const plugin = join(root, 'receive-only.mjs');
+    await writeFile(
+      plugin,
+      "export default () => ({ receive: async () => ({ kind: 'ignored' }) });"
+    );
+    const configPath = join(root, 'sources.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sources: [{ sourceInstanceId: 'receive-only', module: plugin, config: {} }],
+      })
+    );
+    const stateDirectory = join(archonHome, 'schedules');
+    const log = join(stateDirectory, `${scheduleLabel(target.id)}.log`);
+    await chmod(stateDirectory, 0);
+    try {
+      await expect(stat(log)).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(inspectNativeSchedule(target, schedules)).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      for (const sources of [undefined, configPath]) {
+        if (sources) process.env.ARCHON_WEBHOOK_SOURCES = sources;
+        else delete process.env.ARCHON_WEBHOOK_SOURCES;
+        for (const spelling of [recordedHome, archonHome, alias]) {
+          process.env.ARCHON_HOME = spelling;
+          const result = await check();
+          expect(result.error).toBeUndefined();
+          expect(result.observing).toBeUndefined();
+        }
+      }
+    } finally {
+      await chmod(stateDirectory, 0o700);
+    }
+  }
+);
 
 test.skipIf(process.platform === 'win32')(
   'reports a corrupted native definition and fails trigger checking',

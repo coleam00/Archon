@@ -283,6 +283,11 @@ test('finds the registered wake duplicate and its recorded sources and last pass
     unwatched: false,
   });
 
+  await writeWakeLastPass(wakeLastPassPath(inactive), {
+    ...pass,
+    pid: 1,
+    sources: join(root, 'missing-inactive-sources.json'),
+  });
   delete process.env.ARCHON_WEBHOOK_SOURCES;
   const report = await check();
   expect(report.observing).toMatchObject({

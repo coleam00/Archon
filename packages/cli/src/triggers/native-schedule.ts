@@ -381,34 +381,51 @@ export async function installNativeSchedule(
   return result;
 }
 
-/** `undefined` when none of the job's files exists. */
-export async function inspectNativeSchedule(
+type NativeScheduleRegistration = Pick<NativeScheduleStatus, 'path' | 'registered'>;
+
+async function inspectNativeScheduleRegistration(
   target: NativeScheduleTarget,
   options: NativeScheduleOptions = {}
-): Promise<NativeScheduleStatus | undefined> {
+): Promise<NativeScheduleRegistration | undefined> {
   const backend = requireBackend(target, options);
   const label = scheduleLabel(target.id);
   const paths = backend.filePaths(label);
   if ((await existingPaths(paths)).length === 0) return undefined;
-  const log = scheduleLogPath(target.archonHome, label);
+  return { path: paths[0], registered: await backend.isRegistered(label) };
+}
+
+async function nativeScheduleLogStatus(
+  target: NativeScheduleTarget
+): Promise<Pick<NativeScheduleStatus, 'log' | 'lastRunAt'>> {
+  const log = scheduleLogPath(target.archonHome, scheduleLabel(target.id));
   let lastRunAt: string | null = null;
   try {
     lastRunAt = (await stat(log)).mtime.toISOString();
   } catch (error) {
     if (errorCode(error) !== 'ENOENT') throw error;
   }
-  return { path: paths[0], registered: await backend.isRegistered(label), log, lastRunAt };
+  return { log, lastRunAt };
 }
 
-/** Prefers a loaded job, then the first installed job, then the original fallback target. */
-export async function inspectNativeScheduleTargets(
+/** `undefined` when none of the job's files exists. */
+export async function inspectNativeSchedule(
+  target: NativeScheduleTarget,
+  options: NativeScheduleOptions = {}
+): Promise<NativeScheduleStatus | undefined> {
+  const registration = await inspectNativeScheduleRegistration(target, options);
+  if (!registration) return undefined;
+  return { ...registration, ...(await nativeScheduleLogStatus(target)) };
+}
+
+/** Registration selects a watcher without requiring metadata for its discarded output. */
+export async function inspectNativeScheduleRegistrationTargets(
   targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
   options: NativeScheduleOptions = {}
-): Promise<{ target: NativeScheduleTarget; status: NativeScheduleStatus | undefined }> {
+): Promise<{ target: NativeScheduleTarget; status: NativeScheduleRegistration | undefined }> {
   let selectedTarget = targets[0];
-  let selectedStatus: NativeScheduleStatus | undefined;
+  let selectedStatus: NativeScheduleRegistration | undefined;
   for (const target of targets) {
-    const status = await inspectNativeSchedule(target, options);
+    const status = await inspectNativeScheduleRegistration(target, options);
     if (status?.registered) return { target, status };
     if (status && !selectedStatus) {
       selectedTarget = target;
@@ -416,6 +433,18 @@ export async function inspectNativeScheduleTargets(
     }
   }
   return { target: selectedTarget, status: selectedStatus };
+}
+
+/** Prefers a loaded job, then the first installed job, then the original fallback target. */
+export async function inspectNativeScheduleTargets(
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
+  options: NativeScheduleOptions = {}
+): Promise<{ target: NativeScheduleTarget; status: NativeScheduleStatus | undefined }> {
+  const { target, status } = await inspectNativeScheduleRegistrationTargets(targets, options);
+  return {
+    target,
+    status: status ? { ...status, ...(await nativeScheduleLogStatus(target)) } : undefined,
+  };
 }
 
 /**
