@@ -1,4 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { expandWorkflowIncludes } from './include-expander';
 import { mapOf, wf } from './include-expander.fixtures';
 import {
@@ -6,9 +10,12 @@ import {
   buildPackGraph,
   declaredStops,
   type InstalledArrow,
+  packBindableNames,
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
+import { makeTestWorkflowWithSource } from './test-utils';
+import { liveSourceRoots } from './workflow-source';
 import {
   packAsksSettledBindingSchema,
   packEventBindingSchema,
@@ -641,5 +648,34 @@ describe('bindingWorkflowNames', () => {
       asks_settled: { workflow: 'triage', settled: 'answered' },
     });
     expect(bindingWorkflowNames(settled)).toEqual(['build', 'triage']);
+  });
+});
+
+describe('the names a pack lets its bindings name', () => {
+  const trackTempRoot = trackTempRoots();
+  const stage = (name: string) => {
+    const entry = makeTestWorkflowWithSource(
+      { name, nodes: [{ id: 'a', bash: 'true' }] },
+      'project'
+    );
+    entry.workflow.pack = { key: 'factory', source: 'project', workflow: name };
+    return entry;
+  };
+
+  test("are a pack folder's manifest entrypoints, or every stage without a manifest", async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'pack-bindable-')));
+    const stages = [stage('plan'), stage('triage')];
+    expect(await packBindableNames(liveSourceRoots(dir), stages)).toEqual(['plan', 'triage']);
+    await writeFile(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'factory',
+        description: 'd',
+        entrypoints: { plan: 'plan/plan.yaml' },
+      })
+    );
+    expect(await packBindableNames(liveSourceRoots(dir), stages)).toEqual(['plan']);
   });
 });

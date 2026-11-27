@@ -58,6 +58,8 @@ import {
   packCopies,
   type PackGraph,
   type PackGraphLink,
+  packBindableNames,
+  packBindingWorkflowMissing,
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
@@ -413,7 +415,7 @@ interface DeclaredPack {
   key: string;
   copies: Awaited<ReturnType<typeof packCopies>>;
   bindings: Readonly<Record<string, PackBinding>>;
-  /** The pack's dispatchable workflow names, as a binding must spell them. */
+  /** The workflow names a binding may name (`packBindableNames`), as it must spell them. */
   workflowNames: readonly string[];
   /** The pack's workflows as loaded, for what a binding reads of them. */
   workflows: readonly ResolvedWorkflow[];
@@ -439,7 +441,7 @@ async function findPack(
     key: packKey,
     copies,
     bindings,
-    workflowNames: workflows.map(entry => entry.workflow.name),
+    workflowNames: await packBindableNames(liveSourceRoots(cwd), workflows),
     workflows: workflows.map(entry => entry.workflow),
   };
 }
@@ -459,10 +461,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
   const name = packWorkflowName(pack.workflowNames, declared);
-  if (name === undefined)
-    throw new Error(
-      `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
-    );
+  if (name === undefined) throw new Error(packBindingWorkflowMissing(pack.key, id, declared));
   return name;
 }
 

@@ -11,6 +11,9 @@
  * and a `run_ended` cause names the run that ended and the arrow (`sourceInstanceId`) that
  * started the next.
  */
+import { readFile } from 'fs/promises';
+import { join } from 'path';
+import { PLUGIN_MANIFEST_FILE, workflowPackManifestSchema } from '@archon/plugin-manifest';
 import { observesItem } from './schemas/item-role';
 import { z } from 'zod';
 import { declaredItemFate, declaredOutcome, outcomeValues } from './completed-outcome';
@@ -339,6 +342,44 @@ function qualifiedPackWorkflowName(names: readonly string[], declared: string): 
 export function packWorkflowName(names: readonly string[], declared: string): string | undefined {
   const qualified = qualifiedPackWorkflowName(names, declared);
   return names.find(n => n === qualified);
+}
+
+/**
+ * The names of one pack's `workflows` its bindings may name: those its `archon-plugin.json`
+ * lists as entrypoints, or all of them when its directory holds no workflow-pack manifest.
+ * Discovery reads a pack folder's every workflow while an installed copy holds only its
+ * entrypoints, so this is what makes a folder refuse what an installed copy refuses. An
+ * entrypoint whose manifest key differs from its YAML `name:` is not found from a folder.
+ */
+export async function packBindableNames(
+  roots: WorkflowSourceRoots,
+  workflows: readonly WorkflowWithSource[]
+): Promise<string[]> {
+  const names = workflows.map(entry => entry.workflow.name);
+  // The nearest copy's directory, as its declaration is the one that binds (`nearestPackBindings`).
+  const [pack] = workflows
+    .flatMap(({ workflow }) => (workflow.pack ? [workflow.pack] : []))
+    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source]);
+  const dir = pack === undefined ? null : await packDirectory(roots, pack);
+  if (dir === null) return names;
+  const file = join(dir, PLUGIN_MANIFEST_FILE);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(await readFile(file, 'utf-8'));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return names;
+    throw new Error(`Cannot read ${file}: ${(error as Error).message}`, { cause: error });
+  }
+  if (typeof raw !== 'object' || raw === null || !('kind' in raw) || raw.kind !== 'workflow-pack')
+    return names;
+  const { entrypoints } = workflowPackManifestSchema.parse(raw);
+  return Object.keys(entrypoints).flatMap(key => packWorkflowName(names, key) ?? []);
+}
+
+/** The refusal of a binding that names a workflow its pack does not let it bind. */
+export function packBindingWorkflowMissing(packKey: string, id: string, declared: string): string {
+  return `Binding '${id}' names workflow '${declared}', which pack '${packKey}' does not provide.`;
 }
 
 /**
