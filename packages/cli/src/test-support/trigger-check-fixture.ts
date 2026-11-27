@@ -91,10 +91,18 @@ export function triggerCheckFixtures() {
     };
     // A job is validated by its scheduler's path rules, so the scheduler must be one whose
     // rules accept the host paths this fixture writes: Task Scheduler on Windows, launchd elsewhere.
-    const { schedules, timerPrefix, removeByHand } =
+    const {
+      schedules,
+      timerPrefix,
+      removeByHand,
+    }: {
+      schedules: NativeScheduleOptions;
+      timerPrefix: string;
+      removeByHand: string;
+    } =
       process.platform === 'win32'
         ? {
-            schedules: { platform: 'win32', windowsUserId: 'me', runCommand } as const,
+            schedules: { platform: 'win32', windowsUserId: 'me', runCommand },
             timerPrefix: join(archonHome, 'schedules', 'com.archon.trigger.'),
             removeByHand: 'schtasks.exe /Delete /TN \\Archon\\com.archon.trigger.',
           }
@@ -104,7 +112,7 @@ export function triggerCheckFixtures() {
               uid: 501,
               launchAgentsDirectory: join(root, 'LaunchAgents'),
               runCommand,
-            } as const,
+            },
             timerPrefix: join(root, 'LaunchAgents', 'com.archon.trigger.'),
             removeByHand: 'launchctl bootout gui/501/com.archon.trigger.',
           };
