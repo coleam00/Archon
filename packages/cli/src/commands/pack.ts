@@ -53,14 +53,15 @@ import {
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
-  nearestPackBindings,
   type PackCopy,
   packCopies,
   type PackGraph,
   type PackGraphLink,
+  bindingWorkflowNames,
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
+import { packBindingScope, packBindingWorkflowMissing } from '@archon/workflows/pack-binding-rule';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
@@ -413,7 +414,7 @@ interface DeclaredPack {
   key: string;
   copies: Awaited<ReturnType<typeof packCopies>>;
   bindings: Readonly<Record<string, PackBinding>>;
-  /** The pack's dispatchable workflow names, as a binding must spell them. */
+  /** The workflow names a binding may name (`packBindingScope`), as it must spell them. */
   workflowNames: readonly string[];
   /** The pack's workflows as loaded, for what a binding reads of them. */
   workflows: readonly ResolvedWorkflow[];
@@ -427,8 +428,8 @@ async function findPack(
   const discovered = await loadWorkflows(cwd);
   const workflows = packWorkflows(discovered, packKey, cwd);
   const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
-  const bindings = nearestPackBindings(workflows);
-  if (bindings === undefined)
+  const scope = await packBindingScope(liveSourceRoots(cwd), workflows);
+  if (scope === undefined)
     throw new Error(
       [
         `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
@@ -438,8 +439,8 @@ async function findPack(
   return {
     key: packKey,
     copies,
-    bindings,
-    workflowNames: workflows.map(entry => entry.workflow.name),
+    bindings: scope.bindings,
+    workflowNames: scope.names,
     workflows: workflows.map(entry => entry.workflow),
   };
 }
@@ -459,10 +460,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
   const name = packWorkflowName(pack.workflowNames, declared);
-  if (name === undefined)
-    throw new Error(
-      `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
-    );
+  if (name === undefined) throw new Error(packBindingWorkflowMissing(pack.key, id, declared));
   return name;
 }
 
@@ -687,6 +685,8 @@ async function generateChecked(
     const binding = pack.bindings[id];
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
+    // An unprovided workflow is refused before its inputs are read, as validate refuses it.
+    for (const name of bindingWorkflowNames(binding)) workflowNameFor(pack, id, name);
     assertWakeInputs(id, binding, pack);
     for (const item of generate(id, binding, pack, target)) {
       const check = assertLoadable(item, target);

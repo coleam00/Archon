@@ -317,9 +317,14 @@ export function packWorkflows(
 export function nearestPackBindings(
   workflows: readonly WorkflowWithSource[]
 ): Readonly<Record<string, PackBinding>> | undefined {
+  return declaringPack(workflows)?.bindings;
+}
+
+/** The nearest copy of the pack that declares bindings, whose declaration is the one that binds. */
+export function declaringPack(workflows: readonly WorkflowWithSource[]) {
   return workflows
     .flatMap(({ workflow: { pack } }) => (pack?.bindings !== undefined ? [pack] : []))
-    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0]?.bindings;
+    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0];
 }
 
 /**
