@@ -261,7 +261,7 @@ async function publishTypedOutput(
     const { source: _source, text, ...artifact } = recorded;
     await writeNodeArtifact(ctx.artifactsDir, { ...artifact, runId: 'dry-run' }, text);
   }
-  ctx.typedOutputs.push(recorded);
+  ctx.typedOutputs.push({ recorded, output: result });
 }
 
 function recordNodeOutcome(node: DagNode, result: NodeOutput, ctx: DryRunContext): void {

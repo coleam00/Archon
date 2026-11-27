@@ -4,23 +4,12 @@ import {
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 import { bashInvocation } from '../bash-invocation';
-import { loopPrevRefToken, type LoopBodyScope } from '../dag/loop-scope';
-import { inputEnvVars, nodeOutputRefToken, type RequiredOutputRefContext } from '../dag/references';
+import { type LoopBodyScope } from '../dag/loop-scope';
+import { inputEnvVars, type RequiredOutputRefContext } from '../dag/references';
 import { readComposedMeta } from '../compiled-command';
-import {
-  parseWholeOutputRef,
-  substituteTemplate,
-  templateToken,
-  type JsonValue,
-  type TemplateToken,
-} from '../output-ref';
+import { substituteTemplate, templateToken } from '../output-ref';
 import { formatHostSpawnFailure, formatSubprocessFailure } from '../executor-shared';
-import {
-  isBindingDirectiveShape,
-  type LoopNode,
-  type LoopGroupNode,
-  type NodeOutput,
-} from '../schemas';
+import { type LoopNode, type LoopGroupNode, type NodeOutput } from '../schemas';
 import {
   hostSpawnFailure,
   execOwnedProcessGroup,
@@ -32,6 +21,11 @@ import { bindingShellContext, resolveText, type DryRunContext } from './context'
 import { writeDryRunInvocationListings } from './invocation-listings';
 import { loopIterationCompletes, type SimulatedCompletion } from './loop-completion';
 import { prepareCodeExecution } from './nodes/exec';
+import {
+  assertAuthoredBindings,
+  assertAuthoredOutput,
+  authoredOutputReferences,
+} from './output-provenance';
 
 export async function evaluateLoopCompletion(
   node: LoopNode | LoopGroupNode,
@@ -147,42 +141,17 @@ function assertProbeOutputs(
   requiredContext: RequiredOutputRefContext,
   observationsAvailable: boolean
 ): void {
-  const requireAuthored = (output: NodeOutput | undefined): void => {
-    if (output !== undefined && ctx.generatedOutputs.has(output))
-      throw new Error(
-        'Completion probes require an authored stub or executed output, not a generated placeholder'
-      );
-  };
-  const guarded = (
-    token: TemplateToken,
-    sources: Map<string, NodeOutput> | undefined
-  ): TemplateToken => ({
-    pattern: token.pattern,
-    resolve: match => {
-      const resolved = token.resolve(match);
-      if (resolved !== undefined) requireAuthored(sources?.get(match[1]));
-      return resolved;
-    },
-  });
-  const priorReferences = scopes.map(scope =>
-    guarded(loopPrevRefToken(scope, false), scope.loopPrevOutputs)
+  const references = authoredOutputReferences(
+    outputs,
+    scopes,
+    ctx.generatedOutputs,
+    requiredContext
   );
-  const references = [
-    ...priorReferences,
-    guarded(nodeOutputRefToken(outputs, false, undefined, requiredContext), outputs),
-  ];
-  for (const value of Object.values(readComposedMeta(node)?.inputs ?? {})) {
-    const reference = probeInputReference(value, outputs);
-    if (reference !== undefined)
-      substituteTemplate(
-        reference.text,
-        reference.kind === 'fallback' ? priorReferences : references
-      );
-  }
+  assertAuthoredBindings(Object.values(readComposedMeta(node)?.inputs ?? {}), outputs, references);
   substituteTemplate(code, [
-    ...references,
+    ...references.current,
     templateToken(String.raw`\$(?:LOOP_PREV_OUTPUT\b|\{LOOP_PREV_OUTPUT\})`, () => {
-      requireAuthored(previous);
+      assertAuthoredOutput(previous, ctx.generatedOutputs);
       return '';
     }),
     templateToken(
@@ -194,21 +163,6 @@ function assertProbeOutputs(
       }
     ),
   ]);
-}
-
-function probeInputReference(
-  value: JsonValue,
-  outputs: Map<string, NodeOutput>
-): { kind: 'template' | 'fallback'; text: string } | undefined {
-  if (typeof value === 'string') return { kind: 'template', text: value };
-  if (!isBindingDirectiveShape(value)) return undefined;
-  const ref = parseWholeOutputRef(value.from);
-  const producer = ref === undefined ? undefined : outputs.get(ref.nodeId);
-  if (producer !== undefined && producer.state !== 'skipped' && producer.state !== 'pending')
-    return { kind: 'template', text: value.from };
-  return typeof value.if_skipped === 'string'
-    ? { kind: 'fallback', text: value.if_skipped }
-    : undefined;
 }
 
 async function executeProbe(

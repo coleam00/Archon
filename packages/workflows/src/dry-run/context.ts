@@ -104,7 +104,7 @@ export interface DryRunContext
    * Every typed output the simulation has produced, in order, for typed bindings.
    * With execution enabled, authored and executed outputs are also published once.
    */
-  typedOutputs: RecordedTypedOutput[];
+  typedOutputs: { recorded: RecordedTypedOutput; output: NodeOutput }[];
   nodeOutcomes: NodeOutcome[];
   /** Placeholders remain visible in previews but cannot decide executed completion. */
   generatedOutputs: WeakSet<NodeOutput>;

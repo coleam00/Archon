@@ -10,6 +10,10 @@ import { nodeOutcomesListingSchema } from './schemas/node-outcomes';
 import { nodeArtifactsListingSchema } from './schemas/node-artifact';
 import * as dryRunListings from './dry-run/invocation-listings';
 import * as artifactsIndex from './artifacts-index';
+import * as subprocess from './subprocess';
+import { DryRunProbeTreeSurvivedError } from './dry-run';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { dirname } from 'node:path';
 
 const { temporaryDirectory } = useDryRunFiles();
 const verdictSchema = {
@@ -937,11 +941,12 @@ ${ending}`,
             id: 'rounds',
             loop_group: {
               max_iterations: 3,
-              until_bash: 'test "$(cat remaining)" = done',
+              until_bash: 'printf probe >> probes; done=$work.output.done; test "$done" = true',
               nodes: [
                 {
                   id: 'work',
-                  bash: 'if test "$(cat remaining)" = two; then printf one > remaining; else printf done > remaining; fi; printf body >> bodies',
+                  bash: 'if test "$(cat remaining)" = two; then printf one > remaining; done=false; else printf done > remaining; done=true; fi; printf body >> bodies; printf \'{"done":%s,"note":"executed"}\' "$done"',
+                  output_format: verdictSchema,
                 },
               ],
             },
@@ -951,7 +956,69 @@ ${ending}`,
     });
     expect(result.outcome).toBe('completed');
     expect(readFileSync(join(cwd, 'bodies'), 'utf8')).toBe('bodybody');
+    expect(readFileSync(join(cwd, 'probes'), 'utf8')).toBe('probeprobe');
     expect(result.trace.filter(entry => entry.nodeId === 'work')).toHaveLength(2);
+  });
+
+  test('parallel interactive probes retain their invocation and run storage', async () => {
+    const cwd = temporaryDirectory();
+    const artifacts: string[] = [];
+    const scratch: string[] = [];
+    const execute = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
+      async (_command, _args, options) => {
+        if (options.env?.ARTIFACTS_DIR) artifacts.push(options.env.ARTIFACTS_DIR);
+        if (options.env?.NODE_SCRATCH_DIR) scratch.push(options.env.NODE_SCRATCH_DIR);
+        throw Object.assign(new Error('process group still alive'), {
+          code: 0,
+          treeSurvived: true,
+        });
+      }
+    );
+    try {
+      await expect(
+        dryRunWorkflow({
+          cwd,
+          execCode: true,
+          stubs: { first: 'authored', second: 'authored', later: 'authored' },
+          workflow: makeTestWorkflow({
+            name: 'parallel-retention',
+            nodes: [
+              {
+                id: 'rounds',
+                loop_group: {
+                  max_iterations: 1,
+                  until_bash: 'exit 0',
+                  nodes: [
+                    ...['first', 'second'].map(id => ({
+                      id,
+                      loop: {
+                        prompt: 'review',
+                        interactive: true,
+                        gate_message: 'Review required',
+                        max_iterations: 1,
+                        until_bash: 'exit 0',
+                      },
+                    })),
+                    {
+                      id: 'later',
+                      depends_on: ['first', 'second'],
+                      loop: { prompt: 'review', max_iterations: 1, until_bash: 'exit 0' },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        })
+      ).rejects.toBeInstanceOf(DryRunProbeTreeSurvivedError);
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(artifacts).toHaveLength(2);
+      expect(scratch).toHaveLength(2);
+      for (const path of [...artifacts, ...scratch]) expect(existsSync(path)).toBe(true);
+    } finally {
+      execute.mockRestore();
+      for (const root of new Set(artifacts.map(dirname))) await removeTempTree(root);
+    }
   });
 
   test.each(['fail', 'pause'] as const)('body %s prevents any completion probe', async outcome => {
