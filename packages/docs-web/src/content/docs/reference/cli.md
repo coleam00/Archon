@@ -3183,12 +3183,14 @@ Run from inside a workflow node, `trigger fire` records the calling run and node
 `trigger schedule` registers a timer binding with the operating system's own scheduler, so the binding fires with no Archon process running:
 
 ```bash
-archon trigger schedule install --binding <timer-binding.json>
-archon trigger schedule status --binding <timer-binding.json>
-archon trigger schedule remove --binding <timer-binding.json>
+archon trigger schedule install --config <timer-binding.json>
+archon trigger schedule status --config <timer-binding.json>
+archon trigger schedule remove --config <timer-binding.json>
 ```
 
-The job runs `archon trigger fire --binding <absolute file>` every `schedule.intervalSeconds`, and once when the scheduler loads it if `schedule.runAtLoad` is true: at install and at each login. It runs as the installing user, from the binding's `launch.cwd`, with exactly two variables set: `ARCHON_HOME`, and the `PATH` of the shell that ran `install`. No other variables and no credentials are copied. The job's name is `com.archon.trigger.<id>`, where the id is derived from `ARCHON_HOME` as written, the source instance and the binding. `install`, `status` and `remove` find the binding's job by the directory `ARCHON_HOME` names, as `trigger check` does, so another spelling of the same home (a trailing slash, a symlink) reaches the same job.
+`--config` names the binding file here, as it always has: an installed job is written with that spelling, and a reinstall compares the job definition before replacing one. `--binding` names the same file. On `trigger fire` alone, `--config` is a run config layer instead, and `--binding` is the binding file.
+
+The job runs `archon trigger fire --config <absolute file>` every `schedule.intervalSeconds`, and once when the scheduler loads it if `schedule.runAtLoad` is true: at install and at each login. It runs as the installing user, from the binding's `launch.cwd`, with exactly two variables set: `ARCHON_HOME`, and the `PATH` of the shell that ran `install`. No other variables and no credentials are copied. The job's name is `com.archon.trigger.<id>`, where the id is derived from `ARCHON_HOME` as written, the source instance and the binding. `install`, `status` and `remove` find the binding's job by the directory `ARCHON_HOME` names, as `trigger check` does, so another spelling of the same home (a trailing slash, a symlink) reaches the same job.
 
 | Platform | Scheduler | Files `install` writes |
 | --- | --- | --- |

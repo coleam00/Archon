@@ -356,7 +356,22 @@ describe('a fire’s own choices for its starts', () => {
     ).toBe(false);
     expect(startOverridesSchema.safeParse({ config: {} }).success).toBe(false);
     expect(startOverridesSchema.safeParse({ config: '/cfg.yaml' }).success).toBe(false);
-    expect(startOverridesSchema.safeParse({ env: { A: '1' } }).success).toBe(false);
+  });
+
+  test('a stored shape drops a key it does not know, so an older reader still parses it', async () => {
+    const { startOverridesSchema } = await import('./schemas/resource-start');
+    const { runModelOverridesSchema } = await import('./schemas/model-binding');
+    // More than one binary reads these: a later release may add a key, and this one must
+    // still prepare and inspect the start rather than refuse it.
+    expect(
+      startOverridesSchema.parse({
+        config: { path: '/cfg.yaml', profile: 'large' },
+        env: { A: '1' },
+      })
+    ).toEqual({ config: { path: '/cfg.yaml' } });
+    expect(
+      runModelOverridesSchema.parse({ tiers: { large: 'pi/sonnet' }, reasoning: 'high' })
+    ).toEqual({ tiers: { large: 'pi/sonnet' } });
   });
 
   test('a binding carries them beside the intent fields a store keeps apart', async () => {

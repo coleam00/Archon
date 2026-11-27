@@ -9,6 +9,7 @@ import {
   sourceReceiptOutcomeSchema,
   resourceStartDispositionSchema,
   sourceReceiptInputSchema,
+  startOverridesSchema,
 } from '../schemas/resource-start';
 
 export const slotMembershipSchema = z.object({
@@ -71,8 +72,14 @@ export const requestEnvelopeSchema = requestSchema.pick({ resource: true, status
   status: z.literal('admitted'),
   launch: z.unknown(),
 });
+/**
+ * The overrides sit beside the intent, as the SQL store keeps them in their own column: the
+ * intent is parsed strictly by an older binary sharing this directory, so a key it does not
+ * know would make the whole receipt unreadable there. A binding-level key is dropped instead.
+ */
 export const bindingSchema = startBindingInspectionSchema.extend({
   requestIds: z.array(z.string()),
+  startOverrides: startOverridesSchema.nullable().default(null),
 });
 export const receiptFieldsSchema = sourceReceiptInputSchema.strip();
 export const receiptSchema = sourceReceiptInputSchema.loose().extend({

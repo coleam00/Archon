@@ -1306,6 +1306,38 @@ describe("an item's later starts", () => {
     ).toEqual([{ count: 3 }]);
   }, 90_000);
 
+  test('a recorded delivery replays after its layer file is gone', async () => {
+    const fixture = await makeFixture('replay-gone-layer');
+    const declared = join(fixture.root, 'declared.yaml');
+    writeFileSync(declared, 'env:\n  CONFIG_PROOF: declared\n');
+    const oneOff = join(fixture.root, 'one-off.yaml');
+    writeFileSync(oneOff, 'env:\n  CONFIG_PROOF: one-off\n');
+    const binding = configuredBinding(fixture, 'replay', declared);
+    const fire = (extra: string[]) =>
+      fixture.attempt([
+        'trigger',
+        'fire',
+        '--binding',
+        binding,
+        '--item',
+        'issue-1',
+        '--inputs',
+        inputsFile(fixture),
+        ...extra,
+      ]);
+
+    expect((await fire(['--config', oneOff, '--delivery-id', 'delivery-1'])).exitCode).toBe(0);
+    await waitFor(() => completedRuns(fixture, 1), 'the accepted fire');
+    // The layer was read once, when it was still there. A retry of an accepted delivery must
+    // not read it again: the receipt it kept is the answer, whatever the flags say now.
+    rmSync(oneOff);
+    const replay = await fire(['--config', oneOff, '--delivery-id', 'delivery-1']);
+    expect(replay.exitCode).toBe(0);
+    expect(
+      fixture.rows<{ count: number }>('SELECT COUNT(*) AS count FROM remote_agent_start_receipts')
+    ).toEqual([{ count: 1 }]);
+  }, 90_000);
+
   test('a timer written with --config still names its binding file', async () => {
     const fixture = await makeFixture('timer-alias');
     const declared = join(fixture.root, 'declared.yaml');

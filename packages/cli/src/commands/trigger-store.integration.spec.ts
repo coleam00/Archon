@@ -1804,6 +1804,50 @@ test('a triggered run pauses at a gate and an attention wait and continues after
   }
 });
 
+test("a fire's config and models are stored with the receipt, and the start it executes runs on them", async () => {
+  // The file store keeps the whole host: a run config layer is sealed and unsealed there.
+  const { host, project, configPath, restore } = await fireFixture(true);
+  // The node the start runs proves which config layer reached it.
+  await writeFile(
+    join(project, '.archon/workflows/portable.yaml'),
+    'name: portable\ndescription: Portable trigger\nworktree:\n  enabled: false\nnodes:\n  - id: result\n    bash: printf %s "$CONFIG_PROOF" > proof\n'
+  );
+  await writeFile(join(project, '.archon/config.yaml'), 'assistant: codex\n');
+  const layer = join(project, '..', 'one-off.yaml');
+  await writeFile(layer, 'env:\n  CONFIG_PROOF: one-off\n');
+  try {
+    // Recorded, not executed: the request is read back before anything runs.
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { binding: configPath, config: layer, model: ['@reviewer=codex/gpt-5.5'] },
+      { dispatch: noDispatch }
+    );
+    const [receipt] = await host.deps.store.listStartReceipts(10);
+    const stored = await host.deps.store.getStartReceipt(receipt.id);
+    expect(stored?.bindings[0]?.intent?.startOverrides).toEqual({
+      config: { path: layer },
+      models: { aliases: { '@reviewer': 'codex/gpt-5.5' } },
+    });
+    const disposition = stored?.bindings[0]?.disposition;
+    if (disposition?.status !== 'admitted') throw new Error('Expected the start to be admitted');
+    expect(await stat(join(project, 'proof')).catch(() => null)).toBeNull();
+
+    await triggerCommand(host, 'execute', [disposition.requestId], { host: 'host' });
+    const deadline = Date.now() + 30_000;
+    while (
+      (await host.deps.store.getWorkflowRun(disposition.runId))?.status !== 'completed' &&
+      Date.now() < deadline
+    )
+      await new Promise(resolve => setTimeout(resolve, 20));
+    expect((await host.deps.store.getWorkflowRun(disposition.runId))?.status).toBe('completed');
+    expect(await readFile(join(project, 'proof'), 'utf8')).toBe('one-off');
+  } finally {
+    restore();
+  }
+}, 60_000);
+
 test('a fire from inside a run records that run, and the started run and its request show it', async () => {
   const { host, configPath, restore } = await fireFixture();
   const requester = await host.deps.store.createWorkflowRun({

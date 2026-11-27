@@ -526,7 +526,7 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
     for (const timer of timers) {
       lines.push(
         `  archon trigger fire --binding ${shellQuote(timer.path)}`,
-        `  archon trigger schedule install --binding ${shellQuote(timer.path)}`
+        `  archon trigger schedule install --config ${shellQuote(timer.path)}`
       );
     }
   }

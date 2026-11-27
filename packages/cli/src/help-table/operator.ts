@@ -191,7 +191,7 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'schedule',
-      spec: 'trigger schedule <install|remove|status> --binding <file>',
+      spec: 'trigger schedule <install|remove|status> --config <file>',
       description: "Manage the binding's OS timer (launchd, systemd user timer, Task Scheduler)",
     },
     {

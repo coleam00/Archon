@@ -497,16 +497,15 @@ export type StartLimit = z.infer<typeof startLimitSchema>;
  * tier or `@alias` rebindings (`--model`). The two are stored as the operator typed them —
  * a path and raw `name=spec` mappings — never as a resolved profile, which belongs to the
  * install at preparation time.
+ *
+ * Stored with the start and read back by another binary, so a key this shape does not know
+ * is dropped, not refused: a later release may add one, and an older reader must still
+ * prepare and inspect the start.
  */
-export const startOverridesSchema = z
-  .object({
-    config: z
-      .object({ path: z.string().min(1) })
-      .strict()
-      .optional(),
-    models: runModelOverridesSchema.optional(),
-  })
-  .strict();
+export const startOverridesSchema = z.object({
+  config: z.object({ path: z.string().min(1) }).optional(),
+  models: runModelOverridesSchema.optional(),
+});
 export type StartOverrides = z.infer<typeof startOverridesSchema>;
 
 export const resourceStartBindingIntentSchema = z

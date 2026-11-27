@@ -248,7 +248,7 @@ describe('archon pack bindings', () => {
     expect(after.binding.launch.inputs).toEqual({ sweep_binding: sweepPath });
     const printed = logSpy.mock.calls.flat().join('\n');
     expect(printed).toContain(`archon trigger fire --binding '${sweepPath}'`);
-    expect(printed).toContain(`archon trigger schedule install --binding '${sweepPath}'`);
+    expect(printed).toContain(`archon trigger schedule install --config '${sweepPath}'`);
   });
 
   it('writes a fire-only binding as a trigger fire file with no schedule', async () => {

@@ -395,11 +395,6 @@ async function triggerFire(
   const eventInputs = await readEventInputs(options);
   assertItemOptions(options);
   const config = await loadFireConfig(bindingFile);
-  // A `--config` that named the binding file is not also a layer; see `fireBindingFile`.
-  const startOverrides = await fireStartOverrides(
-    options,
-    options.binding === undefined ? undefined : options.config
-  );
   // A fire has no ended or asking run to take the checkout from; starting the stage anyway would
   // cut it from the base branch, which is the one place this binding must never run.
   if (config.on?.runEnded?.checkout !== undefined)
@@ -420,6 +415,13 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
+  // A recorded delivery answers with the receipt it kept, so this call's flags cannot change
+  // it: reading the layer here would fail a retry whose layer file has since moved, for a
+  // start already accepted. A `--config` that named the binding file is not also a layer
+  // either; see `fireBindingFile`.
+  const startOverrides = recorded
+    ? undefined
+    : await fireStartOverrides(options, options.binding === undefined ? undefined : options.config);
   const itemKey = await fireItemKey({
     config,
     explicit: options.item,
@@ -764,18 +766,18 @@ async function scheduleTrigger(
   schedules: NativeScheduleOptions
 ): Promise<void> {
   const operation = args[0];
-  if (
-    !options.binding ||
-    (operation !== 'install' && operation !== 'remove' && operation !== 'status')
-  )
+  // An installed timer's job is written with `--config`, so schedule keeps that spelling; a
+  // fire's own `--config` is a run config layer, which is where the two commands differ.
+  const bindingFile = options.binding ?? options.config;
+  if (!bindingFile || (operation !== 'install' && operation !== 'remove' && operation !== 'status'))
     throw new Error(
-      'Usage: archon trigger schedule <install|remove|status> --binding <timer-binding.json>'
+      'Usage: archon trigger schedule <install|remove|status> --config <timer-binding.json>'
     );
-  const config = await loadFireConfig(options.binding);
+  const config = await loadFireConfig(bindingFile);
   await scheduleTimer({
     operation,
     config,
-    configPath: resolve(options.binding),
+    configPath: resolve(bindingFile),
     schedules,
     assertKnownRunAsUser: () => assertKnownRunAsUser(host, config),
   });

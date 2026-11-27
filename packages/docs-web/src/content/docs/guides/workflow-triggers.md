@@ -184,7 +184,7 @@ archon trigger fire --binding /Users/alice/.archon/triggers/repository-refresh.j
 The command returns a durable receipt and disposition, then runs accepted work in the background. Install the timer after the one-shot request succeeds:
 
 ```bash
-archon trigger schedule install --binding /Users/alice/.archon/triggers/repository-refresh.json
+archon trigger schedule install --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
 The timer belongs to the operating system's own scheduler: a LaunchAgent on macOS, a systemd user timer on Linux, and a Task Scheduler task on Windows. Archon installs only jobs named `com.archon.trigger.*` (on Windows, under the `\Archon\` task folder). Each job runs the same `trigger fire --binding <file>` command as the installing user, with the absolute executable and arguments, the working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. A scheduler's default `PATH` lacks them; launchd's is only `/usr/bin:/bin:/usr/sbin:/sbin`. Its output is appended to `ARCHON_HOME/schedules/com.archon.trigger.<id>.log`, and `archon trigger schedule status --binding <file>` reports whether the timer is installed and when it last ran. See [trigger schedules](/reference/cli/#trigger-schedules) for what each platform writes.
@@ -214,7 +214,7 @@ archon trigger inspect 1f3be5de-4e63-4da2-b352-20d95ba83b37
 Remove future firings with the same configuration file:
 
 ```bash
-archon trigger schedule remove --binding /Users/alice/.archon/triggers/repository-refresh.json
+archon trigger schedule remove --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
 Removing a schedule does not cancel work that Archon already accepted. To change its interval or startup behavior, or to record a changed `PATH`, remove the existing job before installing again. A schedule installed before Archon recorded `PATH` needs the same remove and install once; until then its runs cannot find tools outside launchd's default `PATH`. A macOS schedule installed before Archon wrote its output to a log needs it once too, and until then `status` cannot say when it last ran.

@@ -22,8 +22,12 @@ export interface WebhookSourceRequest {
  * either is the operator's decision about that start rather than something a webhook
  * payload's handler may take. `trigger fire --config|--model` is the only producer, and a
  * plugin that sends the field is refused rather than having it dropped.
+ *
+ * Every acceptance a plugin returns is this one schema — a webhook's, an observation's, and
+ * each label read's inside it — so a refusal names the field that carried it and no second
+ * walk has to repeat the rule.
  */
-const sourcePluginAcceptanceSchema = sourceReceiptAcceptanceSchema.refine(
+export const sourcePluginAcceptanceSchema = sourceReceiptAcceptanceSchema.refine(
   acceptance => acceptance.bindings.every(binding => binding.startOverrides === undefined),
   {
     message:
@@ -140,7 +144,7 @@ const observedWaitSchema = z
 
 export const sourceObservationSchema = z
   .object({
-    acceptances: z.array(sourceReceiptAcceptanceSchema),
+    acceptances: z.array(sourcePluginAcceptanceSchema),
     /** Waits this source binds but cannot observe, with why. */
     unserved: z.array(z.object({ wait: observedWaitSchema, reason: z.string().min(1) }).strict()),
     /** Reads that failed; the other waits are still observed. */
@@ -155,7 +159,7 @@ export const sourceObservationSchema = z
           .object({
             bindingId: z.string().min(1),
             label: z.string().min(1),
-            acceptance: sourceReceiptAcceptanceSchema,
+            acceptance: sourcePluginAcceptanceSchema,
           })
           .strict()
       )
@@ -182,28 +186,6 @@ export const sourceObservationSchema = z
   })
   .strict();
 export type SourceObservation = z.infer<typeof sourceObservationSchema>;
-
-/**
- * The same rule for the acceptances an observing source returns. A read may hand over many
- * starts, so every acceptance is checked, including the per-issue ones a label read makes.
- */
-export const sourcePluginObservationSchema = sourceObservationSchema.superRefine(
-  (observation, ctx) => {
-    const acceptances = [
-      ...observation.acceptances,
-      ...observation.labelAcceptances.map(entry => entry.acceptance),
-    ];
-    const chosen = (acceptance: (typeof acceptances)[number]) =>
-      acceptance.bindings.some(binding => binding.startOverrides !== undefined);
-    if (!acceptances.some(chosen)) return;
-    ctx.addIssue({
-      code: 'custom',
-      path: ['acceptances'],
-      message:
-        "a source plugin's binding cannot choose a run config or models; only `trigger fire --config` and `--model` set them",
-    });
-  }
-);
 
 /**
  * What a plugin's `observe` returns: `openedIssueFailures` only when the engine passed

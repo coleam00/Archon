@@ -104,13 +104,15 @@ async function installTimer(request: ScheduleRequest, target: NativeScheduleTarg
   await installNativeSchedule(
     {
       id: target.id,
-      programArguments: [executable, ...prefix, 'trigger', 'fire', '--binding', configPath],
+      // `--config`, not `--binding`: the job an earlier release installed under this id spells
+      // it that way, and a reinstall compares the definitions before replacing one.
+      programArguments: [executable, ...prefix, 'trigger', 'fire', '--config', configPath],
       workingDirectory: config.binding.launch.cwd,
       archonHome: target.archonHome,
       path: process.env.PATH ?? '',
       schedule: config.schedule,
       output: 'log',
-      removeCommand: `archon trigger schedule remove --binding ${configPath}`,
+      removeCommand: `archon trigger schedule remove --config ${configPath}`,
     },
     schedules
   );

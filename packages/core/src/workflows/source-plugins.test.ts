@@ -72,6 +72,18 @@ async function fixture(result: unknown) {
   return { configPath };
 }
 
+/** Every message in an error's cause chain: the wrapper names the stage, the cause the rule. */
+async function refusalText(promise: Promise<unknown>): Promise<string> {
+  const error: unknown = await promise.then(
+    () => undefined,
+    (thrown: unknown) => thrown
+  );
+  let text = '';
+  for (let current: unknown = error; current instanceof Error; current = current.cause)
+    text += `${current.message}\n`;
+  return text;
+}
+
 describe('webhook source plugin host', () => {
   test('loads an operator module outside the repository and persists before acknowledging', async () => {
     const { configPath } = await fixture({ status: 'received', acceptance: acceptance() });
@@ -144,12 +156,14 @@ describe('webhook source plugin host', () => {
     expect(acceptReceipt).not.toHaveBeenCalled();
   });
 
-  test('a source plugin cannot choose the run config or models of the start it hands over', async () => {
+  // Refused, not dropped: a handler that tries to pick a config or models is a mistake worth
+  // naming, and either half alone is enough to make it.
+  test.each([
+    ['the run config layer', { config: { path: '/srv/archon/one-off.yaml' } }],
+    ['the models', { models: { tiers: { large: 'codex/gpt-6.1-sol' } } }],
+  ])('a source plugin cannot choose %s of the start it hands over', async (_half, overrides) => {
     const overridden = acceptance();
-    overridden.bindings[0].startOverrides = {
-      config: { path: '/srv/archon/one-off.yaml' },
-      models: { tiers: { large: 'codex/gpt-6.1-sol' } },
-    };
+    Object.assign(overridden.bindings[0], { startOverrides: overrides });
     const { configPath } = await fixture({ status: 'received', acceptance: overridden });
     const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
     const host = await loadWebhookSourcePlugins(configPath, {
@@ -158,10 +172,11 @@ describe('webhook source plugin host', () => {
       hasDeliveryReceipt: async () => false,
       getReceipt: async () => null,
     });
-    // Refused, not dropped: a handler that tries to pick a config is a mistake worth naming.
-    await expect(
-      host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
-    ).rejects.toThrow('failed to normalize a receipt');
+    expect(
+      await refusalText(
+        host.receive('source-1', { body: '', headers: {}, receivedAt: new Date().toISOString() })
+      )
+    ).toContain('cannot choose a run config or models');
     expect(acceptReceipt).not.toHaveBeenCalled();
   });
 
@@ -335,6 +350,7 @@ const REMOTE = 'https://github.com/owner/repo.git';
 async function observingFixture(
   plugin: {
     acceptances: unknown[];
+    labelAcceptances?: unknown[];
     revision?: string;
     prNumber?: number;
     failed?: unknown[];
@@ -372,6 +388,10 @@ async function observingFixture(
     failedOnce = true;
     return {
       acceptances: config.acceptances.map(a => ({ ...a, receipt: { ...a.receipt, id: crypto.randomUUID() } })),
+      labelAcceptances: (config.labelAcceptances ?? []).map(l => ({
+        ...l,
+        acceptance: { ...l.acceptance, receipt: { ...l.acceptance.receipt, id: crypto.randomUUID() } },
+      })),
       unserved: [],
       failed: [...(failing || config.failOnce !== true ? (config.failed ?? []) : []), ...caught],
     };
@@ -444,6 +464,59 @@ function forgeReader() {
     },
   };
 }
+
+describe("an observing source cannot choose a start's config or models", () => {
+  const observer = async (plugin: { acceptances: unknown[]; labelAcceptances?: unknown[] }) => {
+    const configPath = await observingFixture(plugin);
+    const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
+    const sources = await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt,
+      isKnownUser: async () => true,
+      hasDeliveryReceipt: async () => false,
+      getReceipt: async () => null,
+    });
+    return {
+      acceptReceipt,
+      // A thrown observation is a report line, not a rejection: the pass keeps going.
+      pass: async (): Promise<string> => {
+        const observer = createItemWaitObserver({
+          sources,
+          store: waitStore([{}]),
+          forge: forgeReader(),
+        });
+        const lines = (await observer?.pass(new Date())) ?? [];
+        return lines.map(line => line.error ?? '').join('\n');
+      },
+    };
+  };
+
+  test('an acceptance in `acceptances` is refused, naming that field', async () => {
+    const overridden = acceptance();
+    Object.assign(overridden.bindings[0], {
+      startOverrides: { config: { path: '/srv/archon/one-off.yaml' } },
+    });
+    const { acceptReceipt, pass } = await observer({ acceptances: [overridden] });
+    const text = await pass();
+    expect(text).toContain('cannot choose a run config or models');
+    expect(text).toContain('acceptances');
+    expect(acceptReceipt).not.toHaveBeenCalled();
+  });
+
+  test('an acceptance inside `labelAcceptances` is refused, naming that field', async () => {
+    const overridden = acceptance();
+    Object.assign(overridden.bindings[0], {
+      startOverrides: { models: { tiers: { large: 'codex/gpt-6.1-sol' } } },
+    });
+    const { acceptReceipt, pass } = await observer({
+      acceptances: [],
+      labelAcceptances: [{ bindingId: 'binding-1', label: 'ready', acceptance: overridden }],
+    });
+    const text = await pass();
+    expect(text).toContain('cannot choose a run config or models');
+    expect(text).toContain('labelAcceptances');
+    expect(acceptReceipt).not.toHaveBeenCalled();
+  });
+});
 
 describe('observing open item waits', () => {
   test('with no open waits, no source is called and nothing reads the forge', async () => {
