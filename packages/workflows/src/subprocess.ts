@@ -499,8 +499,8 @@ interface OwnedGroup {
   readonly node: NodeProcessOptions | undefined;
   readonly recorder: NodeProcessRecorder | undefined;
   readonly posix: boolean;
-  /** A setup command, run under the watcher that ends its group when the owner's pipe closes. */
-  readonly lifeline: boolean;
+  /** An unrecorded command's watcher ends its group when the owner's pipe closes. */
+  readonly lifeline: false | 'setup' | 'input';
   stdout: Buffer;
   stderr: Buffer;
   failure?: RawSubprocessRejection;
@@ -544,8 +544,8 @@ function spawnOwnedGroup(
 ): OwnedGroup {
   const { node } = options;
   const posix = process.platform !== 'win32';
-  const lifeline = posix && !node;
-  const inputLifeline = lifeline && options.input !== undefined;
+  const lifeline = posix && !node ? (options.input === undefined ? 'setup' : 'input') : false;
+  const inputLifeline = lifeline === 'input';
   const child = spawn(
     cmd,
     lifeline
@@ -601,7 +601,7 @@ function stopGroup(group: OwnedGroup, whole: boolean): void {
     child.kill('SIGTERM');
     return;
   }
-  endTree(group, child.pid, group.node ? 'SIGTERM' : 'SIGKILL');
+  endTree(group, child.pid, group.node || group.lifeline === 'input' ? 'SIGTERM' : 'SIGKILL');
 }
 
 function closeOutput(group: OwnedGroup): void {

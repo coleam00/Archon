@@ -226,6 +226,9 @@ async function executeProbe(
       cwd: ctx.execWorkspace,
       env,
       timeout,
+      // Windows has no POSIX lifeline; retain its existing whole-tree timeout mode.
+      node:
+        process.platform === 'win32' ? { recorder: undefined, endTreeOnTimeout: true } : undefined,
     });
     return { kind: 'bash' };
   } catch (error) {

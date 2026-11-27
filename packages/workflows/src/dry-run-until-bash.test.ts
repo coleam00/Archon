@@ -388,7 +388,7 @@ ${ending}`,
                 prompt: 'review',
                 max_iterations: 2,
                 on_exhausted: 'complete',
-                until_bash: `trap 'exit ${exit}' TERM; printf probe >> invoked; while :; do :; done`,
+                until_bash: `trap 'printf terminated >> term-handler; exit ${exit}' TERM; printf probe >> invoked; while :; do :; done`,
               },
             },
           ],
@@ -397,6 +397,7 @@ ${ending}`,
       });
       expect(result.outcome).toBe('failed');
       expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('probe');
+      expect(readFileSync(join(cwd, 'term-handler'), 'utf8')).toBe('terminated');
     }
   );
 
