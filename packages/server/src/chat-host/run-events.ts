@@ -6,6 +6,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowCommandSurface } from '@archon/workflows/deps';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { parseRunUsage } from '@archon/workflows/schemas/run-usage';
 import type { ChatRunEvent } from '@archon/chat-contract';
 import {
   getWorkflowEventEmitter,
@@ -22,10 +23,8 @@ type ProjectedRunEvent =
   | Exclude<ChatRunEvent, WorkflowStarted>
   | Omit<WorkflowStarted, 'conversationId'>;
 
-/** The run's recorded total cost, when it is a usable amount. */
 export function runTotalCostUsd(run: WorkflowRun): number | undefined {
-  const cost = run.metadata.total_cost_usd;
-  return typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined;
+  return parseRunUsage(run.metadata).costUsd;
 }
 
 /**

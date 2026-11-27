@@ -39,6 +39,10 @@ inputs:
 
 returns: outcome
 
+# A drain over finished runs. The `discoveries-after-merge` binding starts it on the merged
+# issue's item, whose end it leaves holding.
+observes: true
+
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
   enabled: false

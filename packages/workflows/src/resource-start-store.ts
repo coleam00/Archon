@@ -465,7 +465,10 @@ export interface ResourceSlotOccupancy {
   /** Live holders, oldest first. */
   holders: readonly { id: string }[];
   waiters: readonly CapacityWaiter[];
-  /** Valid prefix of queued start requests, oldest first. */
+  /**
+   * Valid prefix of queued start requests in queue order: starts on an item with priority
+   * first, then ordinary ones, each group oldest first.
+   */
   queue: readonly QueuedStart[];
   /** Damage at the next queue position prevents admitting successors. */
   queueError?: Error;
@@ -480,6 +483,16 @@ export interface ResourceSlotOccupancy {
    * starts of one workflow on one item can name different resources.
    */
   heldItems: ReadonlyMap<string, string>;
+  /** Every item with priority, its own or through an item it is `part_of` (`hasPriority`). */
+  priorityItems: ReadonlySet<string>;
+}
+
+/** Whether a start on `itemId` queues ahead of ordinary starts: its item has priority. */
+export function hasPriority(
+  slot: Pick<ResourceSlotOccupancy, 'priorityItems'>,
+  itemId: string | null
+): boolean {
+  return itemId !== null && slot.priorityItems.has(itemId);
 }
 
 /** The run that holds the start's item for its workflow, other than the start's own run. */
@@ -534,7 +547,7 @@ export function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
 }
 
 /**
- * The queued requests that could run now, oldest first. A request whose checkout or item a
+ * The queued requests that could run now, in queue order. A request whose checkout or item a
  * live run holds keeps its place and is passed over until that frees, so FIFO holds per
  * checkout and per item, and the slot goes to the next request that can run.
  */
@@ -550,7 +563,9 @@ function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
  * What keeps a new start request for `launch`, made by `hostId`, from being admitted now.
  *
  * An older request of the same host that could run keeps FIFO even when a slot is free:
- * that host is acting now, and its own queue goes first. An older request of another host
+ * that host is acting now, and its own queue goes first. A new start is the newest of its
+ * rank, so a start on an item with priority (`hasPriority`) is held only by an older priority
+ * request, and passes ordinary ones. An older request of another host
  * is waiting only for that host to drain it. It holds no slot and blocks nothing; it keeps
  * its place and takes the next free slot when its host drains. So a hand start (which no
  * queued request shares a host with) takes any free slot, and on a busy resource can
@@ -572,7 +587,10 @@ export function resourceStartBlocker(
   // item read names the holder only when it is the run on the same item.
   const itemRun = queuedItemHolder(slot.heldItems, { launch, itemId });
   if (itemRun !== undefined) return { kind: 'run', id: itemRun };
-  const older = runnableQueue(slot).find(start => start.hostId === hostId);
+  const priority = hasPriority(slot, itemId);
+  const older = runnableQueue(slot).find(
+    start => start.hostId === hostId && (!priority || hasPriority(slot, start.itemId))
+  );
   if (older) return { kind: 'request', id: older.id };
   const holder = checkoutHolder(slot, launch);
   if (holder !== undefined) return { kind: 'run', id: holder };

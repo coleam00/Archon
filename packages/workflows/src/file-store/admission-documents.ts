@@ -45,7 +45,9 @@ export const slotSchema = (source: string) =>
     ),
     queue: z.array(z.string()),
   });
-export const requestSchema = z.object({
+// The file store writes requests and receipts back from their parsed value, so both keep
+// keys a newer binary added.
+export const requestSchema = z.looseObject({
   id: z.string(),
   resource: z.string(),
   hostId: z.string(),
@@ -73,7 +75,8 @@ export const bindingSchema = startBindingInspectionSchema.extend({
   requestIds: z.array(z.string()),
 });
 export const receiptFieldsSchema = sourceReceiptInputSchema.strip();
-export const receiptSchema = sourceReceiptInputSchema.extend({
+export const receiptSchema = sourceReceiptInputSchema.loose().extend({
+  sourceActor: sourceReceiptInputSchema.shape.sourceActor.unwrap().loose().nullable(),
   outcome: sourceReceiptOutcomeSchema,
   reason: z.string().nullable(),
   bindings: z.array(bindingSchema),

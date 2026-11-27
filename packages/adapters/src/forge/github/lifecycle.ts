@@ -24,6 +24,7 @@ import { upsertComment } from './comments';
 import { replyOnThread, resolveThread } from './review-threads';
 import { submitReview } from './reviews';
 import { putAttachment } from './attachments';
+import { addAssignee, removeAssignee } from './assignees';
 import {
   addLabel,
   closeWorkItem,
@@ -58,6 +59,10 @@ export async function handleGithubMutation(
         return await addLabel(request, fetchImpl, token, submit);
       case 'workitem.label.remove':
         return await removeLabel(request, fetchImpl, token, submit);
+      case 'workitem.assignee.add':
+        return await addAssignee(request, fetchImpl, token, submit);
+      case 'workitem.assignee.remove':
+        return await removeAssignee(request, fetchImpl, token, submit);
       case 'repo.label.ensure':
         return await ensureLabel(request, fetchImpl, token, submit);
       case 'pr.merge':

@@ -7445,6 +7445,7 @@ export interface components {
       );
       wait?: components['schemas']['WorkflowWaitContext'];
       stop_reason?: components['schemas']['RunStopReason'];
+      total_cost_usd?: number;
     } & {
       [key: string]: unknown;
     };
@@ -7723,6 +7724,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -7792,6 +7794,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -7832,6 +7835,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -7873,6 +7877,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -7921,6 +7926,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -7964,6 +7970,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -7995,6 +8002,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8057,6 +8065,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8100,6 +8109,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8129,6 +8139,7 @@ export interface components {
             projectKey: string;
             key: string;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8222,6 +8233,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8291,6 +8303,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8331,6 +8344,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8372,6 +8386,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8420,6 +8435,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8463,6 +8479,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8494,6 +8511,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8556,6 +8574,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8599,6 +8618,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8628,6 +8648,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8863,6 +8884,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8932,6 +8954,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8972,6 +8995,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9013,6 +9037,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9061,6 +9086,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9104,6 +9130,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9135,6 +9162,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9197,6 +9225,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9240,6 +9269,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9269,6 +9299,7 @@ export interface components {
               projectKey: string;
               key: string;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9493,6 +9524,14 @@ export interface components {
                 key: string;
               };
             };
+      } | null;
+      priority: {
+        own: boolean;
+        inheritedFrom: {
+          id: string;
+          projectKey: string;
+          key: string;
+        }[];
       } | null;
       ended: {
         /** @enum {string} */
@@ -9827,6 +9866,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -9896,6 +9936,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -9936,6 +9977,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -9977,6 +10019,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10025,6 +10068,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10074,6 +10118,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10105,6 +10150,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10167,6 +10213,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10210,6 +10257,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10239,6 +10287,7 @@ export interface components {
                 projectKey: string;
                 key: string;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10463,6 +10512,14 @@ export interface components {
                   key: string;
                 };
               };
+        } | null;
+        priority: {
+          own: boolean;
+          inheritedFrom: {
+            id: string;
+            projectKey: string;
+            key: string;
+          }[];
         } | null;
         ended: {
           /** @enum {string} */
@@ -10716,6 +10773,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -10785,6 +10843,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -10825,6 +10884,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -10866,6 +10926,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -10914,6 +10975,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -10963,6 +11025,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -10994,6 +11057,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11056,6 +11120,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11099,6 +11164,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11128,6 +11194,7 @@ export interface components {
                   projectKey: string;
                   key: string;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;

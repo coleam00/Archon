@@ -24,6 +24,7 @@ import {
   readCapacityWait,
   toolCallAttentionArraySchema,
 } from '../schemas/workflow-run';
+import { replaceStreamToolCallAttention } from '../schemas/run-attention';
 import { randomUUID } from 'node:crypto';
 import {
   WorkflowNotResumableError,
@@ -70,7 +71,6 @@ import {
   terminalArtifactsFor,
   type TerminalArtifacts,
 } from '../terminal-record';
-import { isDeepStrictEqual } from 'node:util';
 
 export type TransactionView = Omit<
   IWorkflowStore,
@@ -95,6 +95,9 @@ export type TransactionView = Omit<
   | 'recordItemMerge'
   | 'getItemLanding'
   | 'recordItemLanding'
+  | 'getItemPriority'
+  | 'setItemPriority'
+  | 'clearItemPriority'
   | 'listItemLinks'
   | 'recordItemLink'
   | 'endItemLink'
@@ -463,17 +466,12 @@ export function createTransactionView(
         throw new Error('Tool attention stream mismatch');
       const run = runs.get(id);
       if (run?.status !== 'running') return false;
-      const previous = toolCallAttentionArraySchema.parse(
-        run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []
+      const combined = replaceStreamToolCallAttention(
+        run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY],
+        streamId,
+        snapshot
       );
-      if (
-        isDeepStrictEqual(
-          previous.filter(call => call.streamId === streamId),
-          snapshot
-        )
-      )
-        return false;
-      const combined = [...previous.filter(call => call.streamId !== streamId), ...snapshot];
+      if (!combined) return false;
       if (combined.length) run.metadata[TOOL_CALL_ATTENTION_METADATA_KEY] = combined;
       else Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       record({

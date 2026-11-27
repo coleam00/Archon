@@ -70,6 +70,7 @@ import type {
 } from '@archon/workflows/schemas/binding-input-source';
 import { loadWorkflows } from './workflow-list';
 import { loadedLine, otherCopyLine } from './pack-copies';
+import { checkReplacedFiles } from './pack-replaced-files';
 
 export interface PackBindingsOptions {
   /** The checkout the bindings launch in, and where the pack is discovered from. */
@@ -657,15 +658,6 @@ async function assertSiblingFiles(
   }
 }
 
-async function assertNothingOverwritten(generated: readonly Generated[]): Promise<void> {
-  const present: string[] = [];
-  for (const item of generated) if (await exists(item.path)) present.push(item.path);
-  if (present.length === 0) return;
-  throw new Error(
-    `Refusing to overwrite ${present.join(', ')}. Nothing was written. Pass --force to replace ${present.length === 1 ? 'it' : 'them'}.`
-  );
-}
-
 /**
  * A wake binding's `{ input }` reads a run of its `wake.workflow`, so a name that workflow
  * does not declare would map nothing on every start: refused here, before an event arrives.
@@ -719,7 +711,7 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
     target.discoveryCwd !== undefined
   );
   const generated = await generateChecked(pack, selectIds(pack, options.only), target);
-  if (!options.force) await assertNothingOverwritten(generated);
+  await checkReplacedFiles(generated, options.force === true);
 
   await mkdir(target.outDir, { recursive: true });
   for (const item of generated) {
