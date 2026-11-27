@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { displayDeclarationFindings } from './display-declarations';
 import { parseWorkflowYaml } from './loader/test-utils';
