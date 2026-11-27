@@ -1,6 +1,6 @@
 {
   "name": "@archon/workflows",
-  "version": "0.16.0",
+  "version": "0.16.1",
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
@@ -47,6 +47,7 @@
     "./factory-view-check": "./src/factory-view-check.ts",
     "./factory-view-read": "./src/factory-view-read.ts",
     "./pack-document": "./src/pack-document.ts",
+    "./pack-binding-rule": "./src/pack-binding-rule.ts",
     "./workflow-notice": "./src/workflow-notice.ts",
     "./end-turn-request": "./src/end-turn-request.ts",
     "./run-attention-resolution": "./src/run-attention-resolution.ts",

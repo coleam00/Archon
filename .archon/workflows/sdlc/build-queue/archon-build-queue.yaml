@@ -52,8 +52,9 @@ inputs:
       each option's effect and ruling. Empty on any other start.
 
 # How the run left the item: `ready`, `continue`, `parked`, or `asked` with its ask open
-# on the item.
-returns: { node: apply, outcome: decision, asks: asks }
+# on the item. `parked` ends the item: no queue takes it until a re-triage, whose intake
+# run opens it again. `continue` stops it until archon-build-pick starts the next round.
+returns: { node: apply, outcome: decision, asks: asks, ends: [parked], summary: summary }
 
 nodes:
   # Reads the item and writes the issue's body to build/issue.md, so every agent reads

@@ -33,6 +33,9 @@ inputs:
 
 returns: pick
 
+# A pass over every item the merge stage has, and a step of none of them.
+observes: true
+
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
   enabled: false

@@ -7,9 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-27
+
+An item or a work order can be given priority, the forge can assign an issue, and stored engine records can gain a field without breaking an older binary.
+
 ### Added
 
-- The forge can assign one user to an issue and unassign one with `workitem.assignee.add` and `workitem.assignee.remove`, keeping the issue's other assignees. A user GitHub would not assign on that issue is refused with what to check, and a change GitHub answers but leaves undone is refused with what it showed; nothing is written in either case. `actor.self` says which account the forge plugin acts as for a repository, so a caller can assign that account without typing its login. The installed GitHub plugin answers them after `archon plugin update coleam00/Archon/plugins/forge-github` installs a release that includes them.
+- An item or a work order can be given priority. `archon trigger fire --priority` sets it when the start is accepted, and `archon workflow priority --item <key> [--clear]` sets or clears it later. A work order's members inherit it. Queued starts of a priority item are admitted before ordinary ones, and the flag shows on the item read and in `archon workflow attention`. (#6422)
+- The forge can assign one user to an issue and unassign one with `workitem.assignee.add` and `workitem.assignee.remove`, keeping the issue's other assignees. A user GitHub would not assign on that issue is refused with what to check, and a change GitHub answers but leaves undone is refused with what it showed; nothing is written in either case. `actor.self` says which account the forge plugin acts as for a repository, so a caller can assign that account without typing its login. The installed GitHub plugin answers them after `archon plugin update coleam00/Archon/plugins/forge-github` installs a release that includes them. (#6420)
+
+### Changed
+
+- Engine-written stored records can gain a field without breaking an older reader. A reader ignores a key it does not know in the prepared launch, a run's origin, the checkout hand-off records and a receipt's source actor; a record that is wrong, not merely newer, is still refused. Records an operator writes, such as trigger files and binding intents, stay strict so a misspelled key fails. The database reference lists which records are read which way. Binaries up to 0.16.0 may refuse a record that carries a key they do not know, so a new field in one of these records is safe only once every binary that opens the database is 0.16.1 or newer. (#6425)
+- The bundled SDLC pack says what its endings mean for the run's item. A merge-queue run that merges or parks and a build-queue run that parks end the item. The pick, drain, split and metrics workflows observe, so their runs never stop an item. The step workflows give a summary, so an item listed as stopped says why. A delivered item is still listed as stopped until its merge is recorded with `archon workflow merged`. (#6434)
+- `archon pack bindings --force` prints a warning when a file it replaces ran its starts on a different run config, or on one where the new file has none. Regenerating without `--config` used to move a lane back to the install's config without a word. (#6410)
+
+### Fixed
+
+- A script node's own `with:` key replaces a hyphenated pack setting. With `with: { my_policy: ./fixed.md }` on a pack whose file setting is `my-policy`, a missing file for the setting no longer refuses a start the node never needed. (#6435)
+- The CLI, the chat host and the Console read a run's recorded cost through the engine's own parser, and the HTTP API declares the cost field, so a change to how the engine records it cannot leave them showing nothing. (#6387)
+- The install and update guides show Docker commands that work with the published image. The one-line `docker run ... version` they showed started the server and printed nothing. (#6432)
 
 ## [0.16.0] - 2026-11-26
 

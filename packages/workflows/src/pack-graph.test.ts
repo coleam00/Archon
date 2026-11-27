@@ -1,4 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { expandWorkflowIncludes } from './include-expander';
 import { mapOf, wf } from './include-expander.fixtures';
 import {
@@ -9,6 +13,7 @@ import {
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
+import { manifestBindingRefusals } from './pack-binding-rule';
 import {
   packAsksSettledBindingSchema,
   packFireBindingSchema,
@@ -787,5 +792,36 @@ describe('bindingWorkflowNames', () => {
       asks_settled: { workflow: 'triage', settled: 'answered' },
     });
     expect(bindingWorkflowNames(settled)).toEqual(['build', 'triage']);
+  });
+});
+
+describe("a pack's bindings checked against its manifest", () => {
+  const trackTempRoot = trackTempRoots();
+
+  test('refuse only what the manifest does not list, and nothing without a manifest', async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'pack-bindings-manifest-')));
+    await mkdir(join(dir, '.pack'));
+    // `plan` is listed though no workflow file exists: loading it is not this rule's business.
+    await writeFile(
+      join(dir, '.pack', 'pack.yaml'),
+      'bindings:\n  plan-after-triage:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'
+    );
+    expect(await manifestBindingRefusals(dir)).toBeUndefined();
+    await writeFile(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'factory',
+        description: 'd',
+        entrypoints: { plan: 'plan/plan.yaml' },
+      })
+    );
+    expect(await manifestBindingRefusals(dir)).toEqual({
+      key: 'factory',
+      refusals: [
+        "Binding 'plan-after-triage' names workflow 'triage', which pack 'factory' does not provide.",
+      ],
+    });
   });
 });
