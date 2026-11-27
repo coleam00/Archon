@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { layoutMap, type Box, type MapLayout } from './map-layout';
-import { shippedArrows, shippedView } from '../curated.test-fixtures';
+import { testArrows, testView } from '../curated.test-fixtures';
 import {
   boxesMeet,
   crosses,
@@ -18,7 +18,7 @@ type Columns = Declaration['columns'];
 type Seeded = Declaration & { arrows: MapArrow[] };
 
 /**
- * The shipped view with `stages` in this order, `columns` as given (by default one card per
+ * The test view with `stages` in this order, `columns` as given (by default one card per
  * stage), and the arrows standing for the graph's.
  */
 function declaration(
@@ -27,7 +27,7 @@ function declaration(
   columns: Columns | undefined = undefined
 ): Seeded {
   return {
-    ...shippedView,
+    ...testView,
     stages: stages.map(id => ({ id, label: id, blurb: id, workflows: [id] })),
     columns: columns ?? stages.map(id => ({ id, label: id, blurb: id, stages: [id] })),
     landed: { stage: stages.at(-1) ?? '' },
@@ -117,10 +117,14 @@ const lay = (view: Seeded): MapLayout => layoutMap(view, view.arrows);
 const arrowBetween = (layout: MapLayout, from: string, to: string) =>
   layout.arrows.find(arrow => arrow.from === from && arrow.to === to);
 
-describe('the shipped map', () => {
-  const layout = layoutMap(shippedView, shippedArrows);
+describe('a pack map', () => {
+  const layout = layoutMap(testView, testArrows);
 
   test('nothing crosses a card, a line or a pill, and the bounds hold every pill', () => {
+    // Something to cross: forward pills, send-back routes and lane pills are all drawn.
+    expect(layout.arrows.length).toBeGreaterThan(0);
+    expect(layout.feedback.paths.length).toBeGreaterThan(0);
+    expect(layout.feedback.pills.length).toBeGreaterThan(0);
     expectClean(layout);
   });
 
@@ -128,47 +132,23 @@ describe('the shipped map', () => {
     expect(
       layout.arrows.map(arrow => [arrow.from, arrow.to, arrow.lines.join(' '), arrow.outcomes])
     ).toEqual([
-      // Triage's drop and reshape answers go to close, and link's drop to order-done, which
-      // skip a card, so they are worded on this pill with their target. Attend, in Plan and
-      // build, takes the asks link and split leave.
+      // Triage's drop and reshape answers go to close, in Landing, which skips cards, so they
+      // are worded on this pill with their target.
       [
         'intake',
         'plan-and-build',
-        'placed +7',
-        [
-          'placed',
-          'dropped by you → Landing',
-          'needs shaping → Landing',
-          'kept whole',
-          'Dropped by link → Landing',
-          'waiting on what it needs',
-          'Folded into another item',
-          'Split into pieces',
-        ],
+        'placed +3',
+        ['placed', 'dropped by you → Landing', 'needs shaping → Landing', 'kept whole'],
       ],
-      // Build to CI and review (built_for_host) and to catch-up (built_for_land) skips no card:
-      // Plan and build and Checks are neighbours, so they join the one pill between them. Build
-      // to close (a drop or reshape answer) skips a card, so it is worded on this pill with its
-      // target.
+      // Build to Checks and to CI and review joins one pill; its drop and reshape skip a card.
       [
         'plan-and-build',
         'checks',
-        'built +5',
-        [
-          'built',
-          'fixed for CI',
-          'taken as it is',
-          'brought up to date',
-          'dropped by you → Landing',
-          'needs shaping → Landing',
-        ],
+        'built +3',
+        ['built', 'fixed for CI', 'dropped by you → Landing', 'needs shaping → Landing'],
       ],
-      [
-        'checks',
-        'landing',
-        'ready +4',
-        ['ready', 'taken as it is', 'unchanged and green', 'dropped by you', 'needs shaping'],
-      ],
+      // Checks and CI and review both send a drop answer to close: it is listed once.
+      ['checks', 'landing', 'ready, dropped by you', ['ready', 'dropped by you']],
       ['landing', 'landed', 'merged', ['merged']],
     ]);
     for (const arrow of layout.arrows) {
@@ -181,26 +161,28 @@ describe('the shipped map', () => {
 
   test('one lane under the row: one pill per target stage, the self hand-offs on it too', () => {
     expect(layout.feedback.pills.map(pill => [pill.stage, pill.text])).toEqual([
+      // A work order loops to order over a part_of link; a merge that broke the branch orders a fix.
       ['order', 'Ordered as a work order, Split into pieces, broke the branch, fix ordered'],
       ['triage', 'something else'],
       ['link', 'asked'],
       ['split', 'answered'],
       ['plan', 'answered, plan again'],
-      ['attend', 'asked you'],
-      ['stage-build', 'returned, sent back, one more round, something else, behind its branch'],
-      ['stage-host', 'changed'],
+      ['stage-build', 'sent back, returned, one more round, something else, behind its branch'],
       // A work order's proposed branch goes back to the gate; a reported member reports its order.
       ['landgate', 'proposed for landing'],
-      ['land', 'merge it'],
       ['order-done', 'reported'],
     ]);
-    // Checks holds stage-check and stage-host, which both send back to stage-build and to plan:
-    // one route each, not two drawn on top of each other.
+    // Checks holds stage-check and stage-host, which both send back to stage-build: one route,
+    // not two drawn on top of each other.
     const routes = layout.feedback.paths.map(path => `${path.from}>${path.to}`);
     expect(routes).toEqual([...new Set(routes)]);
+    // Both send 'returned' to stage-build: the route's label names it once.
+    expect(
+      layout.feedback.paths.find(p => p.from === 'checks' && p.to === 'stage-build')?.label
+    ).toBe('returned, sent back, one more round, something else');
     expect(
       layout.feedback.paths.find(p => p.from === 'landing' && p.to === 'stage-build')?.label
-    ).toBe('sent back, something else, returned, behind its branch');
+    ).toBe('sent back, behind its branch');
     const bottom = Math.max(...layout.cards.map(card => card.box.y + card.box.h));
     for (const path of layout.feedback.paths)
       expect(Math.max(...segments(path.d).map(seg => seg.y2))).toBeGreaterThan(bottom);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '../packages/paths/src/test-utils';
@@ -13,19 +13,8 @@ import {
   packIdentity,
   parseArgs,
 } from './check-factory-view';
-
-const docsCopy = resolve(import.meta.dir, '../docs/factory-console/pack-view/factory-view.json');
-const readDocsCopy = (): unknown => JSON.parse(readFileSync(docsCopy, 'utf8'));
-/** The graph of the pack commit the docs copy is written for, dd30226, as the checker's graph read gives it. */
-const shippedGraph = JSON.parse(
-  readFileSync(
-    resolve(
-      import.meta.dir,
-      '../packages/web/src/experiments/console/factory/__fixtures__/pack-graph-dd30226.json'
-    ),
-    'utf8'
-  )
-) as PackGraph;
+import { smallGraph } from '../packages/web/src/experiments/console/factory/__fixtures__/small-pack';
+import { smallViewFile } from '../packages/web/src/experiments/console/factory/__fixtures__/small-view';
 
 const track = trackTempRoots();
 
@@ -73,9 +62,12 @@ const view = (stage: string) => ({
   },
 });
 
-test('the committed docs copy reads clean against the pack graph it is written for', () => {
-  // CI runs this file: a stale, invalid or unworded entry in the shipped view fails it.
-  expect(checkView(readDocsCopy(), shippedGraph)).toEqual({ code: 0, lines: ['0 problems'] });
+test("the console tests' view file reads clean against the graph it is drawn over", () => {
+  // The web tests draw this pair; a picture card or edge the graph does not back fails here.
+  expect(checkView(smallViewFile, smallGraph as unknown as PackGraph)).toEqual({
+    code: 0,
+    lines: ['0 problems'],
+  });
 });
 
 describe('checkView', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { columnsOf } from '../../routes/BoardPage';
-import { shippedGraph, shippedView } from '../curated.test-fixtures';
+import { testGraph, testView } from '../curated.test-fixtures';
 import { flowCounts } from '../DerivedFlow';
 import type { ItemRead } from '../../skills/items';
 import { asksOn, itemOn, MOVING_ITEMS } from '../items.test-fixtures';
@@ -34,7 +34,7 @@ const byKey = (key: string): ItemRead => {
 const ASKS = asksOn([byKey('b1'), byKey('g1')]);
 
 describe("the map's live chips", () => {
-  const live = stageLive(shippedView, ITEMS, MERGED, shippedGraph.stages, ASKS);
+  const live = stageLive(testView, ITEMS, MERGED, testGraph.stages, ASKS);
   const at = (stage: string) => live.stages.get(stage);
 
   test('an item sits on the row of the graph stage its standing run is of', () => {
@@ -54,7 +54,7 @@ describe("the map's live chips", () => {
   });
 
   test('no stage needs you while the asks are read, rather than a guess', () => {
-    const reading = stageLive(shippedView, ITEMS, MERGED, shippedGraph.stages, 'reading');
+    const reading = stageLive(testView, ITEMS, MERGED, testGraph.stages, 'reading');
     expect([...reading.stages.values()].flatMap(stage => stage.needYou)).toEqual([]);
   });
 
@@ -74,7 +74,7 @@ describe("the map's live chips", () => {
 
   test("each board column's count is the sum of its map stages' counts", () => {
     const counted = (workflows: readonly string[]): number =>
-      shippedView.stages
+      testView.stages
         .filter(stage => stage.workflows.some(workflow => workflows.includes(workflow)))
         .reduce(
           (sum, stage) =>
@@ -84,7 +84,7 @@ describe("the map's live chips", () => {
         );
     const offMap = (workflows: readonly string[]): number =>
       live.notOnMap.filter(entry => workflows.includes(entry.workflow ?? '')).length;
-    for (const column of flowCounts(columnsOf(shippedGraph), ITEMS, shippedGraph.stages, ASKS))
+    for (const column of flowCounts(columnsOf(testGraph), ITEMS, testGraph.stages, ASKS))
       expect([column.name, counted(column.stages) + offMap(column.stages)]).toEqual([
         column.name,
         column.count,

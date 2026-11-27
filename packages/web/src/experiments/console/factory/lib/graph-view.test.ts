@@ -1,18 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import type { PackGraph } from '../../skills/items';
-import { shippedGraph } from '../curated.test-fixtures';
+import { testGraph } from '../curated.test-fixtures';
 import { graphWords } from './graph-view';
 
 type GraphStage = PackGraph['stages'][number];
 
-/** `shippedGraph` with `edit` applied to the stage named `workflow`. */
+/** `testGraph` with `edit` applied to the stage named `workflow`. */
 const withStage = (workflow: string, edit: (stage: GraphStage) => GraphStage): PackGraph => ({
-  ...shippedGraph,
-  stages: shippedGraph.stages.map(stage => (stage.workflow === workflow ? edit(stage) : stage)),
+  ...testGraph,
+  stages: testGraph.stages.map(stage => (stage.workflow === workflow ? edit(stage) : stage)),
 });
 
-describe("the shipped graph's words and declarations", () => {
-  const words = graphWords(shippedGraph);
+describe("a pack graph's words and declarations", () => {
+  const words = graphWords(testGraph);
 
   test('a stage reads its label, its steps by recorded id and its outcomes from its display', () => {
     expect(words.stages['stage-check']).toMatchObject({
@@ -60,7 +60,7 @@ describe("the shipped graph's words and declarations", () => {
   });
 
   test('is derived once per graph object', () => {
-    expect(graphWords(shippedGraph)).toBe(words);
+    expect(graphWords(testGraph)).toBe(words);
   });
 });
 
@@ -82,7 +82,7 @@ test("a mark whose means is not the console's, and a replaces naming a live stag
 test('drift: a renamed stage and a new outcome read their YAML words, with no view file to edit', () => {
   // The pack renames stage-check to stage-review and gives it a new outcome with a story.
   const renamed = JSON.parse(
-    JSON.stringify(shippedGraph).replaceAll('stage-check', 'stage-review')
+    JSON.stringify(testGraph).replaceAll('stage-check', 'stage-review')
   ) as PackGraph;
   const graph: PackGraph = {
     ...renamed,

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { PackView } from '../api';
-import { shippedFile } from '../curated.test-fixtures';
+import { testFile } from '../curated.test-fixtures';
 import { mapSource } from './map-source';
 
 const PATH = '/packs/acme/flow/.shared/factory-view.json';
@@ -19,10 +19,10 @@ describe('which map a view read draws', () => {
   });
 
   test('a file that read clean draws the curated map', () => {
-    expect(mapSource({ data: { path: PATH, view: shippedFile, problems: [] } })).toEqual({
+    expect(mapSource({ data: { path: PATH, view: testFile, problems: [] } })).toEqual({
       kind: 'curated',
       path: PATH,
-      view: shippedFile,
+      view: testFile,
       problems: [],
     });
   });
@@ -32,7 +32,7 @@ describe('which map a view read draws', () => {
       problem('dropped', 'names stage "stage-check", which pack "p" does not have'),
       problem('unknown', 'is not a key a view file has'),
     ];
-    const source = mapSource({ data: { path: PATH, view: shippedFile, problems } });
+    const source = mapSource({ data: { path: PATH, view: testFile, problems } });
     expect(source).toMatchObject({ kind: 'curated', problems });
   });
 

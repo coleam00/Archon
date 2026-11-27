@@ -19,6 +19,9 @@ import {
  * the retired `deliver` workflow, its rounds a loop) and #125 (delivered by stage-build,
  * stage-check and stage-host, its rounds one stage-check run each), with their runs' records
  * as `GET /api/workflows/runs/records` serves them (outputs kept to outcome and a cut summary).
+ * It is trimmed to what these tests read: the runs of the workflows the card reads (#125's first
+ * build run among them, which is not a round) and each item's standing run, and in the records
+ * only the declared return and approve steps, with a summary only where a step sent it back.
  */
 const PREFIX = 'Wirasm/archon-software-factory:';
 

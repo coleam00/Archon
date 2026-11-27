@@ -826,7 +826,8 @@ request; `deliver` is drawn nowhere. Its `answers` field gives every option an a
 the id, and the reserved `other` is never declared), and words what the pack's `drop` and
 `reshape` routes start, for the workflows whose asks the pack binds them on.
 
-**The check** (`bun run check:factory-view`, run in console CI; later shipped with the owner's
+**The check** (`bun run check:factory-view`, run by hand against a pack tree, not in console
+CI, which checks only the How it works drawing of the docs copy; later shipped with the owner's
 pack copy) loads the view file and the pack graph. It FAILS on any workflow, step, outcome or
 option name the view uses that the graph lacks, on a drill-down step two cards cover, and on a
 `map.arrows` label for a pair of stages the graph does not connect. It WARNS on graph workflows

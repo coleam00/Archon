@@ -13,7 +13,7 @@ import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import type { Project } from '../primitives/project';
 import type { ItemAsk } from '../primitives/run';
 import { graphWords } from '../factory/lib/graph-view';
-import { shippedGraph } from '../factory/curated.test-fixtures';
+import { testGraph } from '../factory/curated.test-fixtures';
 import type { ItemRead, PackGraph } from '../skills/items';
 import { invalidate, set } from '../store/cache';
 import { K } from '../store/keys';
@@ -491,11 +491,11 @@ function renderWithWords(packGraph: PackGraph, reads: ItemRead[]) {
 }
 
 test("a column header names its stages in the pack's words, and an ungrouped stage's column by its label", () => {
-  // The shipped graph, with `stage-host` taken out of every group so it heads a column alone.
+  // The test graph, with `stage-host` taken out of every group so it heads a column alone.
   const graph: PackGraph = {
-    ...shippedGraph,
+    ...testGraph,
     pack: 'flow',
-    groups: shippedGraph.groups.map(group => ({
+    groups: testGraph.groups.map(group => ({
       ...group,
       stages: group.stages.filter(stage => stage !== 'stage-host'),
     })),
@@ -505,15 +505,15 @@ test("a column header names its stages in the pack's words, and an ungrouped sta
     item('issue-2', 'stage-host', 'running'),
   ]);
   const built = page.querySelector('[data-stage="Plan and build"] header p');
-  expect(built?.textContent).toBe('Plan, Build, Attend');
-  expect(built?.getAttribute('title')).toBe('plan, stage-build, attend');
+  expect(built?.textContent).toBe('Plan, Build');
+  expect(built?.getAttribute('title')).toBe('plan, stage-build');
   const host = page.querySelector('[data-stage="stage-host"] h3');
   expect(host?.textContent).toBe('CI and review');
   expect(host?.getAttribute('title')).toBe('stage-host');
 });
 
 test("a card in a column of several stages names its stage by the pack's label, not its id (#261)", () => {
-  const page = renderWithWords({ ...shippedGraph, pack: 'flow' }, [
+  const page = renderWithWords({ ...testGraph, pack: 'flow' }, [
     item('issue-1', 'stage-build', 'running'),
   ]);
   const column = page.querySelector('[data-stage="Plan and build"]');

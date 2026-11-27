@@ -62,7 +62,7 @@ export function itemOn(
   };
 }
 
-/** Items on the shipped pack's stages: two on build (one asking), one on each check stage, one off the map. */
+/** Items on the test pack's stages (`__fixtures__/small-pack.ts`): two on build (one asking), one on each check stage, one off the map. */
 export const MOVING_ITEMS: ItemRead[] = [
   itemOn('b1', 'stage-build', 'running'),
   itemOn('b2', 'stage-build', 'waiting', true),

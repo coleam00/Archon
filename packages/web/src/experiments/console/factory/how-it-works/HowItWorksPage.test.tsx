@@ -5,7 +5,7 @@ import type { Project } from '../../primitives/project';
 import { invalidate, set } from '../../store/cache';
 import { K } from '../../store/keys';
 import type { PackView } from '../api';
-import { shippedFile, shippedGraph } from '../curated.test-fixtures';
+import { testFile, testGraph } from '../curated.test-fixtures';
 import { installDom } from '../test-dom.test-helpers';
 
 const { mount: mountTree, settle } = await installDom();
@@ -34,7 +34,7 @@ afterEach(async () => {
 });
 
 /** Mounts the sidebar's Factory routes at `at`, the pack staged by the second project. */
-async function mount(at: string, view: PackView, graph = shippedGraph): Promise<HTMLElement> {
+async function mount(at: string, view: PackView, graph = testGraph): Promise<HTMLElement> {
   set(K.projects, [project('cb-0', []), project('cb-1', [PACK])]);
   set(K.packView('cb-1', PACK), view);
   set(K.packGraph('cb-1', PACK), graph);
@@ -51,7 +51,7 @@ async function mount(at: string, view: PackView, graph = shippedGraph): Promise<
   return mounted.container;
 }
 
-const CURATED: PackView = { path: PATH, view: shippedFile, problems: [] };
+const CURATED: PackView = { path: PATH, view: testFile, problems: [] };
 const NO_FILE: PackView = { path: null, view: null, problems: [] };
 const page = `/console/factory/${PACK}/how-it-works`;
 
@@ -88,7 +88,7 @@ describe('How it works', () => {
 
   test("with the file: the root view's cards and its caption, from the file", async () => {
     const opened = await mount(page, CURATED);
-    const { howItWorks } = shippedFile;
+    const { howItWorks } = testFile;
     expect(cards(opened)).toEqual(
       howItWorks.views[howItWorks.root]?.cards.map(card => card.id) ?? []
     );
@@ -119,14 +119,14 @@ describe('How it works', () => {
   test('?view=build opens the build drill-down', async () => {
     const opened = await mount(`${page}?view=build`, CURATED);
     expect(cards(opened)).toEqual(
-      shippedFile.howItWorks.views.build?.cards.map(card => card.id) ?? []
+      testFile.howItWorks.views.build?.cards.map(card => card.id) ?? []
     );
   });
 
   test("without the file: the pack's document and the derived map", async () => {
     // The pack's main declares no document; one that does has it served with its graph.
     const document = { path: 'how-it-works.md', problems: [], text: '# How the factory works' };
-    const opened = await mount(page, NO_FILE, { ...shippedGraph, document });
+    const opened = await mount(page, NO_FILE, { ...testGraph, document });
     expect(opened.querySelector('[data-document]')?.textContent).toContain('How the factory works');
     expect(opened.querySelector('div[data-flow]')).not.toBeNull();
     expect(cards(opened)).toEqual([]);

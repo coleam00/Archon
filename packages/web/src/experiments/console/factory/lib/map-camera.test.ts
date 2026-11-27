@@ -11,7 +11,7 @@ import {
 } from './map-camera';
 import { LIVE_FITTING } from '../map/useMapCamera';
 import { layoutMap } from './map-layout';
-import { shippedArrows, shippedView } from '../curated.test-fixtures';
+import { testArrows, testView } from '../curated.test-fixtures';
 
 const world = { x: 0, y: -10, w: 1000, h: 200 };
 
@@ -31,8 +31,8 @@ describe('the map camera', () => {
     expect(camera.x).toBe(24);
   });
 
-  test('the shipped map opens whole in a 1440 frame, and at its start on narrower ones', () => {
-    const { bounds } = layoutMap(shippedView, shippedArrows);
+  test('a five-column map opens whole in a 1440 frame, and at its start on narrower ones', () => {
+    const { bounds } = layoutMap(testView, testArrows);
     // The live map's own fitting, as the Overview's map camera uses it.
     const { pad, minK } = LIVE_FITTING;
     // The Overview's frame at 1440x900 is about 1110 px wide: every card shows, Merged included.

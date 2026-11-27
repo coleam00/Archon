@@ -6,7 +6,7 @@ import { K } from '../store/keys';
 import type { PackView } from './api';
 import type { PackGraph } from '../skills/items';
 import type { PackBoardGroups } from './lib/board-numbers';
-import { shippedFile, shippedGraph } from './curated.test-fixtures';
+import { testFile, testGraph } from './curated.test-fixtures';
 import { asksOn, itemOn, MOVING_ITEMS } from './items.test-fixtures';
 import { installDom } from './test-dom.test-helpers';
 
@@ -57,7 +57,7 @@ async function mount(
   view: PackView,
   search = '',
   asks = ASKS,
-  graph: PackGraph = shippedGraph
+  graph: PackGraph = testGraph
 ): Promise<HTMLElement> {
   set(K.packView(PROJECT, PACK), view);
   set(K.packGraph(PROJECT, PACK), graph);
@@ -84,18 +84,18 @@ async function mount(
   return mounted.container;
 }
 
-const CURATED: PackView = { path: PATH, view: shippedFile, problems: [] };
+const CURATED: PackView = { path: PATH, view: testFile, problems: [] };
 /**
- * The shipped graph as the engine serves it when the pack's document leaves `stage-host` out of
+ * The test graph as the engine serves it when the pack's document leaves `stage-host` out of
  * every group: the stage heads a column alone, and the document lists why.
  */
 const withoutStageHost: PackGraph = {
-  ...shippedGraph,
+  ...testGraph,
   document:
-    shippedGraph.document === null
+    testGraph.document === null
       ? null
-      : { ...shippedGraph.document, problems: ["stage 'stage-host' is in no group"] },
-  groups: shippedGraph.groups.map(group => ({
+      : { ...testGraph.document, problems: ["stage 'stage-host' is in no group"] },
+  groups: testGraph.groups.map(group => ({
     ...group,
     stages: group.stages.filter(stage => stage !== 'stage-host'),
   })),
@@ -104,7 +104,7 @@ const NO_FILE: PackView = { path: null, view: null, problems: [] };
 /** A file the server read with two problems it worked around: the map still draws from it. */
 const DRIFTED: PackView = {
   path: PATH,
-  view: shippedFile,
+  view: testFile,
   problems: [
     {
       kind: 'dropped',
@@ -134,20 +134,17 @@ describe('the one check where the map is drawn', () => {
   test('a pack shipping a clean view file draws the curated map, not the derived one', async () => {
     const page = await mount(CURATED);
     expect(cards(page)).toEqual(['intake', 'plan-and-build', 'checks', 'landing', 'landed']);
+    // Each column's stages in flow order, columns by their first stage's place, Merged last.
     expect(stageLinks(page)).toEqual([
       'order',
       'triage',
       'link',
       'split',
-      'complexity',
       'survey',
       'plan',
-      'attend',
       'stage-build',
       'stage-check',
       'stage-host',
-      'catchup',
-      'inspect',
       'landgate',
       'land',
       'discoveries',
@@ -319,8 +316,7 @@ describe('the stage modal', () => {
     await openTab('The real workflow');
     expect(texts('[data-workflow]', 'data-workflow')).toEqual(['stage-build']);
     expect(texts('[data-step]', 'data-step')).toEqual(
-      shippedGraph.stages.find(stage => stage.workflow === 'stage-build')?.nodes.map(n => n.id) ??
-        []
+      testGraph.stages.find(stage => stage.workflow === 'stage-build')?.nodes.map(n => n.id) ?? []
     );
   });
 

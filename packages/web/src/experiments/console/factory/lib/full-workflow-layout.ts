@@ -106,8 +106,7 @@ const meet = (a: Box, b: Box): boolean =>
 /**
  * A forward pill on its line's `along` run: the run's middle when that is clear of every box
  * `taken`, else the nearest clear spot along the run, stepping out from the middle both ways.
- * Where the whole run is taken it sits in the middle; the layout test fails the shipped graph
- * on that.
+ * Where the whole run is taken it sits in the middle; the layout test fails its graph on that.
  */
 function placePill(lines: readonly string[], along: [Point, Point], taken: readonly Box[]): Box {
   const [p, q] = along;

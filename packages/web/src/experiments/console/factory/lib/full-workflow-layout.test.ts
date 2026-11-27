@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { PackGraph } from '../../skills/items';
 import { columnsOf, type StageGroup } from '../../routes/BoardPage';
-import { shippedGraph, shippedView } from '../curated.test-fixtures';
+import { testGraph, testView } from '../curated.test-fixtures';
 import { LIVE_FITTING } from '../map/useMapCamera';
 import { fullWorkflowLayout, MERGED } from './full-workflow-layout';
 import { mapArrows, type StructureView } from './graph-structure';
@@ -9,18 +9,15 @@ import { fitCamera } from './map-camera';
 import { boxesMeet } from './map-geometry.test-fixtures';
 import { groupsOf } from './view-groups';
 
-describe("the shipped pack's full workflow", () => {
-  const layout = fullWorkflowLayout(
-    shippedGraph,
-    columnsOf(shippedGraph, groupsOf(shippedGraph)),
-    shippedView
-  );
+describe("a pack's full workflow", () => {
+  const layout = fullWorkflowLayout(testGraph, columnsOf(testGraph, groupsOf(testGraph)), testView);
   const named = layout.arrows.map(arrow => ({
     name: `${arrow.from}>${arrow.to} [${arrow.lines.join('/')}]`,
     box: arrow.pillBox,
   }));
 
   test('no pill meets another pill', () => {
+    expect(named.length).toBeGreaterThan(1);
     const faults: string[] = [];
     named.forEach((pill, i) =>
       named.forEach((other, j) => {

@@ -49,7 +49,10 @@ bun run check:factory-view <pack dir> --view docs/factory-console/pack-view/fact
 The console reads the file and drops only what is wrong: a key the file does not have (an older
 copy's `stages`, `outcomes` or `rounds` among them), or a stage or edge the How it works picture
 names that the graph lacks. Each is listed on the Overview and How it works and is an error for
-the check, which exits 1 on any. `scripts/check-factory-view.test.ts` checks this copy against
-the dd30226 graph in CI
-(`packages/web/src/experiments/console/factory/__fixtures__/pack-graph-dd30226.json`, the
-check's own graph read of that tree with the overlay applied).
+the check, which exits 1 on any. CI checks this copy's drawing only: `overview-layout.test.ts`
+and `overview-flow.test.ts` draw its How it works picture and fail on a line or pill through a
+card. Its stage names and edges are checked against the pack by hand: run the command above
+against the dd30226 tree with the overlay applied (the gate's `PACK_TREE`) after changing this
+file or moving the pack. The console's other tests draw a small hand-built view and graph
+(`packages/web/src/experiments/console/factory/__fixtures__/`), and
+`scripts/check-factory-view.test.ts` checks that pair reads clean.
