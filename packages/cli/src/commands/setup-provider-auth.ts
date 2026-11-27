@@ -10,7 +10,7 @@ import { execSync } from 'child_process';
 import { execFileAsync } from '@archon/git';
 import { validateProviderConcurrencyConfig } from '@archon/core/config';
 import { loadGlobalConfig } from '@archon/core/config/config-loader';
-import { PI_PROVIDER_ENV_VARS } from '@archon/providers';
+import { PI_PROVIDER_ENV_VARS, primaryPiEnvVar } from '@archon/providers';
 import { CODEX_SETUP_ENV } from '@archon/providers/codex/setup-env';
 import { parsePiModelRef } from '@archon/providers/pi/model-ref';
 import { getArchonHome as pathsGetArchonHome } from '@archon/paths';
@@ -31,9 +31,13 @@ export const PI_BACKENDS = [
   { id: 'huggingface', label: 'Hugging Face', hint: 'inference API' },
 ] as const;
 
-/** The env var Pi reads for a backend's key, from Pi's generated vendor map. */
+/**
+ * The env var a key for a backend is written to: the first name Pi reads, from Pi's
+ * generated vendor map. A vendor may also accept fallback names, which a hand-set key
+ * keeps using.
+ */
 export function piBackendEnvVar(backendId: string): string {
-  const envVar = PI_PROVIDER_ENV_VARS[backendId];
+  const envVar = primaryPiEnvVar(backendId);
   if (!envVar) throw new Error(`Pi has no API key variable for backend '${backendId}'`);
   return envVar;
 }
@@ -217,7 +221,7 @@ export async function collectPiConfig(): Promise<{
     backend.label
   );
   const provider = parsePiModelRef(model)?.provider;
-  const envVar = provider ? PI_PROVIDER_ENV_VARS[provider] : undefined;
+  const envVar = provider ? PI_PROVIDER_ENV_VARS[provider]?.[0] : undefined;
   if (!provider || !envVar) {
     log.info(
       `Pi has no API key variable for ${provider ?? model}, so setup does not ask for a key. Pi uses its own credentials for it.`

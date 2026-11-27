@@ -154,6 +154,13 @@ mock.module('../../handlers/command-handler', () => ({
 registerBuiltinProviders();
 registerCommunityProviders();
 
+// Vendor → env-var names, each in pi-ai's order: a read walks the list and a write
+// targets the first name, so the mock says what the generated map says.
+const mockPiEnvVars: Record<string, readonly string[]> = {
+  anthropic: ['ANTHROPIC_API_KEY'],
+  openai: ['OPENAI_API_KEY'],
+};
+
 mock.module('@archon/providers', () => ({
   providerRegistry,
   isRegisteredProvider: () => true,
@@ -164,7 +171,9 @@ mock.module('@archon/providers', () => ({
   getAgentProvider: mock(() => null),
   getRegisteredProviders: mock(() => []),
   // credentials/delivery (#1955) imports these from '@archon/providers'.
-  PI_PROVIDER_ENV_VARS: { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' },
+  PI_PROVIDER_ENV_VARS: mockPiEnvVars,
+  piEnvVarNames: (vendor: string): readonly string[] => mockPiEnvVars[vendor] ?? [],
+  primaryPiEnvVar: (vendor: string): string | undefined => mockPiEnvVars[vendor]?.[0],
   PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 

@@ -61,13 +61,13 @@ test('Copilot policy failure connects with a visible safe warning', async () => 
         return Response.json({
           data: [
             {
-              id: 'gpt-5.4',
+              id: 'gpt-5.4-nano',
               model_picker_enabled: true,
               policy: { state: 'unconfigured' },
             },
           ],
         });
-      if (url.endsWith('/models/gpt-5.4/policy'))
+      if (url.endsWith('/models/gpt-5.4-nano/policy'))
         return new Response('SECRET-VENDOR-CONTENT', { status: 403 });
       throw new Error('Unexpected request');
     },

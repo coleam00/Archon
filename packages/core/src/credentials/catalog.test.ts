@@ -157,7 +157,7 @@ describe('credentials/catalog', () => {
     /** Runs `fn` with every credential env var the matrix reads unset, then `env` applied. */
     function withCredentialEnv(env: Record<string, string>, fn: () => void): void {
       const keys = [
-        ...Object.values(PI_PROVIDER_ENV_VARS),
+        ...Object.values(PI_PROVIDER_ENV_VARS).flat(),
         'CLAUDE_API_KEY',
         'CLAUDE_CODE_OAUTH_TOKEN',
         'ANTHROPIC_OAUTH_TOKEN',
@@ -246,6 +246,17 @@ describe('credentials/catalog', () => {
       const after = pi.credentials.find(s => s.vendor === 'openrouter')!;
       expect(after.installEnv).toBe(true);
       expect(pi.ready).toBe(true);
+    });
+
+    test("a vendor's later env name counts as install env, as pi-ai reads it", () => {
+      // `qwen-token-plan` accepts a per-plan name first and a shared one second; an
+      // operator holding only the second is connected to Pi, so readiness must agree.
+      withCredentialEnv({ QWEN_TOKEN_PLAN_API_KEY: 'sk-qwen-shared' }, () => {
+        const pi = buildAgentCredentialMatrix([]).find(a => a.id === 'pi')!;
+        const qwen = pi.credentials.find(s => s.vendor === 'qwen-token-plan')!;
+        expect(qwen.installEnv).toBe(true);
+        expect(qwen.usable).toBe(true);
+      });
     });
 
     test('ambient detection reports amazon-bedrock from the AWS env chain', () => {

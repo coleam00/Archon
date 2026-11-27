@@ -152,7 +152,7 @@ const EXTRA_INSTALL_ENV_VARS: Record<string, Record<string, string[]>> = {
 
 function hasInstallEnv(agent: string, vendor: string): boolean {
   const vars = [
-    ...(PI_PROVIDER_ENV_VARS[vendor] ? [PI_PROVIDER_ENV_VARS[vendor]] : []),
+    ...(PI_PROVIDER_ENV_VARS[vendor] ?? []),
     ...(EXTRA_INSTALL_ENV_VARS[agent]?.[vendor] ?? []),
   ];
   return vars.some(v => !!process.env[v]);

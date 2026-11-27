@@ -122,13 +122,12 @@ function displayName(vendor: string): string {
  * upstream shape change and fails loud.
  *
  * Pi 1.6 orders a fallback list for some vendors: a per-plan variable first,
- * then one both plans used to share. Archon delivers one credential per vendor,
- * so the generated map names the first entry — the variable a `key set` writes and
- * Pi reads first. A user who set only a later fallback by hand still works in Pi,
- * but `pi.auth` reports that vendor unconnected; widening the generated map to the
- * whole list is the change to make when a per-vendor credential is ever split.
+ * then one both plans used to share. The whole list is kept, in Pi's order,
+ * because Pi reads any of them: an operator holding only a later name keeps
+ * working. Archon delivers one credential per vendor, so a write goes to the
+ * first name; every read walks the list.
  */
-function parseEnvMap(source: string): Record<string, string> {
+function parseEnvMap(source: string): Record<string, string[]> {
   const match = /const envMap = \{([\s\S]*?)\};/.exec(source);
   if (!match?.[1]) {
     throw new Error(
@@ -136,19 +135,22 @@ function parseEnvMap(source: string): Record<string, string> {
     );
   }
   const entryRe = /^\s*(?:"([^"]+)"|([A-Za-z0-9_$]+)):\s*(?:"([^"]+)"|\[([^\]]+)\]),?\s*$/;
-  const parsed: Record<string, string> = {};
+  const parsed: Record<string, string[]> = {};
   for (const line of match[1].split('\n')) {
     if (!line.trim()) continue;
     const entry = entryRe.exec(line);
     const key = entry?.[1] ?? entry?.[2];
-    // A list's first entry is the variable Pi reads first; see the docstring.
-    const value = entry?.[3] ?? /"([^"]+)"/.exec(entry?.[4] ?? '')?.[1];
-    if (!key || !value) {
+    // Pi's own order is the lookup order; the first name is the one a write targets.
+    const values =
+      entry?.[3] !== undefined
+        ? [entry[3]]
+        : [...(entry?.[4] ?? '').matchAll(/"([^"]+)"/g)].map(m => m[1] as string);
+    if (!key || values.length === 0) {
       throw new Error(
         `Unparseable envMap line in pi-ai env-api-keys.js: ${line.trim()} — upstream shape changed; update this generator.`
       );
     }
-    parsed[key] = value;
+    parsed[key] = values;
   }
   if (Object.keys(parsed).length === 0) {
     throw new Error('Parsed pi-ai envMap is empty — upstream shape changed.');
@@ -204,7 +206,9 @@ async function main(): Promise<void> {
   const catalogIds = await loadCatalogIds();
 
   // Full env-var map: envMap + the special-case branches.
-  const envVars: Record<string, string> = { ...SPECIAL_ENV_VENDORS };
+  const envVars: Record<string, string[]> = Object.fromEntries(
+    Object.entries(SPECIAL_ENV_VENDORS).map(([vendor, name]) => [vendor, [name]])
+  );
   for (const [vendor, envVar] of Object.entries(envMap)) {
     envVars[vendor] = envVar;
   }
@@ -266,10 +270,11 @@ async function main(): Promise<void> {
     "import type { CredentialSpec } from '../../types';",
     '',
     '/**',
-    ' * Pi backend vendor id → the env var pi-ai reads for its API key',
-    " * (and the var Archon's per-user delivery sets).",
+    ' * Pi backend vendor id → every env var pi-ai reads for its API key, in its own',
+    ' * order. Archon delivers one credential per vendor, written to the first name;',
+    ' * a read walks the list, so a hand-set fallback keeps working.',
     ' */',
-    'export const PI_PROVIDER_ENV_VARS: Record<string, string> = {',
+    'export const PI_PROVIDER_ENV_VARS: Record<string, readonly string[]> = {',
     envVarLines,
     '};',
     '',
