@@ -209,6 +209,8 @@ test.each(
           getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
           getCodebase: async () => null,
           getItem: async () => null,
+          getItemPriority: async () => null,
+          listEventsForRuns: async () => new Map(),
         },
         branchOf: async () => null,
       })
@@ -271,6 +273,8 @@ test('batch attention preserves unexpected descendant read failures', async () =
           getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
           getCodebase: async () => null,
           getItem: async () => null,
+          getItemPriority: async () => null,
+          listEventsForRuns: async () => new Map(),
         },
         branchOf: async () => null,
       })

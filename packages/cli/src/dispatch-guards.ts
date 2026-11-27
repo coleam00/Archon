@@ -95,14 +95,39 @@ export function rejectConfigOutsideRun(
   return undefined;
 }
 
+/**
+ * Refuses `--workflow-source` on every command but the ones that read their workflows from
+ * it, so a command cannot answer about the project while the operator named another source.
+ * `workflow run` covers `--dry-run` and the `--supersedes` restart, which its route handles.
+ */
+export function rejectWorkflowSourceOutsideReaders(
+  command: string | undefined,
+  subcommand: string | undefined,
+  workflowSource: unknown
+): string | undefined {
+  if (workflowSource === undefined) return undefined;
+  const reads =
+    (command === 'workflow' && subcommand === 'run') ||
+    (command === 'validate' && subcommand === 'workflows') ||
+    (command === 'pack' && (subcommand === 'bindings' || subcommand === 'graph'));
+  if (reads) return undefined;
+  return 'Error: --workflow-source can only be used with workflow run, validate workflows, pack bindings, or pack graph.';
+}
+
 /** The flags another command would otherwise ignore, refused before any command runs. */
 export function rejectRunFlagsOutsideRun(
   command: string | undefined,
   subcommand: string | undefined,
-  values: { config?: unknown; 'config-from-run'?: unknown; 'input-file'?: unknown }
+  values: {
+    config?: unknown;
+    'config-from-run'?: unknown;
+    'input-file'?: unknown;
+    'workflow-source'?: unknown;
+  }
 ): string | undefined {
   return (
     rejectConfigOutsideRun(command, subcommand, values.config, values['config-from-run']) ??
-    rejectInputFileOutsideRun(command, subcommand, values['input-file'])
+    rejectInputFileOutsideRun(command, subcommand, values['input-file']) ??
+    rejectWorkflowSourceOutsideReaders(command, subcommand, values['workflow-source'])
   );
 }

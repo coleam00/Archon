@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { checkChangedEventSchema, type CheckResult } from './events';
 import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
+  actorSelfRequestSchema,
+  actorSelfSchema,
   mergeConditionSchema,
   prReviewsSchema,
   prThreadsSchema,
@@ -22,6 +24,8 @@ import {
   workItemLabelAddedSchema,
   workItemListRequestSchema,
   workItemListSchema,
+  workItemOpenedRequestSchema,
+  workItemOpenedSchema,
   workItemSearchItemSchema,
   workItemSearchRequestSchema,
   workItemSearchSchema,
@@ -129,6 +133,7 @@ export type CommitChecksObservation = z.infer<typeof commitChecksObservationSche
 export type PrReviewsObservation = z.infer<typeof prReviewsSchema>;
 export type WorkItemList = z.infer<typeof workItemListSchema>;
 export type WorkItemLabelAdded = z.infer<typeof workItemLabelAddedSchema>;
+export type WorkItemOpened = z.infer<typeof workItemOpenedSchema>;
 /** The `forge check` refusals a plugin can state its own remedy for. */
 const pluginRemedyKinds = ['unsupported_op', 'no_credential'] as const;
 type PluginRemedyKind = (typeof pluginRemedyKinds)[number];
@@ -320,6 +325,8 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
         op: workItemLabelAddedRequestSchema.shape.op,
         value: workItemLabelAddedSchema,
       }),
+      z.object({ op: workItemOpenedRequestSchema.shape.op, value: workItemOpenedSchema }),
+      z.object({ op: actorSelfRequestSchema.shape.op, value: actorSelfSchema }),
       z.object({
         op: workItemSearchRequestSchema.shape.op,
         value: workItemSearchSchema.omit({ text: true }).extend({

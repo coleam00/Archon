@@ -45,7 +45,7 @@ Archon runs the Claude Code SDK in `bypassPermissions` mode. This means the AI a
 - There is no per-action confirmation step.
 
 **Mitigations:**
-- Each conversation runs in an isolated git worktree by default, limiting the blast radius of any changes.
+- Each conversation runs in a git worktree by default, a checkout separate from the repository's main checkout. Runs that reuse a worktree, such as two runs on the same named branch, share its files. A worktree is not a security or network boundary: commands still run on the host, with its network and environment.
 - Workflows support per-node tool restrictions (see below) to constrain what the AI can do at each step.
 - The system is designed as a single-developer tool -- there is no multi-tenant isolation.
 
@@ -77,14 +77,16 @@ nodes:
 
   - id: implement
     prompt: "Fix the issues found"
-    denied_tools: [WebSearch, WebFetch]  # No internet access
+    denied_tools: [WebSearch, WebFetch]  # Blocks WebSearch and WebFetch only
 ```
 
 **How it works:**
 - `allowed_tools` is an allow list for the provider's tool filter. An empty list (`[]`) selects no built-in tools governed by that filter. A Claude node that declares `skills` keeps the `Skill` tool even then. On Copilot the filter covers MCP tools too, so `[]` also removes them.
-- `denied_tools` blocks listed tools within the provider's restriction boundary.
+- `denied_tools` blocks listed tools within the provider's restriction boundary. It removes only the named tools: denying `WebSearch` and `WebFetch` does not cut network access, because Bash and any other tool that can reach the network stay available.
 - If both are set on Claude, Pi or Copilot, `denied_tools` wins: a tool named in both lists is removed.
 - Support and tool names depend on the provider. See [Provider capabilities](/reference/provider-capabilities/#capabilities) for tool restriction support.
+
+Tool filtering is not a network boundary. To limit what a run can reach, use an execution environment that enforces it. On Claude, a node can set the [`sandbox:` option](/reference/workflow-language/#claude-sdk-advanced-options); Claude's [sandbox documentation](https://code.claude.com/docs/en/sandboxing) says which commands it confines and what runs outside it. A folder project's [container run](/reference/configuration/#container-isolation-folder-projects) takes a `network` setting. A worktree does not restrict the network.
 
 On Pi, the filter covers only `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. `allowed_tools: []` does not restrict user extension tools, and `denied_tools` cannot block them. Separately supplied Archon tools also remain available when added, including native tools such as `manage_run` and, when structured output is requested, `structured_output`. Extensions remain user-owned; remove or exclude unwanted extensions through Pi's native settings. See [Pi Extensions](/getting-started/ai-assistants/#extensions) for those controls and [workflow tool restrictions](/reference/workflow-language/#allowed_tools-and-denied_tools-for-tool-restrictions) for the full boundary.
 

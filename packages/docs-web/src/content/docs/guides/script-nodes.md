@@ -514,6 +514,11 @@ passes through normally. `uv`-launched Python subprocesses do not auto-load
 (see [Dependencies](#dependencies-uv-only)). See [Security Model](/reference/security/#target-repo-env-isolation)
 for the full story.
 
+A `.env` or `.env.*` file inside a workflow, command or script directory, or an
+installed pack, is never copied into a run's frozen source. Archon logs the path
+of each one it leaves out (`workflow.source_capture_env_file_skipped`), never its
+contents. A script gets its environment from Archon, not from a file beside it.
+
 ## Validation
 
 `archon validate workflows <name>` checks script nodes for:

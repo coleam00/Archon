@@ -25,6 +25,7 @@ import { getDatabase, getDatabaseType, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { toHydratedTimestamp } from './timestamps';
 import { insertStartReceipt } from './start-receipt-writes';
+import { recordRefusedHandoffStops } from './item-stops';
 import { insertWorkflowEvent } from './workflow-events';
 import { getLog } from './workflow-run-shared';
 
@@ -236,41 +237,55 @@ async function recordSettlement(
     'SELECT * FROM remote_agent_item_asks WHERE run_id = $1 ORDER BY position',
     [runId]
   );
-  const asking = await query<{ metadata: unknown }>(
+  const itemId = settledSet.rows[0]?.item_id;
+  const receipts = startsOnSettle(
+    settledSet.rows.map(readAskOrThrow),
+    await readRunMetadataIn(query, runId),
+    itemId === undefined ? [] : await readItemAsksIn(query, itemId)
+  );
+  for (const receipt of receipts) await insertStartReceipt(query, receipt);
+  await recordRefusedHandoffStops(query, receipts);
+  return receipts;
+}
+
+/**
+ * Inside a transaction: the metadata of the run that left asks or waits, for the start that
+ * follows it; null when the run was deleted.
+ */
+export async function readRunMetadataIn(
+  query: TransactionQuery,
+  runId: string
+): Promise<{ metadata: Record<string, unknown> } | null> {
+  const found = await query<{ metadata: unknown }>(
     'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
     [runId]
   );
-  const row = asking.rows[0];
-  const metadata = row === undefined ? undefined : jsonColumn(row.metadata);
-  const itemId = settledSet.rows[0]?.item_id;
-  // Every ask on the item, read here so this close's answer is in it. Degrading, not
-  // throwing: an old unreadable ask fails only a binding that reads the item's answers.
-  const itemAsks =
-    itemId === undefined
-      ? []
-      : readAsks(
-          (
-            await query<AskRow>(
-              `SELECT * FROM remote_agent_item_asks WHERE item_id = $1
-               ORDER BY created_at, run_id, position`,
-              [itemId]
-            )
-          ).rows
-        );
-  const receipts = startsOnSettle(
-    settledSet.rows.map(readAskOrThrow),
-    row === undefined
-      ? null
-      : {
-          metadata:
-            metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata)
-              ? (metadata as Record<string, unknown>)
-              : {},
-        },
-    itemAsks
+  const row = found.rows[0];
+  if (row === undefined) return null;
+  const metadata = jsonColumn(row.metadata);
+  return {
+    metadata:
+      metadata !== null && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? (metadata as Record<string, unknown>)
+        : {},
+  };
+}
+
+/**
+ * Inside a transaction: every ask on the item, oldest first, so an answer closed in this
+ * transaction is in it. Degrading, not throwing: an old unreadable ask fails only a
+ * binding that reads the item's answers.
+ */
+export async function readItemAsksIn(
+  query: TransactionQuery,
+  itemId: string
+): Promise<AttentionRead<StoredItemAsk>[]> {
+  const found = await query<AskRow>(
+    `SELECT * FROM remote_agent_item_asks WHERE item_id = $1
+     ORDER BY created_at, run_id, position`,
+    [itemId]
   );
-  for (const receipt of receipts) await insertStartReceipt(query, receipt);
-  return receipts;
+  return readAsks(found.rows);
 }
 
 type CloseWrite = { as: 'answered'; answer: AttentionAnswer } | { as: 'withdrawn' };

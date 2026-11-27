@@ -59,8 +59,8 @@ export function formatSpecLine(spec: string, description: string): string {
     // Spec overflows the column: description goes on its own line at col 29.
     firstLine = `  ${spec}\n${' '.repeat(HELP_DESC_COLUMN)}${first}`;
   } else if (spec.length + 2 <= HELP_DESC_COLUMN) {
-    // Pad spec so description lands at col 29.
-    const pad = ' '.repeat(HELP_DESC_COLUMN - spec.length - 2);
+    // Pad toward col 29, always leaving a separator.
+    const pad = ' '.repeat(Math.max(1, HELP_DESC_COLUMN - spec.length - 2));
     firstLine = `  ${spec}${pad}${first}`;
   } else {
     // Spec fills 28–35 chars: one space separator.
@@ -95,7 +95,8 @@ function selectFlagsFor(selected: HelpEntry[], scopedOnly: FlagHelp[] = []): Fla
 }
 
 function selectExamplesFor(selected: HelpEntry[]): ExampleHelp[] {
-  const keys = new Set(selected.map(e => ownerKey(e)));
+  // An example owned by a command alone belongs to every slice of that command.
+  const keys = new Set(selected.flatMap(e => [ownerKey(e), ownerKey({ command: e.command })]));
   return orderedExamples.filter(ex => keys.has(ownerKey(ex.owner)));
 }
 
@@ -147,11 +148,23 @@ export function renderHelp(command?: string, subcommand?: string): string {
     sections.push('Options:');
     sections.push(flags.map(f => formatSpecLine(f.spec, f.description)).join('\n'));
   }
+  // One entry's own help also states the request it reads; a group's help lists many.
+  const request = entries.length === 1 ? entries[0]?.request : undefined;
+  if (request) {
+    sections.push('');
+    sections.push('Request (--data):');
+    sections.push(request.type.replace(/^/gm, '  '));
+    if (request.notes.length > 0) {
+      sections.push('');
+      sections.push(request.notes.map(note => `  ${note}`).join('\n'));
+    }
+  }
   const examples = command === undefined ? orderedExamples : selectExamplesFor(entries);
-  if (examples.length > 0) {
+  const exampleLines = [...(request ? [request.example] : []), ...examples.map(ex => ex.text)];
+  if (exampleLines.length > 0) {
     sections.push('');
     sections.push('Examples:');
-    sections.push(examples.map(ex => `  ${ex.text}`).join('\n'));
+    sections.push(exampleLines.map(text => `  ${text}`).join('\n'));
   }
   return `\n${sections.join('\n')}\n`;
 }

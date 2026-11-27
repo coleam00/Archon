@@ -104,10 +104,8 @@ export const prCloseRequestSchema = requestBase.extend({
 });
 // The marker identifies the one canonical comment, so it has to survive a
 // first-line comparison against a body the forge may have re-wrapped.
-const commentMarker = text.refine(
-  value => !/[\r\n]/.test(value),
-  'comment marker must be one line'
-);
+const oneLine = (what: string) => text.refine(v => !/[\r\n]/.test(v), `${what} must be one line`);
+const commentMarker = oneLine('comment marker');
 /** The pull-request form, kept for callers and installed plugins that predate subjects. */
 export const commentUpsertRequestSchema = requestBase.extend({
   op: z.literal('comment.upsert'),
@@ -140,7 +138,9 @@ export const workItemCreateRequestSchema = requestBase
     repo: repoRefSchema,
     title: text,
     body: text,
-    marker: text.refine(value => !/[\r\n]/.test(value), 'marker must be one line'),
+    marker: oneLine('marker').describe(
+      "Chosen for this one item and used by no other; a create that repeats a marker returns the item it first created. The body's first line must be this marker."
+    ),
   })
   .refine(
     value => value.body.split(/\r?\n/, 1)[0] === value.marker,
@@ -166,6 +166,29 @@ export const workItemLabelRemoveRequestSchema = requestBase.extend({
   subject: forgeSubjectRefSchema,
   name: text,
 });
+/**
+ * One user assigned to or unassigned from an issue by login, leaving the issue's other
+ * assignees alone. A user the forge would not assign is refused, never dropped.
+ */
+export const workItemAssigneeAddRequestSchema = requestBase.extend({
+  op: z.literal('workitem.assignee.add'),
+  ref: workItemRefSchema,
+  login: text,
+});
+export const workItemAssigneeRemoveRequestSchema = requestBase.extend({
+  op: z.literal('workitem.assignee.remove'),
+  ref: workItemRefSchema,
+  login: text,
+});
+/** The forge account the plugin's credential acts as for `repo`, such as to assign it. */
+export const actorSelfRequestSchema = requestBase.extend({
+  op: z.literal('actor.self'),
+  repo: repoRefSchema,
+});
+export const actorSelfSchema = z.object({
+  repo: repoRefSchema,
+  actor: sourceActorSchema.extend({ login: text }),
+});
 export const closeReasonSchema = z.enum(['completed', 'not_planned', 'duplicate']);
 /** Close an issue, recording why. An issue already closed for another reason is refused. */
 export const workItemCloseRequestSchema = requestBase.extend({
@@ -188,6 +211,15 @@ export const workItemLabelAddedRequestSchema = requestBase.extend({
   op: z.literal('workitem.label.added'),
   subject: forgeSubjectRefSchema,
   name: text,
+});
+/**
+ * The open issues of one repository created at or after `since`, never pull requests. An
+ * install with no webhooks reads it to start work on newly opened issues.
+ */
+export const workItemOpenedRequestSchema = requestBase.extend({
+  op: z.literal('workitem.opened'),
+  repo: repoRefSchema,
+  since: z.iso.datetime({ offset: true }),
 });
 /** The most matches one `workitem.search` returns, and the count it returns when none is asked for. */
 export const WORKITEM_SEARCH_MAX_LIMIT = 100;
@@ -239,7 +271,7 @@ export const prMergeRequestSchema = requestBase.extend({
   op: z.literal('pr.merge'),
   ref: prRefSchema,
   method: z.enum(['merge', 'squash']),
-  conditions: mergeConditionsSchema,
+  conditions: mergeConditionsSchema.extend({ head: gitObjectIdSchema }),
 });
 export const checksRerunRequestSchema = requestBase.extend({
   op: z.literal('checks.rerun'),
@@ -467,6 +499,8 @@ export const mergeEvidenceSchema = z.object({
   method: prMergeRequestSchema.shape.method,
   conditions: mergeConditionsSchema,
   landed: landedSchema.optional(),
+  // The earlier merge's time, on a refusal that observed it merged; `response-match` checks it.
+  merged_at: z.iso.datetime({ offset: true }).optional(),
 });
 
 export const lifecycleReadRequestSchemas = [
@@ -477,11 +511,13 @@ export const lifecycleReadRequestSchemas = [
   prThreadsRequestSchema,
   workItemListRequestSchema,
   workItemLabelAddedRequestSchema,
+  workItemOpenedRequestSchema,
   workItemSearchRequestSchema,
   workItemCommentsRequestSchema,
   prMergeStateRequestSchema,
   prFilesRequestSchema,
   repoFileRequestSchema,
+  actorSelfRequestSchema,
 ] as const;
 export const mutationRequestSchemas = [
   prMergeRequestSchema,
@@ -498,6 +534,8 @@ export const mutationRequestSchemas = [
   workItemLabelsSetRequestSchema,
   workItemLabelAddRequestSchema,
   workItemLabelRemoveRequestSchema,
+  workItemAssigneeAddRequestSchema,
+  workItemAssigneeRemoveRequestSchema,
   repoLabelEnsureRequestSchema,
   prThreadReplyRequestSchema,
   prThreadResolveRequestSchema,
@@ -566,6 +604,17 @@ export const workItemListSchema = z.object({
   repo: repoRefSchema,
   label: text,
   items: z.array(workItemListItemSchema),
+});
+/** Each issue with when it was created and, when the plugin reports one, who opened it. */
+export const workItemOpenedSchema = z.object({
+  repo: repoRefSchema,
+  since: z.iso.datetime({ offset: true }),
+  items: z.array(
+    workItemRecordSchema.extend({
+      createdAt: z.iso.datetime({ offset: true }),
+      author: sourceActorSchema.nullable().optional(),
+    })
+  ),
 });
 /** `added` is null when the forge records no add of the label, such as one never added. */
 export const workItemLabelAddedSchema = z.object({
@@ -652,11 +701,13 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
   z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
   z.object({ op: workItemLabelAddedRequestSchema.shape.op, value: workItemLabelAddedSchema }),
+  z.object({ op: workItemOpenedRequestSchema.shape.op, value: workItemOpenedSchema }),
   z.object({ op: workItemSearchRequestSchema.shape.op, value: workItemSearchSchema }),
   z.object({ op: workItemCommentsRequestSchema.shape.op, value: workItemCommentsSchema }),
   z.object({ op: prMergeStateRequestSchema.shape.op, value: prMergeStateSchema }),
   z.object({ op: prFilesRequestSchema.shape.op, value: prFilesSchema }),
   z.object({ op: repoFileRequestSchema.shape.op, value: repoFileSchema }),
+  z.object({ op: actorSelfRequestSchema.shape.op, value: actorSelfSchema }),
 ] as const;
 export const mutationResultSchemas = [
   z.object({
@@ -680,6 +731,15 @@ export const mutationResultSchemas = [
   z.object({
     op: workItemLabelRemoveRequestSchema.shape.op,
     value: appliedSchema.extend({ workitem: subjectRecordSchema, labels: labelNamesSchema }),
+  }),
+  // `assignees` is the issue's complete set of assignee logins as read back after the write.
+  z.object({
+    op: workItemAssigneeAddRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: workItemRecordSchema, assignees: z.array(text) }),
+  }),
+  z.object({
+    op: workItemAssigneeRemoveRequestSchema.shape.op,
+    value: appliedSchema.extend({ workitem: workItemRecordSchema, assignees: z.array(text) }),
   }),
   z.object({
     op: repoLabelEnsureRequestSchema.shape.op,

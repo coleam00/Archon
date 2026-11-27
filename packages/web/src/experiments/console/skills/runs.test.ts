@@ -196,6 +196,7 @@ test('attention list keeps a lost-owner item holder, which has no paused run row
       ref: 'holder-1',
       project: { key: 'p', codebaseId: 'cb-1', name: 'demo' },
       item: { id: 'i-1', projectKey: 'p', key: 'issue-1' },
+      priority: false,
       revision: 1,
       labels: {},
       pausedAt: null,
@@ -218,6 +219,7 @@ test('attention list keeps a lost-owner item holder, which has no paused run row
       projectName: 'demo',
       itemKey: 'issue-1',
       observedStatus: 'running',
+      start: null,
     },
   ]);
 });

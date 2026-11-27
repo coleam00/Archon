@@ -11,7 +11,7 @@ import {
   type IWorkflowEngine,
   type WorkflowResumeInput,
 } from './engine-port';
-import { WorkflowNotResumableError, type IWorkflowStore } from './store';
+import { PendingClaimRefusedError, WorkflowNotResumableError, type IWorkflowStore } from './store';
 export { WorkflowNotResumableError } from './store';
 import type { ResolvedWorkflow } from './schemas';
 import {
@@ -93,8 +93,6 @@ export function runWorkflowEngineContractTests(
         ...resumeInput,
         run: { ...originless, status: 'paused' },
       });
-      expect(admission.accepted).toBe(true);
-      if (!admission.accepted) throw new Error('expected resume');
       expect(await admission.settled).toMatchObject({ success: true });
       expect(created).toHaveLength(1);
     });
@@ -127,9 +125,35 @@ export function runWorkflowEngineContractTests(
       expect(result).toEqual({
         success: false,
         workflowRunId: pending.id,
-        error:
-          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
+        error: 'Workflow run is no longer pending',
       });
+    });
+
+    it('fails a still-pending run whose claim was refused, with the reason, and only while it is pending', async () => {
+      const pending = makeRun({ id: 'pending-run', status: 'pending' });
+      const failures: { id: string; error: string; options: unknown }[] = [];
+      const store = makeStore({
+        claimPendingWorkflowRun: async id => {
+          throw new PendingClaimRefusedError(id, 'checkout_released');
+        },
+        failWorkflowRun: async (id, error, options) => {
+          failures.push({ id, error, options });
+          return { failed: true };
+        },
+      });
+      const result = await makeEngine(makeDeps(providers, store)).submit({
+        ...callInput(),
+        options: { preCreatedRun: pending },
+      });
+      const reason = new PendingClaimRefusedError(pending.id, 'checkout_released').message;
+      expect(result).toEqual({ success: false, workflowRunId: pending.id, error: reason });
+      expect(failures).toEqual([
+        {
+          id: pending.id,
+          error: reason,
+          options: { pendingOnly: true, exitReason: 'launch_failed' },
+        },
+      ]);
     });
 
     for (const committed of [false, true]) {
@@ -257,7 +281,6 @@ export function runWorkflowEngineContractTests(
       expect(executionCwd).toBeUndefined();
       ready.resolve();
       const admission = await pending;
-      if (!admission.accepted) throw new Error('Expected admission');
       await admission.settled;
       expect(executionCwd).toBe('/prepared');
       expect(executionCodebase).toBe('prepared-codebase');
@@ -349,8 +372,7 @@ export function runWorkflowEngineContractTests(
         ...resumeCallInput(),
         run: makeRun({ id: 'accepted-run', status: 'paused' }),
       });
-      expect(admission).toMatchObject({ accepted: true, runId: 'accepted-run' });
-      if (!admission.accepted) throw new Error('expected resume admission');
+      expect(admission.runId).toBe('accepted-run');
       config.resolve(defaultConfig());
       const result = await admission.settled;
       expect(result).toMatchObject({
@@ -369,7 +391,6 @@ export function runWorkflowEngineContractTests(
         ...resumeCallInput(),
         run: makeRun({ id: 'paused-run', status: 'paused' }),
       });
-      if (!admission.accepted) throw new Error('expected resume admission');
       const result = await admission.settled;
       expect(result).toEqual({
         success: true,
@@ -406,7 +427,6 @@ nodes:
         legacyWorkflow: conflicting,
         run,
       });
-      if (!admission.accepted) throw new Error('expected resume admission');
       await admission.settled;
 
       expect(observations.executedWorkflow()?.nodes[0]?.id).toBe('captured-node');
@@ -478,25 +498,9 @@ nodes:
       expect(claims).toBe(0);
     });
 
-    it('declines an empty snapshot without claiming', async () => {
+    it('claims a failed run with no completed nodes and runs it again under its id', async () => {
       let claims = 0;
-      const store = makeStore({
-        resumeWorkflowRun: async () => {
-          claims += 1;
-          return makeRun();
-        },
-      });
-      const result = await makeEngine(makeDeps(providers, store)).resume({
-        ...resumeCallInput(),
-        run: makeRun({ id: 'empty-run', status: 'paused' }),
-      });
-      expect(result).toEqual({ accepted: false, reason: 'nothing-to-resume' });
-      expect(claims).toBe(0);
-    });
-
-    it('claims a released run even when it has no completed nodes', async () => {
-      let claims = 0;
-      const resumed = makeRun({ id: 'released-run', status: 'running' });
+      const resumed = makeRun({ id: 'empty-run', status: 'running' });
       const store = makeStore({
         resumeWorkflowRun: async () => {
           claims += 1;
@@ -506,17 +510,10 @@ nodes:
       });
       const admission = await makeEngine(makeDeps(providers, store)).resume({
         ...resumeCallInput(),
-        run: makeRun({
-          id: 'released-run',
-          status: 'paused',
-          metadata: {
-            source_release: { nodeId: 'check', releasedAt: '2026-08-24T11:00:00.000Z' },
-          },
-        }),
+        run: makeRun({ id: 'empty-run', status: 'failed' }),
       });
-      expect(admission).toMatchObject({ accepted: true, runId: 'released-run' });
-      if (!admission.accepted) throw new Error('expected resume admission');
-      await admission.settled;
+      expect(admission.runId).toBe('empty-run');
+      expect(await admission.settled).toMatchObject({ success: true, workflowRunId: 'empty-run' });
       expect(claims).toBe(1);
     });
 
@@ -599,7 +596,6 @@ nodes:
         ...resumeCallInput(),
         run: makeRun({ id: 'failed-run', status: 'paused' }),
       });
-      if (!admission.accepted) throw new Error('expected resume admission');
       config.reject(cause);
       const caught = await captureRejection(admission.settled);
       expect(caught).toBe(cause);
@@ -625,7 +621,6 @@ nodes:
         ...resumeCallInput(),
         run: makeRun({ id: 'write-failed-run', status: 'paused' }),
       });
-      if (!admission.accepted) throw new Error('expected resume admission');
       config.reject(new Error('config failed'));
       let caught: unknown;
       try {
@@ -656,7 +651,6 @@ nodes:
         ...resumeCallInput(),
         run: makeRun({ id: 'terminal-error-run', status: 'paused' }),
       });
-      if (!admission.accepted) throw new Error('expected resume admission');
 
       const caught = await captureRejection(admission.settled);
       expect(caught).toBe(cause);

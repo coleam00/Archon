@@ -16,6 +16,7 @@ import {
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
 import { describeItemLandingConformance } from './item-landings.conformance-harness';
+import { describeItemPriorityConformance } from './item-priorities.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
 import {
   describeLinkedStartConformance,
@@ -27,7 +28,12 @@ import { describeSqlItemAskStartConformance } from './item-ask-starts.conformanc
 import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { describeSqlRunDeleteConformance } from './workflow-run-delete.conformance';
 import { describeSqlItemStopConformance } from './item-stops.conformance';
+import {
+  describePostgresItemEndOverlap,
+  describeSqlItemEndConformance,
+} from './item-ends.conformance';
 import { describeSqlStartLimitConformance } from './start-limits.conformance';
+import { describeSqlLaunchRecordConformance } from './launch-records.conformance';
 import {
   HEAD,
   accept,
@@ -342,6 +348,7 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   describeSqlStatusReadConformance(makeHarness);
   describeItemLinkConformance(makeHarness);
   describeItemLandingConformance(makeHarness);
+  describeItemPriorityConformance(makeHarness);
   describeLinkedStartConformance(makeHarness);
   test('a linked start and an unlink of its link are ordered: the unlink waits for the completion', async () => {
     const harness = await makeHarness();
@@ -408,9 +415,12 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   describeSqlItemAskConformance(makeHarness);
   describeSqlItemWaitConformance(makeHarness);
   describeSqlItemStopConformance(makeHarness);
+  describeSqlItemEndConformance(makeHarness);
+  describePostgresItemEndOverlap(makeHarness);
   describeSqlItemAskStartConformance(makeHarness);
   describeSqlRunDeleteConformance(makeHarness);
   describeSqlStartLimitConformance(makeHarness);
+  describeSqlLaunchRecordConformance(makeHarness);
   test('age cleanup does not delete a run that resumes while cleanup selects it', async () => {
     const harness = await makeHarness();
     const gate = new Pool({ connectionString: harness.url, max: 1 });

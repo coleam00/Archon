@@ -11,6 +11,7 @@ import {
   mutationAttempt,
 } from '@archon/forge/operations';
 import { githubErrorDetail, parseRemote, parseSubjectUrl, type Fetch, type Sleep } from './api';
+import { handleGithubActorSelf } from './actor';
 import { handleGithubChecksLogs } from './check-logs';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
@@ -23,6 +24,7 @@ import {
   handleGithubRepoLabelsList,
   handleGithubWorkItemLabelAdded,
   handleGithubWorkItemList,
+  handleGithubWorkItemOpened,
   handleGithubWorkItemView,
 } from './workitems';
 import { handleGithubPrThreads } from './review-threads';
@@ -46,11 +48,14 @@ export const githubPluginMetadata = {
     'workitem.labels.set',
     'workitem.label.add',
     'workitem.label.remove',
+    'workitem.assignee.add',
+    'workitem.assignee.remove',
     'workitem.comment.upsert',
     'workitem.close',
     'workitem.edit-body',
     'workitem.list',
     'workitem.label.added',
+    'workitem.opened',
     'workitem.search',
     'repo.labels.list',
     'repo.label.ensure',
@@ -73,6 +78,7 @@ export const githubPluginMetadata = {
     'pr.thread.resolve',
     'pr.review.submit',
     'attachment.put',
+    'actor.self',
   ],
   mutationConditions: { 'pr.merge': ['head'] },
   token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
@@ -112,6 +118,7 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'workitem.view': handleGithubWorkItemView,
   'workitem.list': handleGithubWorkItemList,
   'workitem.label.added': handleGithubWorkItemLabelAdded,
+  'workitem.opened': handleGithubWorkItemOpened,
   'workitem.search': handleGithubWorkItemSearch,
   'workitem.comments': handleGithubWorkItemComments,
   'repo.labels.list': handleGithubRepoLabelsList,
@@ -124,6 +131,7 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'checks.state': handleGithubChecksState,
   'checks.commit': handleGithubChecksCommit,
   'checks.logs': handleGithubChecksLogs,
+  'actor.self': handleGithubActorSelf,
 };
 
 type ResolveValue = Extract<

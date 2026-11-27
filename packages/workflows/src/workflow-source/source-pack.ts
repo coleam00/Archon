@@ -1,5 +1,5 @@
 import { readFile, stat } from 'fs/promises';
-import { basename, dirname, join } from 'path';
+import { dirname, join } from 'path';
 import * as archonPaths from '@archon/paths';
 import {
   describeIssues,
@@ -7,6 +7,7 @@ import {
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
 import { hasGitMarker, runGit } from '../checkout-observation';
+import { isReservedScopeDirName } from '../workflow-discovery/pack-layout';
 import { isDirectory, listTree, type TreeFile, type TreeListing } from './tree';
 
 /**
@@ -23,7 +24,10 @@ export interface SourcePackFolder {
   readonly dir: string;
 }
 
-/** A pack folder that also holds `.archon/workflows/<name>/`: two copies of one pack. */
+/**
+ * A pack folder that also holds `.archon/workflows/<name>/` as a pack, as discovery reads
+ * it: two copies of one pack.
+ */
 export class AmbiguousSourcePackError extends Error {
   constructor(
     readonly packName: string,
@@ -41,12 +45,14 @@ export class AmbiguousSourcePackError extends Error {
 /**
  * The pack folder `dir` is, or null when its root has no plugin manifest or the manifest
  * is not a workflow pack. Every reader that maps a project source to its packs (discovery,
- * script discovery, `packDirectory`, the run capture), live or captured, asks this, so they
- * cannot disagree about what a pack folder is.
+ * script discovery, `packDirectory`, the run capture, the console lookup), live or captured,
+ * asks this, so they cannot disagree about what a pack folder is.
  *
  * Throws on an unreadable or invalid workflow-pack manifest, and when the folder also
- * holds `.archon/workflows/<name>/`: two copies of one pack in one source is ambiguous,
- * and picking one would run bytes the author did not choose.
+ * holds `.archon/workflows/<name>/` that discovery reads as pack `<name>`: two copies of one
+ * pack in one source is ambiguous, and picking one would run bytes the author did not choose.
+ * A `defaults` or `fixtures` directory there is project data (`isReservedScopeDirName`),
+ * not a copy, so a pack with either name still loads from its folder.
  */
 export async function sourcePackFolder(dir: string): Promise<SourcePackFolder | null> {
   const file = join(dir, PLUGIN_MANIFEST_FILE);
@@ -72,7 +78,8 @@ export async function sourcePackFolder(dir: string): Promise<SourcePackFolder | 
   const { name } = parsed.data;
   const [workflowFolder] = archonPaths.getWorkflowFolderSearchPaths();
   const nested = join(dir, workflowFolder, name);
-  if (await isDirectory(nested)) throw new AmbiguousSourcePackError(name, file, nested);
+  if (!isReservedScopeDirName(name) && (await isDirectory(nested)))
+    throw new AmbiguousSourcePackError(name, file, nested);
   return { name, dir };
 }
 
@@ -90,18 +97,13 @@ export async function loadablePackFolder(dir: string): Promise<SourcePackFolder 
   }
 }
 
-/** A `.env` file anywhere in the folder: secrets, never pack source. */
-function isEnvFile(relPath: string): boolean {
-  const name = basename(relPath);
-  return name === '.env' || name.startsWith('.env.');
-}
-
 /**
  * The files a run's capture freezes from `dir` when it is a pack folder, or null when it is
  * not one. That is what an install of the folder would hold: in a git checkout, the tracked
  * files plus untracked ones git does not ignore, so a root `.env`, `node_modules` or build
  * output stay out; outside git, the whole tree. It never holds the folder's own `.archon/`,
- * whose source directories the capture freezes as for any project, or a `.env` file.
+ * whose source directories the capture freezes as for any project. The copy step drops
+ * `.env` files from this listing as from every capture job.
  *
  * A manifest that does not read as a pack (invalid, or ambiguous with a nested copy)
  * freezes only the manifest, so the captured read reports the load error live discovery
@@ -121,7 +123,7 @@ export async function sourcePackFiles(dir: string): Promise<TreeListing | null> 
     : (await listTree(dir)).files.map(file => file.relPath);
   return listingOf(
     dir,
-    relPaths.filter(path => path.split(/[\\/]/)[0] !== '.archon' && !isEnvFile(path))
+    relPaths.filter(path => path.split(/[\\/]/)[0] !== '.archon')
   );
 }
 
@@ -167,7 +169,5 @@ async function filesAt(dir: string, relPath: string): Promise<TreeFile[]> {
   if (info.isFile()) return [{ relPath, absPath, size: info.size, mtimeMs: info.mtimeMs }];
   if (!info.isDirectory()) return [];
   const nested = await listTree(absPath);
-  return nested.files
-    .filter(file => !isEnvFile(file.relPath))
-    .map(file => ({ ...file, relPath: join(relPath, file.relPath) }));
+  return nested.files.map(file => ({ ...file, relPath: join(relPath, file.relPath) }));
 }

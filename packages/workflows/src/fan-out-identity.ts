@@ -51,6 +51,17 @@ export function composeFanOutScopeSegment(
 }
 
 /**
+ * The outer step prefix and fan-out node id a stored scope name was made from: the inverse
+ * of prefixing `composeFanOutScopeSegment`. Node ids may not contain the marker, so its last
+ * occurrence is this fan-out's, and the last `__` segment after it is the loop identity.
+ */
+export function composeFanOutScopeParts(scopeName: string): { prefix: string; nodeId: string } {
+  const marker = scopeName.lastIndexOf(COMPOSE_FAN_OUT_STEP_MARKER);
+  const rest = scopeName.slice(marker + COMPOSE_FAN_OUT_STEP_MARKER.length);
+  return { prefix: scopeName.slice(0, marker), nodeId: rest.slice(0, rest.lastIndexOf('__')) };
+}
+
+/**
  * Snapshot an ordered item list into instance identities. Duplicate ordinals count per
  * distinct VALUE (the 0-based index among byte-identical items), so removing one copy
  * of a duplicated value does not shift the others' identities.

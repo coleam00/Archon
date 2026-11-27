@@ -14,6 +14,8 @@ import { validateWorktreeConfig } from '@archon/isolation';
 import type { OpencodeProviderDefaults } from '@archon/providers/types';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
+import { isDeepStrictEqual } from 'util';
+import { YAMLParseError } from 'yaml';
 import { createLogger, getArchonConfigPath } from '@archon/paths';
 import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
 import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
@@ -37,8 +39,10 @@ import {
   validateAssistantDefaults,
   validateGlobalConfigBlocks,
   validateModelBindingConfig,
+  validateProviderConcurrencyConfig,
   validateWorkflowContinuationConfig,
 } from './config-validation';
+import { patchYamlText } from './config-yaml-patch';
 import {
   applyEnvOverrides,
   getDefaults,
@@ -426,16 +430,17 @@ export function logConfig(config: MergedConfig): void {
  * mapping throws, because merging into `{}` would replace the operator's whole
  * file with just the patch.
  */
-async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConfig> {
-  const content = await readConfigFileIfPresent(configPath);
-  if (content === undefined) return {};
-  return parseConfigMapping(content, configPath, 'Global config') as GlobalConfig;
+async function readGlobalConfigForUpdate(
+  configPath: string
+): Promise<{ text: string; current: GlobalConfig }> {
+  const text = (await readConfigFileIfPresent(configPath)) ?? '';
+  return { text, current: parseConfigMapping(text, configPath, 'Global config') as GlobalConfig };
 }
 
 /**
- * Apply a `tiers`/`aliases` patch per key: `null` unsets, a value sets, an
- * absent key keeps the existing entry as-is. Collapses to `undefined` when
- * nothing is left, so no empty block is serialized.
+ * Apply a `tiers`, `aliases` or `concurrency.providers` patch per key: `null`
+ * unsets, a value sets, an absent key keeps the existing entry as-is. Collapses
+ * to `undefined` when nothing is left, so no empty block is serialized.
  */
 function mergeBindingPatch<T>(
   existing: unknown,
@@ -454,31 +459,43 @@ function mergeBindingPatch<T>(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-type GlobalConfigUpdates = Partial<Omit<GlobalConfig, 'tiers' | 'aliases'>> & {
+/**
+ * A per-key patch for `concurrency.providers` — `null` explicitly UNSETS a cap, and a
+ * provider the patch does not name keeps its cap.
+ */
+type ProviderCapsPatch = Record<string, number | null>;
+
+type ConcurrencyConfig = NonNullable<GlobalConfig['concurrency']>;
+
+type GlobalConfigUpdates = Partial<Omit<GlobalConfig, 'tiers' | 'aliases' | 'concurrency'>> & {
   tiers?: TiersPatch;
   aliases?: AliasesPatch;
+  concurrency?: Omit<ConcurrencyConfig, 'providers'> & { providers?: ProviderCapsPatch };
 };
 
 /**
  * Update global config (~/.archon/config.yaml) with partial updates.
- * Reads current config, deep-merges updates, and writes back to YAML.
+ * Reads current config, deep-merges updates, and writes back only the changed keys
+ * into the existing YAML text, so comments and block layout are kept.
  * Invalidates the cached config so next loadConfig() picks up changes.
  */
 export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<void> {
   const configPath = getArchonConfigPath();
 
   try {
-    const current = await readGlobalConfigForUpdate(configPath);
+    const { text, current } = await readGlobalConfigForUpdate(configPath);
     const merged = applyGlobalConfigUpdates(current, updates);
 
     // Refuse to persist what the loaders would then refuse to read: a bad value
     // from the settings UI would otherwise brick every later config load, and a
-    // bad block already on disk must be repaired, not kept.
+    // bad block already on disk must be repaired, not kept. A write also refuses provider
+    // caps that admission would refuse; that check is write-only so a bad cap on disk
+    // refuses provider attempts without breaking config loads.
     validateGlobalConfigBlocks(merged, configPath);
     validateAssistantDefaults(merged, configPath);
+    validateProviderConcurrencyConfig(merged, configPath);
 
-    // Serialize to YAML and write
-    const yaml = Bun.YAML.stringify(merged);
+    const yaml = patchInPlace(text, current, merged, configPath);
     await mkdir(dirname(configPath), { recursive: true });
     await writeConfigFile(configPath, yaml);
 
@@ -490,6 +507,50 @@ export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<
     logUpdateFailure(configPath, error);
     throw error;
   }
+}
+
+/**
+ * Write `merged` into the operator's file text, keeping its comments and layout, and prove
+ * the result loads back as `merged` with the loader's own parser. The patch is made with a
+ * different parser than the loader reads with, and where they disagree (a `<<` merge key, a
+ * repeated key, an anchor other keys share) the patch can land on a value the loader does
+ * not read. Such a save is refused rather than rewritten: a file using those features is
+ * hand-crafted, and a full rewrite would silently drop everything the operator wrote in it.
+ */
+function patchInPlace(
+  text: string,
+  current: GlobalConfig,
+  merged: GlobalConfig,
+  configPath: string
+): string {
+  const refuse = (cause?: unknown): ConfigParseError =>
+    new ConfigParseError(
+      'Global config',
+      configPath,
+      'cannot take this change without altering other settings (it uses YAML such as a `<<` merge key, a repeated key or a shared anchor where the change lands). Nothing was written; make the change by hand.',
+      { cause }
+    );
+  let patched: string;
+  try {
+    patched = patchYamlText(text, current, merged);
+  } catch (error) {
+    if (error instanceof YAMLParseError) {
+      throw new ConfigParseError(
+        'Global config',
+        configPath,
+        `is not valid YAML (${error.message}).`,
+        {
+          cause: error,
+        }
+      );
+    }
+    throw refuse(error);
+  }
+  // Compare with what a plain dump of `merged` loads as, so both sides go through Bun's
+  // parser and an undefined key counts as absent.
+  const expected = parseYaml(Bun.YAML.stringify(merged)) ?? {};
+  if (!isDeepStrictEqual(parseYaml(patched) ?? {}, expected)) throw refuse();
+  return patched;
 }
 
 /** Deep-merge: only overwrite defined keys. */
@@ -509,7 +570,12 @@ function applyGlobalConfigUpdates(
   }
 
   if (updates.concurrency) {
-    merged.concurrency = { ...current.concurrency, ...updates.concurrency };
+    const { providers, ...rest } = updates.concurrency;
+    merged.concurrency = { ...current.concurrency, ...rest };
+    // Per-key, like tiers: repairing one cap must not drop another provider's cap.
+    if (providers) {
+      merged.concurrency.providers = mergeBindingPatch(current.concurrency?.providers, providers);
+    }
   }
 
   if (updates.workflows) {

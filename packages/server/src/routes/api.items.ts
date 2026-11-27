@@ -2,7 +2,7 @@
  * GET /api/items: read one item, its runs, open questions, and answers with rulings
  * (`readItem`). GET /api/items/window: a page of the project's items with a run started in
  * a window (`readItemWindow`). POST /api/items/rulings records a ruling on an item; POST
- * /api/items/rulings/{rulingId}/withdraw withdraws one.
+ * /api/items/rulings/{rulingId}/withdraw withdraws one. POST /api/items/ends ends an item.
  */
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -17,6 +17,7 @@ import {
   recordItemRuling,
   withdrawItemRuling,
 } from '@archon/core/operations/item-rulings';
+import { recordItemEnd } from '@archon/core/operations/item-ends';
 import type { RunActor } from '@archon/core/operations/run-authorization';
 import { createWorkflowHostStore } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
@@ -27,6 +28,11 @@ import {
   ItemRulingOutsideProjectError,
   ItemRulingWithdrawnError,
 } from '@archon/workflows/schemas/item-ruling';
+import {
+  ItemEndNotFoundError,
+  ItemEndRefusedError,
+  ItemEndUnattributedError,
+} from '@archon/workflows/schemas/item-end';
 import type { Context } from 'hono';
 import { resolveRunActor } from './api-request-auth';
 import {
@@ -43,6 +49,9 @@ import {
   itemWindowQuerySchema,
   itemWindowResponseSchema,
   itemRulingResponseSchema,
+  itemEndRefusedResponseSchema,
+  itemEndResponseSchema,
+  recordItemEndBodySchema,
   recordItemRulingBodySchema,
   withdrawItemRulingBodySchema,
 } from './schemas/workflow.schemas';
@@ -121,9 +130,33 @@ const withdrawRulingRoute = createRoute({
   },
 });
 
+const recordEndRoute = createRoute({
+  method: 'post',
+  path: '/api/items/ends',
+  tags: ['Workflows'],
+  summary: 'End an item: nothing more will happen on it, so it rests until a new run or start',
+  request: {
+    body: { content: { 'application/json': { schema: recordItemEndBodySchema } } },
+  },
+  responses: {
+    201: {
+      content: { 'application/json': { schema: itemEndResponseSchema } },
+      description: 'The end as recorded',
+    },
+    400: jsonError('Bad request, an unknown project, or an operator request with no `as`'),
+    403: jsonError('Only the operator or an admin may end an item'),
+    404: jsonError('No item under that key in the project'),
+    409: {
+      content: { 'application/json': { schema: itemEndRefusedResponseSchema } },
+      description: 'Something on the item is still active or waiting; the blocker names it',
+    },
+    500: jsonError('Server error'),
+  },
+});
+
 /**
- * Who records or withdraws, checked against the ruling rule. `as` names only the
- * operator; a request that carries a user keeps the user, as an answer does.
+ * Who records or withdraws a ruling, or ends an item, checked against the ruling rule. `as`
+ * names only the operator; a request that carries a user keeps the user, as an answer does.
  */
 async function rulingActor(c: Context, as: string | undefined): Promise<RunActor> {
   const requester = await resolveRunActor(c);
@@ -200,6 +233,31 @@ export function registerItemRoutes(app: OpenAPIHono): void {
       // No log line repeats the ruling's text.
       getLog().error({ err: error }, 'api.item_ruling_record_failed');
       return apiError(c, 500, 'Failed to record the ruling');
+    }
+  });
+
+  registerOpenApiRoute(recordEndRoute, async c => {
+    const body = getValidatedBody(c, recordItemEndBodySchema);
+    try {
+      const actor = await rulingActor(c, body.as);
+      const project = await projectKeyOf(body.project);
+      if ('refusal' in project) return apiError(c, 400, project.refusal);
+      const end = await recordItemEnd(
+        source.store,
+        { projectKey: project.key, key: body.key, reason: body.reason },
+        actor,
+        'api'
+      );
+      return c.json(end, 201);
+    } catch (error) {
+      if (error instanceof ItemRulingForbiddenError) return apiError(c, 403, error.message);
+      if (error instanceof ItemEndUnattributedError) return apiError(c, 400, error.message);
+      if (error instanceof ItemEndNotFoundError) return apiError(c, 404, error.message);
+      if (error instanceof ItemEndRefusedError)
+        return c.json({ error: error.message, blocker: error.blocker }, 409);
+      // No log line repeats the reason.
+      getLog().error({ err: error }, 'api.item_end_record_failed');
+      return apiError(c, 500, 'Failed to end the item');
     }
   });
 

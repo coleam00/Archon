@@ -52,19 +52,24 @@ const askArtifactSchema = artifactPointerSchema
   })
   .describe('A file this run wrote under its artifacts directory.');
 
-/** The recommendation an ask carries, with `option` limited by the schema given. */
+/**
+ * The recommendation an ask carries, with `option` limited by the schema given. An `option`
+ * of null recommends none and keeps the stage's reason in `why`, which the opened ask holds
+ * as `no_recommendation` (`openedAsk`). A whole recommendation of null, which gives no
+ * reason, stays valid for writers from before the reason existed.
+ */
 function recommendationSchema<O extends z.ZodType<string>>(option: O) {
   return attentionRecommendationSchema
     .pick({ option: true, why: true })
     .extend({
-      option,
+      option: option.nullable(),
       why: attentionRecommendationSchema.shape.why.describe(
-        'Why that option, in a sentence or two. If you are not sure, say what would change your mind.'
+        'Why that option, in a sentence or two. If you are not sure, say what would change your mind. With option null: why you recommend none, such as what only the operator can weigh.'
       ),
     })
     .nullable()
     .describe(
-      'The option you recommend and why, or null when you have no basis to choose between the options: the operator then sees that the ask has none. Do not name an option you would not choose.'
+      'The option you recommend and why. When you have no basis to choose between the options, set option to null and say why: the operator then sees that the ask has no recommendation, and your reason. Do not name an option you would not choose.'
     );
 }
 
@@ -99,12 +104,12 @@ const askFields = {
 
 /** Why an ask's parts disagree, by path, or nothing: the checks a JSON Schema cannot hold. */
 function refineAsk(
-  ask: { options: readonly { id: string }[]; recommendation: { option: string } | null },
+  ask: { options: readonly { id: string }[]; recommendation: { option: string | null } | null },
   ctx: z.RefinementCtx
 ): void {
   refineOptionIds(ask.options, ctx, ['options']);
-  const recommended = ask.recommendation?.option;
-  if (recommended !== undefined && !ask.options.some(option => option.id === recommended))
+  const recommended = ask.recommendation?.option ?? null;
+  if (recommended !== null && !ask.options.some(option => option.id === recommended))
     ctx.addIssue({
       code: 'custom',
       path: ['recommendation', 'option'],
@@ -112,9 +117,28 @@ function refineAsk(
     });
 }
 
-/** An ask as a run leaves it: the shape the model writes and the store opens. */
+/** An ask as a run leaves it: the shape the model writes. */
 export const itemAskSchema = z.strictObject(askFields).superRefine(refineAsk);
-export type ItemAsk = z.infer<typeof itemAskSchema>;
+type WrittenAsk = z.infer<typeof itemAskSchema>;
+
+/**
+ * An ask as the store opens it. A recommendation of no option is stored as none, with the
+ * stage's reason beside it, so a binary that reads a recommendation as always naming an
+ * option still reads the ask.
+ */
+export type ItemAsk = Omit<WrittenAsk, 'recommendation'> & {
+  recommendation: { option: string; why: string } | null;
+  /** Why the stage recommends none, in its words; only with no recommendation. */
+  no_recommendation?: string;
+};
+
+function openedAsk({ recommendation, ...ask }: WrittenAsk): ItemAsk {
+  if (recommendation === null) return { ...ask, recommendation: null };
+  const { option, why } = recommendation;
+  return option === null
+    ? { ...ask, recommendation: null, no_recommendation: why }
+    : { ...ask, recommendation: { option, why } };
+}
 
 /** The asks property's value. */
 export const itemAsksSchema = z.array(itemAskSchema).describe(ITEM_ASKS_DESCRIPTION);
@@ -128,6 +152,7 @@ export const storedItemAskSchema = z
     ...askFields,
     options: z.array(askOptionSchema.loose()).min(2),
     recommendation: attentionRecommendationSchema.loose().nullable(),
+    no_recommendation: z.string().min(1).optional(),
   })
   .superRefine(refineAsk);
 export type StoredAsk = z.infer<typeof storedItemAskSchema>;
@@ -158,7 +183,7 @@ function declaredItemAsksSchema(options: readonly DeclaredAskOption[]) {
         // Output validation quotes this when an ask carries a key it does not declare,
         // so an ask written with its own options is told what to write instead.
         .describe(
-          `An ask of a workflow whose returns.options supplies its options, so write no options: every ask offers ${ids}. Recommend one by its id, or leave the recommendation null.`
+          `An ask of a workflow whose returns.options supplies its options, so write no options: every ask offers ${ids}. Recommend one by its id, or recommend none with option null and say why.`
         )
     )
     .describe(ITEM_ASKS_DESCRIPTION);
@@ -193,15 +218,18 @@ export function parseItemAsks(
   value: unknown,
   options?: readonly DeclaredAskOption[]
 ): { readonly asks: ItemAsk[] } | { readonly problem: string } {
-  if (options === undefined) return asksOrProblem(itemAsksSchema.safeParse(value), asks => asks);
+  if (options === undefined)
+    return asksOrProblem(itemAsksSchema.safeParse(value), asks => asks.map(openedAsk));
   return asksOrProblem(declaredItemAsksSchema(options).safeParse(value), asks =>
-    asks.map(({ question, context, recommendation, artifacts }) => ({
-      question,
-      context,
-      options: options.map(option => ({ ...option })),
-      recommendation,
-      artifacts,
-    }))
+    asks.map(({ question, context, recommendation, artifacts }) =>
+      openedAsk({
+        question,
+        context,
+        options: options.map(option => ({ ...option })),
+        recommendation,
+        artifacts,
+      })
+    )
   );
 }
 

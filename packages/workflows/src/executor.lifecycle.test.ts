@@ -582,6 +582,7 @@ describe('finally backstop', () => {
     const hydrate = spyOn(resume, 'hydrateResumableRun').mockResolvedValue({
       ...resumeOf(makeRun()),
       resumeCause: 'continue_after_wait',
+      claimedByHand: false,
       priorFailedNodes: new Map(),
       priorUsage: {},
       priorNodeSessions: [],

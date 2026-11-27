@@ -178,6 +178,12 @@ const sqliteMigrations: readonly Migration[] = [
     failureEvent: 'db.sqlite_migration_node_session_model_column_failed',
     apply: addNodeSessionModelColumn,
   },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_item_wait_subject_columns_failed',
+    apply: addItemWaitSubjectColumns,
+  },
   { kind: 'required', scope: 'schema', apply: alignEventArchiveColumns },
 ];
 
@@ -481,6 +487,12 @@ function addReceiptBindingColumns(db: Database): void {
   if (!columns.has('forge_refusal')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN forge_refusal TEXT');
   }
+  if (!columns.has('preparation_process')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN preparation_process TEXT');
+  }
+  if (!columns.has('refusal')) {
+    db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN refusal TEXT');
+  }
 }
 
 // A binding's start limit and the limit it grants, beside the intent for the same reason,
@@ -510,6 +522,13 @@ function addItemColumns(db: Database): void {
     db.run(
       'ALTER TABLE remote_agent_workflow_runs ADD COLUMN item_id TEXT REFERENCES remote_agent_items(id)'
     );
+  }
+  // The run order's tie-break on SQLite is the rowid; see migrations/000_combined.sql.
+  if (!columnNames(db, 'remote_agent_items').has('moved_on_at')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN moved_on_at TEXT');
+  }
+  if (!columnNames(db, 'remote_agent_items').has('moved_on_tie')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN moved_on_tie INTEGER');
   }
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_workflow_runs_item ON remote_agent_workflow_runs(item_id) WHERE item_id IS NOT NULL'
@@ -545,6 +564,15 @@ function addNodeSessionModelColumn(db: Database): void {
   if (!columnNames(db, 'remote_agent_workflow_node_sessions').has('model')) {
     db.run('ALTER TABLE remote_agent_workflow_node_sessions ADD COLUMN model TEXT');
   }
+}
+
+// The issue or pull request a wait names; see migrations/000_combined.sql.
+function addItemWaitSubjectColumns(db: Database): void {
+  const columns = columnNames(db, 'remote_agent_item_waits');
+  if (!columns.has('subject_kind'))
+    db.run('ALTER TABLE remote_agent_item_waits ADD COLUMN subject_kind TEXT');
+  if (!columns.has('subject_number'))
+    db.run('ALTER TABLE remote_agent_item_waits ADD COLUMN subject_number INTEGER');
 }
 
 // The archive trigger copies an event row by position, and CREATE TABLE AS ran

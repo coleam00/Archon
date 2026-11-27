@@ -1,6 +1,6 @@
 {
   "name": "@archon/core",
-  "version": "0.14.0",
+  "version": "0.16.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -52,6 +52,7 @@
     "@octokit/auth-app": "^8.0.0",
     "@octokit/rest": "^22.0.0",
     "pg": "^8.11.0",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3",
     "@archon/chat-contract": "workspace:*"
   },

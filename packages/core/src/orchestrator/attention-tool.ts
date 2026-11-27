@@ -3,6 +3,7 @@ import { createLogger } from '@archon/paths';
 import {
   listAttentionQueue,
   selectAttentionQueue,
+  type AttentionQueueItem,
   type AttentionQueueScope,
   type ProjectRef,
 } from '@archon/workflows/attention-queue';
@@ -173,7 +174,7 @@ const HOW_TO_ANSWER = [
   '- kind attention: choose=<JSON array of option ids> (one id, several only for form multi_select), or recommended=true; form message takes text only.',
   '- kind awaiting_response: choose=<JSON array with one decision id>, e.g. ["approve"] or ["reject"].',
   '- kind usage_limit continues by itself at resetAt; kind unreadable needs someone to look at the run. Neither takes an answer.',
-  '- kind stopped is an item whose last run (stoppedIn) ended in an outcome nothing starts from, with no ask; summary says why. It takes no answer: a new run on the item moves it on.',
+  '- kind stopped is an item whose last step (stoppedIn) left nothing to move it: an outcome no step followed, with no ask (summary says why), or a start its end or settled asks caused that was refused (limit, refused). It takes no answer: a new step on the item moves it on; a run of a workflow that observes the item (observes: true) does not. One whose failed.outcomeUnknown is set (any failed run, on an item or not, whose named nodes may or may not have done their write) is different: check what they did, then resume or abandon that run; a new run or ending the item does not clear it.',
 ].join('\n');
 
 const chooseSchema = z.array(z.string().min(1)).min(1);
@@ -218,6 +219,34 @@ function withText(chosen: string, said: string | undefined): string {
   return said === undefined ? chosen : `${chosen} and the text "${said}"`;
 }
 
+/** A failed run's stop: its error and what moves it on, resume or abandon for an unknown outcome. */
+function failedStopText(
+  ref: string,
+  item: Extract<AttentionQueueItem, { kind: 'stopped' }>,
+  failed: NonNullable<Extract<AttentionQueueItem, { kind: 'stopped' }>['failed']>
+): string {
+  const { runId, workflow } = item.stoppedIn;
+  const unknown = failed.outcomeUnknown;
+  const next =
+    unknown === undefined
+      ? `start it again with archon workflow run --supersedes ${runId}, which closes this`
+      : `${unknown.length === 0 ? 'its outcome is' : `the outcome of ${unknown.join(', ')} is`} unknown, so check what it did, then resume it with archon workflow resume ${runId} or abandon it with archon workflow abandon ${runId}`;
+  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) failed${failed.error === null ? '' : `: ${failed.error}`}. It takes no answer: ${next}.`;
+}
+
+/** What the tool says of a stopped item: how its run ended, what was refused, what moves it. */
+function stoppedText(ref: string, item: Extract<AttentionQueueItem, { kind: 'stopped' }>): string {
+  const { runId, workflow, outcome } = item.stoppedIn;
+  if (item.failed !== undefined) return failedStopText(ref, item, item.failed);
+  const count = item.refused?.length ?? 0;
+  // A refusal says only what was refused: other starts the run's end caused may have started.
+  const after =
+    count === 0
+      ? 'and no step followed it'
+      : `and ${count === 1 ? 'a start it caused was' : `${String(count)} starts it caused were`} refused`;
+  return `attention: item '${ref}' stopped: run ${runId} (${workflow}) ended${outcome === null ? '' : ` as '${outcome}'`}, ${after}.${item.summary === null ? '' : ` Summary: ${item.summary}`} It takes no answer: start a new step on the item to move it on (a workflow that observes the item does not).`;
+}
+
 /** Why the item `ref` names was not answered, in words the agent can act on. */
 function notAnswered(
   ref: string,
@@ -237,11 +266,13 @@ function notAnswered(
         case 'unreadable':
           return `attention: item '${ref}' cannot be read (${result.item.reason}: ${result.item.detail}). Someone has to look at its run; it takes no answer.`;
         case 'owner_lost':
-          return `attention: run ${result.item.run.id} lost its owner while it holds its item, so later starts wait behind it. It takes no answer: resume or abandon the run.`;
+          return result.item.start === undefined
+            ? `attention: run ${result.item.run.id} lost its owner and still holds what it took (its item, its resource slot). It takes no answer: resume or abandon the run.`
+            : `attention: run ${result.item.run.id} was admitted but no process runs it, and it still holds what it took. It takes no answer: start it once with archon trigger execute ${result.item.start.requestId} --host ${result.item.start.hostId}, or abandon the run.`;
         case 'overdue_wait':
           return `attention: item '${ref}' waits for ${result.item.waits.map(wait => `'${wait.event}' about ${wait.about}`).join(' or ')}, due ${result.item.deadline}. It takes no answer: the event meets it, a new run of ${result.item.waitingIn.workflow} on the item replaces it, or \`archon workflow answer --withdraw ${ref}\` closes it.`;
         case 'stopped':
-          return `attention: item '${ref}' stopped: run ${result.item.stoppedIn.runId} (${result.item.stoppedIn.workflow}) ended as '${result.item.stoppedIn.outcome}', started nothing and left no ask.${result.item.summary === null ? '' : ` Summary: ${result.item.summary}`} It takes no answer: start a new run on the item to move it on.`;
+          return stoppedText(ref, result.item);
       }
       return result.item satisfies never;
     case 'refused':

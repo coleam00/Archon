@@ -1,16 +1,19 @@
 // @archon-test-isolated
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, jest, test } from 'bun:test';
 import { join } from 'node:path';
 import { getArchonHome, getArchonWorkspacesPath } from '@archon/paths/archon-paths';
 import {
+  type AttentionQueueSource,
+  attentionQueueItemForRun,
   fanOutPosition,
+  listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueCountBy,
   parseAttentionQueueOrder,
   parseAttentionQueueRequest,
   projectRefForRun,
-  toAttentionQueueItem,
 } from './attention-queue';
+import { OWNER_OBSERVATION_CONCURRENCY, OWNER_OBSERVATION_DEADLINE_MS } from './owner-observation';
 import { queuedRunAttention, type WorkflowRun } from './schemas/workflow-run';
 
 describe('attention queue arguments', () => {
@@ -100,7 +103,7 @@ describe('queue item identity', () => {
 });
 
 describe('a usage-limit wait', () => {
-  test('is an item naming its node, reset time and pause time, with nothing to answer', () => {
+  test('is an item naming its provider, node, reset time and pause time, with nothing to answer', async () => {
     const run: WorkflowRun = {
       origin: null,
       id: 'limited',
@@ -141,15 +144,193 @@ describe('a usage-limit wait', () => {
       nodeId: 'implement',
       resumeAt: '2026-10-15T14:00:00.000Z',
     });
-    if (attention === undefined) return;
+    // The provider is the one the waiting node's latest failure record was bound to.
+    const failed = (stepName: string, provider?: string) => ({
+      id: `${stepName}-${provider ?? 'none'}`,
+      workflow_run_id: 'limited',
+      event_type: 'node_failed',
+      step_index: null,
+      step_name: stepName,
+      // The released record shape: the node's bound provider sits beside its failure.
+      data: {
+        ...(provider ? { provider } : {}),
+        provider_failure: { class: 'quota_exhausted', evidence: 'limit' },
+      },
+      created_at: '2026-10-15T09:00:00.000Z',
+    });
+    const source = (events: ReturnType<typeof failed>[]): AttentionQueueSource => ({
+      store: {
+        listAttentionQueueRows: async () => [],
+        getWorkflowRun: async () => null,
+        getWorkflowRunForAttention: async () => null,
+        getCodebase: async () => null,
+        getItem: async () => null,
+        getItemPriority: async () => null,
+        listEventsForRuns: async () => new Map([['limited', events]]),
+      },
+      branchOf: async () => null,
+    });
     expect(
-      toAttentionQueueItem(run, attention, { codebase: null, branch: null, item: null })
+      await attentionQueueItemForRun(
+        source([
+          failed('implement', 'codex'),
+          failed('review', 'pi'),
+          failed('implement', 'claude'),
+        ]),
+        run
+      )
     ).toMatchObject({
       kind: 'usage_limit',
       ref: 'limited',
       run: { id: 'limited', node: 'implement' },
       resetAt: '2026-10-15T14:00:00.000Z',
+      provider: 'claude',
       pausedAt: '2026-10-15T09:00:00.000Z',
     });
+    // A failure record bound to no provider names none.
+    expect(await attentionQueueItemForRun(source([failed('implement')]), run)).not.toHaveProperty(
+      'provider',
+      expect.anything()
+    );
+  });
+});
+
+describe('owner observations', () => {
+  const running = (id: string): WorkflowRun => ({
+    origin: null,
+    id,
+    workflow_name: 'build',
+    conversation_id: null,
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'running',
+    outcome: null,
+    completed_outcome: null,
+    user_message: '',
+    metadata: {},
+    active_phase_started_at: null,
+    started_at: new Date('2026-11-25T08:00:00.000Z'),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+    item_id: null,
+  });
+
+  test('run a bounded number at once, and one past its deadline reads as unknown, never gone', async () => {
+    const runs = Array.from({ length: OWNER_OBSERVATION_CONCURRENCY + 2 }, (_, index) =>
+      running(`run-${String(index)}`)
+    );
+    const started: string[] = [];
+    const source: AttentionQueueSource = {
+      store: {
+        listAttentionQueueRows: async () => [],
+        getWorkflowRun: async () => null,
+        getWorkflowRunForAttention: async () => null,
+        getCodebase: async () => null,
+        getItem: async () => null,
+        getItemPriority: async () => null,
+        listEventsForRuns: async () => new Map(),
+      },
+      branchOf: async () => null,
+      ownerLost: {
+        runs: async () => runs,
+        // The last run is gone; every other owner hangs, as a live one can on a busy machine.
+        observe: run => {
+          started.push(run.id);
+          return run === runs.at(-1) ? Promise.resolve('unreachable') : new Promise(() => {});
+        },
+      },
+    };
+    jest.useFakeTimers();
+    try {
+      const listed = listAttentionQueue(source);
+      for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+      expect(started).toHaveLength(OWNER_OBSERVATION_CONCURRENCY);
+      for (let round = 0; round < 3; round++) {
+        jest.advanceTimersByTime(OWNER_OBSERVATION_DEADLINE_MS);
+        for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+      }
+      expect((await listed).map(item => ('ref' in item ? item.ref : item))).toEqual([
+        `run-${String(OWNER_OBSERVATION_CONCURRENCY + 1)}`,
+      ]);
+      expect(started).toHaveLength(runs.length);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
+describe('a continuation a host gave up on', () => {
+  const wait = {
+    owner: 'node',
+    kind: 'time',
+    nodeId: 'delay',
+    waitingSince: '2026-11-25T08:00:00.000Z',
+    resumeAt: '2026-11-25T09:00:00.000Z',
+  };
+  const givenUp = (resumeAt: string) => ({
+    at: '2026-11-25T09:03:00.000Z',
+    attempts: 3,
+    path: '/src/manifest.json',
+    cursor: { kind: 'wait', nodeId: 'delay', resumeAt },
+  });
+  const paused = (metadata: Record<string, unknown>): WorkflowRun => ({
+    origin: null,
+    id: 'parked',
+    workflow_name: 'deliver',
+    conversation_id: null,
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'paused',
+    outcome: null,
+    completed_outcome: null,
+    user_message: '',
+    metadata,
+    active_phase_started_at: null,
+    started_at: new Date('2026-11-25T07:00:00.000Z'),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: null,
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+    item_id: null,
+  });
+  const source = {
+    store: {
+      listAttentionQueueRows: async () => [],
+      getWorkflowRun: async () => null,
+      getWorkflowRunForAttention: async () => null,
+      getCodebase: async () => null,
+      getItem: async () => null,
+      getItemPriority: async () => null,
+      listEventsForRuns: async () => new Map(),
+    },
+    branchOf: async () => null,
+  };
+
+  test('is listed while the run is at that continuation, with what to do', async () => {
+    const item = await attentionQueueItemForRun(
+      source,
+      paused({ wait, continuation_given_up: givenUp(wait.resumeAt) })
+    );
+    expect(item).toMatchObject({ kind: 'unreadable', reason: 'continuation_given_up' });
+    expect(item && 'detail' in item ? item.detail : '').toContain('archon workflow resume parked');
+  });
+
+  test('is inert once the run waits at another continuation', async () => {
+    expect(
+      await attentionQueueItemForRun(
+        source,
+        paused({ wait, continuation_given_up: givenUp('2026-11-25T08:30:00.000Z') })
+      )
+    ).toBeNull();
   });
 });

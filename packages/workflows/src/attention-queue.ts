@@ -44,12 +44,16 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { workflowRunStatusSchema } from './schemas/run-status';
-import type { RunOwnerObservation } from './schemas/workflow-run-listing';
+import { stoppedLimitSchema, stoppedRefusalSchema } from './schemas/run-metadata';
+import { bindingRefusalSchema } from './schemas/binding-refusal';
+import { observeLostOwners, type LostOwner, type OwnerObserver } from './owner-observation';
 import { resolveRunAttention } from './run-attention-resolution';
+import { givenUpAttention } from './given-up-attention';
 import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
 import type { IWorkflowStore } from './store';
 import { isItemWithoutRunRef } from './attention-item-refs';
+import { limitFailureProvider } from './node-record-reader';
 
 /**
  * A project as the engine identifies it. `key` is the identity: the project storage key
@@ -99,15 +103,17 @@ const answerableRunSchema = z.object({
 });
 
 const itemBase = {
-  /**
-   * The item's identity: the one string a surface hands out with an item and takes back
-   * to read or answer it. Opaque to every caller.
-   */
+  /** The item's identity, handed out with it and taken back to read or answer it; opaque. */
   ref: z.string().min(1),
   /** Null only when the item's run has no trusted storage root, so there is no key to give. */
   project: projectRefSchema.nullable(),
   /** The item (`workflow run --item`) the work belongs to, when it belongs to one. */
   item: workflowItemSchema.optional(),
+  /**
+   * The item has priority (`schemas/item-priority.ts`): its queued starts go ahead of ordinary
+   * ones. False when the work belongs to no item.
+   */
+  priority: z.boolean(),
   /** 1, plus one for every label write since the item opened. */
   revision: z.number().int().positive(),
   labels: attentionLabelsSchema,
@@ -122,13 +128,20 @@ const itemBase = {
  * its retries, that tries again by itself at `resetAt` (the provider's reported reset, or a
  * computed backoff for a rate limit) and needs no answer; `unreadable` is a paused run
  * nothing can describe, which someone has to look at and resume or abandon; `owner_lost`
- * is a run whose owner is gone while it holds its item and later starts of its workflow on
- * the item wait behind it (`holdsItem`), which only `resume` or `abandon` moves;
+ * is a top-level run that needs an owner to move and whose owner this process can prove
+ * gone, on any item or none: a running or paused run whose owner endpoint is gone
+ * (`resume` or `abandon` moves it), or a pending admitted start no process runs (`start`,
+ * which `archon trigger execute` or `abandon` moves). It still holds whatever it held, its
+ * item and its resource slot among them, and the engine never ends it by itself;
  * `overdue_wait` is an item whose waits a completed run left (`returns.waits`) are still
  * open past their deadline, which the awaited event, another run of the waiting workflow
- * on the item, or a withdrawal closes; `stopped` is an item whose newest run completed with
- * an outcome that is not final (`returns.final`), started nothing and left no ask or wait,
- * so nothing moves it: it takes no answer, and any newer run on the item closes it.
+ * on the item, or a withdrawal closes; `stopped`, which takes no answer, is an item whose newest
+ * step (not an `observes: true` run) failed, or completed starting no step, asking nothing and
+ * ending nothing, until a newer step, its end or its merge; or a failed run whose outcome is
+ * unknown, until it is resumed or abandoned;
+ * `refused_start` is a start no run caused that was refused and is its item's newest step;
+ * `preparation_lost` is a binding start whose preparer this process can prove gone, which
+ * `archon trigger recover-preparation` returns to pending.
  *
  * `run` is the paused run that holds the item. A gate, a usage-limit wait and an
  * unreadable pause are always a run. A question may have none: then nothing is paused on
@@ -146,6 +159,8 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     /** The option with id `other` is the reserved one: an answer choosing it needs text. */
     other: z.literal(true).optional(),
     recommendation: attentionRecommendationSchema.optional(),
+    /** Why an ask has no recommendation, in its stage's words, when the stage gave a reason. */
+    noRecommendation: z.string().min(1).optional(),
     /** An ask's context: what is at stake and why it came up. */
     context: z.string().optional(),
     /** Artifacts an ask points its answerer to. */
@@ -164,6 +179,7 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     ...itemBase,
     run: z.object({ ...heldRunFields, node: z.string() }),
     resetAt: z.string().datetime(),
+    provider: z.string().optional(),
   }),
   z.object({
     kind: z.literal('unreadable'),
@@ -178,6 +194,11 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     run: z.object(heldRunFields),
     /** The run's stored status, unchanged: the engine never ends it by itself. */
     observedStatus: workflowRunStatusSchema,
+    /**
+     * Set when the run is a pending admitted start that no process runs: the request and
+     * host `archon trigger execute <requestId> --host <hostId>` runs it once with.
+     */
+    start: z.object({ requestId: z.string(), hostId: z.string() }).optional(),
   }),
   z.object({
     kind: z.literal('overdue_wait'),
@@ -192,25 +213,81 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('stopped'),
     ...itemBase,
-    /**
-     * The completed run that stopped the item, which holds nothing, and the outcome it
-     * completed with. `pausedAt` is when it ended.
-     */
-    stoppedIn: z.object({ runId: z.string(), workflow: z.string(), outcome: z.string() }),
+    /** The run that stopped the item and its outcome; `pausedAt` is when it ended. */
+    stoppedIn: z.object({
+      runId: z.string(),
+      workflow: z.string(),
+      outcome: z.string().nullable(),
+    }),
     /** The run's declared `returns.summary`, or null when it declares or gave none. */
     summary: z.string().nullable(),
-    /**
-     * The project's checkout, the directory a start on the item runs from (`--cwd`); null
-     * when the run has no registered project.
-     */
+    /** Set when the start the run caused was refused: at its limit, or before launch. */
+    limit: stoppedLimitSchema.optional(),
+    refused: z.array(stoppedRefusalSchema).optional(),
+    /** Set when the run failed: its error or null; `outcomeUnknown` names uncertain nodes. */
+    failed: z
+      .object({ error: z.string().nullable(), outcomeUnknown: z.array(z.string()).optional() })
+      .optional(),
+    /** The project's checkout a start on the item runs from (`--cwd`), or null with no project. */
     checkout: z.string().nullable(),
+  }),
+  z.object({
+    kind: z.literal('refused_start'),
+    ...itemBase,
+    /**
+     * A binding start that no run caused (a fire, a schedule, a webhook or a label), refused
+     * as its binding row records it (`bindingRefusalSchema`). `pausedAt` is when it was
+     * refused. It takes no answer; a run on the item, or a later start of the same binding
+     * on it, closes it.
+     */
+    start: z.object({
+      receiptId: z.string(),
+      bindingId: z.string(),
+      hostId: z.string().nullable(),
+      workflow: z.string().nullable(),
+      itemKey: z.string(),
+      ...bindingRefusalSchema.shape,
+    }),
+  }),
+  z.object({
+    kind: z.literal('preparation_lost'),
+    ...itemBase,
+    /**
+     * The binding start whose preparer is provably gone: it stays `preparing`, owned by
+     * `ownerId`, and nothing prepares it again until `archon trigger recover-preparation`
+     * returns it to pending. `pausedAt` is when the preparation was claimed.
+     */
+    start: z.object({
+      receiptId: z.string(),
+      bindingId: z.string(),
+      hostId: z.string().nullable(),
+      workflow: z.string().nullable(),
+      /** The item key the start names, also before a start has made the item. */
+      itemKey: z.string().nullable(),
+      ownerId: z.string(),
+    }),
+  }),
+  z.object({
+    kind: z.literal('unreadable_start'),
+    ...itemBase,
+    /**
+     * A queued request whose stored launch does not read. Admission keeps queue order, so
+     * the `behind` requests queued after it on its resource and host wait until it is
+     * withdrawn (`archon trigger withdraw <requestId>`). `pausedAt` is when it was queued.
+     */
+    start: z.object({
+      requestId: z.string(),
+      resource: z.string(),
+      hostId: z.string(),
+      behind: z.number().int().nonnegative(),
+    }),
   }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
 /** An item a paused run holds. */
 export type RunAttentionQueueItem = Exclude<
   AttentionQueueItem,
-  { kind: 'overdue_wait' | 'stopped' }
+  { kind: 'overdue_wait' | 'stopped' | 'refused_start' | 'preparation_lost' | 'unreadable_start' }
 > & {
   run: object;
 };
@@ -243,11 +320,27 @@ export type AskQueueItem = Extract<AttentionQueueItem, { kind: 'attention' }> & 
 /** An item no run holds: an ask, an overdue wait, or a stopped item. */
 export type AttentionQueueItemWithoutRun =
   | AskQueueItem
-  | Extract<AttentionQueueItem, { kind: 'overdue_wait' | 'stopped' }>;
+  | Extract<
+      AttentionQueueItem,
+      {
+        kind:
+          | 'overdue_wait'
+          | 'stopped'
+          | 'refused_start'
+          | 'preparation_lost'
+          | 'unreadable_start';
+      }
+    >;
 /** An overdue wait's queue item. */
 export type OverdueWaitQueueItem = Extract<AttentionQueueItem, { kind: 'overdue_wait' }>;
 /** A stopped item's queue item. */
 export type StoppedQueueItem = Extract<AttentionQueueItem, { kind: 'stopped' }>;
+/** A refused start's queue item. */
+export type RefusedStartQueueItem = Extract<AttentionQueueItem, { kind: 'refused_start' }>;
+/** A lost binding preparation's queue item. */
+export type PreparationLostQueueItem = Extract<AttentionQueueItem, { kind: 'preparation_lost' }>;
+/** An unreadable queued request's queue item. */
+export type UnreadableStartQueueItem = Extract<AttentionQueueItem, { kind: 'unreadable_start' }>;
 
 const RUN_REF_SEPARATOR = ':';
 
@@ -272,6 +365,10 @@ export interface AttentionQueueItemSources {
   branch: string | null;
   /** The item the run belongs to; null when it belongs to none. */
   item: WorkflowItem | null;
+  /** The item has priority; false without an item. */
+  priority: boolean;
+  /** For a usage-limit wait, the provider its node's failure record names, when it names one. */
+  limitProvider?: string;
 }
 
 /**
@@ -348,6 +445,7 @@ export function toAttentionQueueItem(
   const base = {
     project: projectRefForRun(run, sources.codebase),
     ...(sources.item === null ? {} : { item: sources.item }),
+    priority: sources.priority,
     revision: wait === undefined ? 1 : attentionRevision(wait),
     labels: wait === undefined ? {} : attentionLabels(wait),
     pausedAt: (wait ?? pausedUsageLimitWait(run))?.waitingSince ?? null,
@@ -383,6 +481,7 @@ export function toAttentionQueueItem(
         ...base,
         run: { ...held, node: attention.nodeId },
         resetAt: attention.resumeAt,
+        provider: sources.limitProvider,
       };
     case 'unreadable':
       return {
@@ -405,6 +504,8 @@ export interface AttentionQueueSource {
     | 'getWorkflowRunForAttention'
     | 'getCodebase'
     | 'getItem'
+    | 'getItemPriority'
+    | 'listEventsForRuns'
   >;
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
@@ -415,16 +516,25 @@ export interface AttentionQueueSource {
    * that does not read is reported in its place.
    */
   itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;
-  /**
-   * Runs that hold their item while a later start of their workflow on it waits, and what
-   * this process observes about a run's execution owner. A holder the store cannot read
-   * is reported `run_unreadable`. Without it the queue lists no `owner_lost` items and an
-   * item read observes no owners.
-   */
-  ownerLost?: {
-    holders(): Promise<AttentionRead<WorkflowRun>[]>;
-    observe(run: WorkflowRun): Promise<RunOwnerObservation | null>;
-  };
+  /** Without it the queue lists no `owner_lost` items and an item read observes no owners. */
+  ownerLost?: OwnerObserver;
+}
+
+/** The item `itemId` names and whether it has priority, as a queue item carries them. */
+export async function queueItemOf(
+  store: Pick<IWorkflowStore, 'getItem' | 'getItemPriority'>,
+  itemId: string | null
+): Promise<Pick<AttentionQueueItemSources, 'item' | 'priority'>> {
+  const item = itemId === null ? null : await store.getItem(itemId);
+  return withPriority(store, item);
+}
+
+/** `item` and whether it has priority; false without an item. */
+export async function withPriority(
+  store: Pick<IWorkflowStore, 'getItemPriority'>,
+  item: WorkflowItem | null
+): Promise<Pick<AttentionQueueItemSources, 'item' | 'priority'>> {
+  return { item, priority: item !== null && (await store.getItemPriority(item.id)) !== null };
 }
 
 export type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
@@ -449,6 +559,27 @@ export async function runProject(
   return projectRefForRun(run, await codebaseFor(source, run, codebases));
 }
 
+/**
+ * The item a run works on: its own, else its top-level run's, since a `workflow:` child
+ * records none. Null when no run on the way records one, or a parent row does not read
+ * (its own queue entry reports that).
+ */
+async function runItemId(
+  store: Pick<IWorkflowStore, 'getWorkflowRunForAttention'>,
+  run: WorkflowRun
+): Promise<string | null> {
+  let current = run;
+  const visited = new Set([run.id]);
+  while (current.item_id === null && current.parent_run_id !== null) {
+    if (visited.has(current.parent_run_id)) return null;
+    visited.add(current.parent_run_id);
+    const parent = await store.getWorkflowRunForAttention(current.parent_run_id);
+    if (parent === null || isAttentionDegraded(parent)) return null;
+    current = parent;
+  }
+  return current.item_id;
+}
+
 async function itemFor(
   source: AttentionQueueSource,
   run: WorkflowRun,
@@ -459,7 +590,17 @@ async function itemFor(
     codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
     // Only a run started for an item has one, so most reads skip the store.
-    item: run.item_id === null ? null : await source.store.getItem(run.item_id),
+    ...(await queueItemOf(source.store, await runItemId(source.store, run))),
+    // The wait stores no provider, so a binary that reads it strictly still reads it.
+    ...(attention.kind === 'usage_limit'
+      ? {
+          limitProvider: limitFailureProvider(
+            await source.store.listEventsForRuns([run.id], ['node_failed']),
+            run.id,
+            attention.nodeId
+          ),
+        }
+      : {}),
   });
 }
 
@@ -472,6 +613,8 @@ async function ownQueuedAttention(
   source: AttentionQueueSource,
   run: WorkflowRun
 ): Promise<QueuedRunAttention | undefined> {
+  const givenUp = givenUpAttention(run);
+  if (givenUp !== undefined) return givenUp;
   const own = queuedRunAttention(run);
   if (own !== undefined) return own;
   const resolution = await resolveRunAttention(source.store, run);
@@ -496,49 +639,51 @@ export async function attentionQueueItemForRun(
 }
 
 /**
- * The `owner_lost` item of `run`, a holder of its item that starts wait behind (see
- * `AttentionQueueSource.ownerLost`), when its owner is gone; null otherwise. Observing
- * never changes the run.
+ * The `owner_lost` item of `run` (see `AttentionQueueSource.ownerLost`) when `lost` proves
+ * its owner gone; null otherwise, and for a child run, whose top-level run is the item.
  */
 async function ownerLostItem(
   source: AttentionQueueSource,
   run: WorkflowRun,
+  lost: LostOwner | null | undefined,
   codebases: CodebaseCache
 ): Promise<RunAttentionQueueItem | null> {
-  if (source.ownerLost === undefined || run.item_id === null) return null;
-  if ((await source.ownerLost.observe(run)) !== 'unreachable') return null;
+  if (lost == null || run.parent_run_id !== null) return null;
   const sources: AttentionQueueItemSources = {
     codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
-    item: await source.store.getItem(run.item_id),
+    ...(await queueItemOf(source.store, run.item_id)),
   };
   return {
     kind: 'owner_lost',
     ref: runItemRef(run.id),
     project: projectRefForRun(run, sources.codebase),
     ...(sources.item === null ? {} : { item: sources.item }),
+    priority: sources.priority,
     revision: 1,
     labels: {},
     pausedAt: null,
     run: heldRun(run, sources),
     observedStatus: run.status,
+    ...lost,
   };
 }
 
-/** The `owner_lost` items; a holder already reported unreadable in `reported` is not repeated. */
+/** The `owner_lost` items, in the store's order; a run already in `reported` is not repeated. */
 async function ownerLostItems(
   source: AttentionQueueSource,
   reported: ReadonlySet<string>
 ): Promise<AttentionRead<RunAttentionQueueItem>[]> {
   if (source.ownerLost === undefined) return [];
+  const { values, degraded } = splitAttentionRead(await source.ownerLost.runs());
+  const top = values.filter(run => run.parent_run_id === null);
+  const lost = await observeLostOwners(source.ownerLost, top);
   const codebases: CodebaseCache = new Map();
-  const items: AttentionRead<RunAttentionQueueItem>[] = [];
-  for (const run of await source.ownerLost.holders()) {
-    if (isAttentionDegraded(run)) {
-      if (!reported.has(run.runId)) items.push(run);
-      continue;
-    }
-    const item = await ownerLostItem(source, run, codebases);
+  const items: AttentionRead<RunAttentionQueueItem>[] = degraded.filter(
+    run => !reported.has(run.runId)
+  );
+  for (const [index, run] of top.entries()) {
+    const item = await ownerLostItem(source, run, lost[index], codebases);
     if (item !== null) items.push(item);
   }
   return items;
@@ -559,6 +704,8 @@ async function runAttentionQueueItems(
       getWorkflowRunForAttention: id => source.store.getWorkflowRunForAttention(id),
       getCodebase: id => source.store.getCodebase(id),
       getItem: id => source.store.getItem(id),
+      getItemPriority: id => source.store.getItemPriority(id),
+      listEventsForRuns: (...args) => source.store.listEventsForRuns(...args),
       getWorkflowRun: async id => {
         // The batch already reports this row. Rereading it could log stored parser text;
         // treating it as missing would instead invent a missing-child queue item.
@@ -591,7 +738,7 @@ async function runAttentionQueueItems(
 /**
  * Every open item in the install: the one entry every surface lists through. The items
  * paused runs hold come first, in the store's order (most recently started run first),
- * then the holders of an item whose owner is gone (`owner_lost`), then the items no run
+ * then the runs whose owner is gone (`owner_lost`), oldest first, then the items no run
  * holds. A host that also needs the queue rows passes the ones it
  * read as `runs`, so both come from one read.
  */
@@ -622,14 +769,11 @@ export async function readAttentionQueueItem(
 ): Promise<RunAttentionQueueItem | null | undefined> {
   const run = await source.store.getWorkflowRun(runId);
   if (run === null) return undefined;
-  // A held item's holder whose owner is gone reads as the list lists it, by the same rule.
-  if (run.item_id !== null && source.ownerLost !== undefined) {
-    const holders = splitAttentionRead(await source.ownerLost.holders()).values;
-    const lost = holders.some(holder => holder.id === run.id)
-      ? await ownerLostItem(source, run, new Map())
-      : null;
-    if (lost !== null) return lost;
-  }
+  // A run whose owner is gone reads as the list lists it, by the same rule.
+  const [owner] =
+    source.ownerLost === undefined ? [] : await observeLostOwners(source.ownerLost, [run]);
+  const lost = await ownerLostItem(source, run, owner, new Map());
+  if (lost !== null) return lost;
   const resolution = await resolveRunAttention(source.store, run);
   if (resolution.kind !== 'attention') return null;
   const holder =

@@ -13,7 +13,7 @@ import {
 import type { ForgeSubjectRef, PrRef, RepoRef } from '@archon/forge';
 import { GitHubError, githubPages, githubRequest, location, type Fetch } from './api';
 import { actor, authorField, userSchema } from './actor';
-import { applied, failure, refused, unverified, type Submit } from './mutation-outcome';
+import { applied, failure, refused, unreadable, unverified, type Submit } from './mutation-outcome';
 
 const labelSchema = z.object({
   name: z.string().min(1),
@@ -500,8 +500,8 @@ export async function editWorkItemBody(
   let after: Issue;
   try {
     after = await readIssue(fetchImpl, token, request.ref);
-  } catch {
-    return unverified(request, 'Edited issue could not be read back', leaveBehind);
+  } catch (cause) {
+    return unreadable(request, 'Edited issue could not be read back', cause, leaveBehind);
   }
   const observed = issueRecord(request.ref.repo, after, request.ref.number);
   return (after.body ?? '') === request.body
@@ -618,6 +618,54 @@ export async function handleGithubWorkItemLabelAdded(
                 at: latest.created_at,
                 actor: latest.actor === undefined ? null : actor(repo.host, latest.actor),
               },
+      },
+    },
+  };
+}
+
+const openedIssueSchema = issueSchema.extend({ created_at: z.iso.datetime({ offset: true }) });
+
+/**
+ * The open issues created at or after `since`, newest first. GitHub's `since` filters on
+ * the last update, which is never before creation, so it narrows the pages without losing
+ * an issue; the read stops at the first issue created before `since`. Pull requests share
+ * the issues endpoint and are dropped.
+ */
+export async function handleGithubWorkItemOpened(
+  request: Extract<ForgeRequest, { op: 'workitem.opened' }>,
+  fetchImpl: Fetch,
+  token: string
+): Promise<ForgeResponse> {
+  const { root, path } = location(request.repo);
+  const since = Date.parse(request.since);
+  const issues: z.infer<typeof openedIssueSchema>[] = [];
+  for (let page = 1; ; page++) {
+    const rows = z
+      .array(openedIssueSchema)
+      .parse(
+        await githubRequest(
+          fetchImpl,
+          token,
+          `${root}/repos/${path}/issues?state=open&sort=created&direction=desc&since=${encodeURIComponent(request.since)}&per_page=100&page=${String(page)}`
+        )
+      );
+    const fresh = rows.filter(row => Date.parse(row.created_at) >= since);
+    issues.push(...fresh.filter(row => row.pull_request === undefined));
+    if (rows.length < 100 || fresh.length < rows.length) break;
+  }
+  return {
+    operationId: request.operationId,
+    ok: true,
+    result: {
+      op: request.op,
+      value: {
+        repo: request.repo,
+        since: request.since,
+        items: issues.map(issue => ({
+          ...issueRecord(request.repo, issue),
+          createdAt: issue.created_at,
+          ...authorField(request.repo.host, issue.user),
+        })),
       },
     },
   };

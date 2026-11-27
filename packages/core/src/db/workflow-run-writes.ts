@@ -11,6 +11,7 @@ import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-obs
 import {
   TERMINAL_WORKFLOW_STATUSES,
   TOOL_CALL_ATTENTION_METADATA_KEY,
+  replaceStreamToolCallAttention,
   toolCallAttentionArraySchema,
   validateWorkflowWaitMetadata,
   type ToolCallAttention,
@@ -23,8 +24,10 @@ import {
   liveDescendantsRefusal,
   type DeletedWorkflowRun,
 } from '@archon/workflows/store';
-import { getDatabase, getDialect, pool } from './connection';
+import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
+import type { TransactionQuery as Query } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
+import { stepRun } from './item-step';
 import { getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
 
@@ -63,12 +66,12 @@ export async function setToolCallAttention(
     const row = await lockedRunRow(query, runId);
     if (row?.status !== 'running') return false;
     const metadata = normalizeMetadata(row.metadata);
-    const previous = toolCallAttentionArraySchema.parse(
-      metadata[TOOL_CALL_ATTENTION_METADATA_KEY] ?? []
+    const combined = replaceStreamToolCallAttention(
+      metadata[TOOL_CALL_ATTENTION_METADATA_KEY],
+      streamId,
+      snapshot
     );
-    const own = previous.filter(call => call.streamId === streamId);
-    if (JSON.stringify(own) === JSON.stringify(snapshot)) return false;
-    const combined = [...previous.filter(call => call.streamId !== streamId), ...snapshot];
+    if (!combined) return false;
     await query(
       `UPDATE remote_agent_workflow_runs SET metadata = ${dialect.jsonMerge('metadata', 2)} WHERE id = $1`,
       [
@@ -298,6 +301,33 @@ const NO_LIVE_ADOPTERS = `NOT EXISTS (
   WHERE adopter.adopted_from_run_id = remote_agent_workflow_runs.id
     AND adopter.status NOT IN (${terminalList}))`;
 
+/**
+ * Before deleting top-level steps on items, record on each item when the newest of them
+ * started (`moved_on_at`); a run that observes its item moved nothing on: the deletion removes the run that moved the item on, and a stop
+ * from before it must stay closed (`listStoppedItemRuns`). Nothing about the stop is erased.
+ */
+async function recordItemsMovedOn(query: Query, ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  // The same order `listStoppedItemRuns` reads runs in: start time, then this tie-break.
+  const tie = getDatabaseType() === 'sqlite' ? 'rowid' : 'id';
+  const list = ids.map((_, index) => `$${String(index + 1)}`).join(', ');
+  const deleted = await query<{ item_id: string; started_at: unknown; tie: unknown }>(
+    `SELECT item_id, started_at, ${tie} AS tie FROM remote_agent_workflow_runs
+      WHERE id IN (${list}) AND item_id IS NOT NULL AND parent_run_id IS NULL
+        AND ${stepRun('remote_agent_workflow_runs')}
+      ORDER BY started_at, ${tie}`,
+    [...ids]
+  );
+  // Oldest first, so each item ends on its newest deleted run.
+  for (const row of deleted.rows)
+    await query(
+      `UPDATE remote_agent_items SET moved_on_at = $2, moved_on_tie = $3
+        WHERE id = $1 AND (moved_on_at IS NULL OR moved_on_at < $2
+          OR (moved_on_at = $2 AND moved_on_tie < $3))`,
+      [row.item_id, row.started_at, row.tie]
+    );
+}
+
 /** Ids per `IN (...)` list: far under SQLite's and PostgreSQL's bound-parameter limits. */
 const DELETE_CHUNK = 500;
 
@@ -338,6 +368,7 @@ export async function deleteOldWorkflowRuns(
       for (let start = 0; start < runs.length; start += DELETE_CHUNK) {
         const ids = runs.slice(start, start + DELETE_CHUNK).map(run => run.id);
         const list = ids.map((_, index) => `$${String(index + 1)}`).join(', ');
+        await recordItemsMovedOn(query, ids);
         // Events first: they reference the run row.
         await query(
           `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (${list})`,
@@ -427,6 +458,7 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
           adopters.rows.map(row => ({ id: String(row.id), status: row.status }))
         );
       }
+      await recordItemsMovedOn(query, [id]);
       await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
       await query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
     });

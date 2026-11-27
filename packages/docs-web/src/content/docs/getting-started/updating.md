@@ -58,17 +58,18 @@ archon version
 
 ## Docker
 
-For the release image shown in the installation guide, pull the new image before
-starting another container:
+For the [pre-built image](/deployment/docker/#pre-built-image), pull the new
+image and recreate the container from the directory that holds your
+`docker-compose.yml`, then check the version:
 
 ```bash
-docker pull ghcr.io/coleam00/archon:latest
-docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest version
+docker compose pull
+docker compose up -d
+docker compose exec -u appuser app bun run cli version
 ```
 
-For a long-running container, stop and recreate it using the same volumes,
-environment, and ports as the original container. Restarting an existing container
-does not change its image. Keep your data volumes.
+`docker compose up -d` recreates the app with the new image and keeps the data
+volumes. A plain restart does not change the image.
 
 The repository's Docker Compose deployment builds from source. Follow its
 [update instructions](/deployment/docker/#update), retaining the profiles you
@@ -82,14 +83,50 @@ In your Archon checkout, first check for local changes:
 git status
 ```
 
-Commit or stash your changes before updating. The `main` branch contains releases;
-`dev` is the working development branch.
+Commit or stash your changes before updating. Then follow one of two branches:
+`main` holds releases and is the recommended branch, and `dev` is the working
+development branch.
+
+The commands below use Bash syntax (`&&` and `\` line continuations). On native
+Windows, run them in Git Bash in the same checkout.
+
+### Follow releases
+
+If `git branch --list main` prints nothing, your checkout has no local `main`
+yet. Create it once from origin's `main`, with origin's `main` as its upstream
+so a plain `git pull` on it also works:
 
 ```bash
-git switch main
-git pull --ff-only
-bun install --frozen-lockfile
-bun run cli version
+git fetch origin main && \
+  git branch main FETCH_HEAD && \
+  git config branch.main.remote origin && \
+  git config branch.main.merge refs/heads/main
+```
+
+Then update. Each step runs only if the one before it succeeded:
+
+```bash
+git fetch origin main && \
+  git switch main && \
+  git merge --ff-only FETCH_HEAD && \
+  bun install --frozen-lockfile && \
+  bun run cli version
+```
+
+This fetches `main` by name, so it works on a clone made with
+`--single-branch` of `dev`, which never fetches `main` on its own.
+
+### Follow development
+
+Use this on a checkout whose `dev` branch tracks the repository's `dev`, as a
+normal clone does. A clone made with `--single-branch` of `main` has no `dev`;
+follow releases instead.
+
+```bash
+git switch dev && \
+  git pull --ff-only && \
+  bun install --frozen-lockfile && \
+  bun run cli version
 ```
 
 If you serve the console from source, rebuild it with `bun run build:web` before

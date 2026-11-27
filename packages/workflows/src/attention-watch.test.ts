@@ -1814,6 +1814,7 @@ test('an item no run holds is listed, read by its ref, streamed and resolved, wi
   const ask: AttentionQueueItemWithoutRun = {
     kind: 'attention',
     ref: 'ask:1',
+    priority: false,
     project,
     revision: 1,
     labels: {},
@@ -1880,6 +1881,7 @@ test('an open ask whose row turns unreadable stays open, with one degraded line'
   const ask: AttentionQueueItemWithoutRun = {
     kind: 'attention',
     ref: 'ask:1',
+    priority: false,
     project,
     revision: 1,
     labels: {},

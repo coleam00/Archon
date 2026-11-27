@@ -13,7 +13,30 @@ import {
 } from '@archon/forge/operations';
 import type { PrRef } from '@archon/forge';
 import { githubPages, githubRequest, location, type Fetch } from './api';
-import { applied, refused, unverified, type Submit } from './mutation-outcome';
+import { applied, refused, unreadable, unverified, type Submit } from './mutation-outcome';
+
+/**
+ * A comment belongs to the item when its URL's path names the same repository and number.
+ *
+ * The host is not part of that test. GitHub and GitHub Enterprise Server build `issue_url` from
+ * their own configured public URL, which says nothing about the address a client reached them on:
+ * an enterprise instance behind a proxy, or reached by a second name, fails an exact comparison of
+ * a write that succeeded, and reports `unverified` for a comment it did write. The path is what
+ * carries the identity, and GitHub echoes `owner/name` in its registered case (see `sameRepo` in
+ * ./pull-requests.ts), so compare lowered.
+ *
+ * The suffix, not the whole path: an enterprise instance serves the API under a base path such as
+ * `/api/v3`, which is where the client reached it, not what the repository is.
+ */
+function namesSameIssue(issueUrl: string, repoPath: string, number: number): boolean {
+  let pathname: string;
+  try {
+    pathname = new URL(issueUrl).pathname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return pathname.endsWith(`/repos/${repoPath.toLowerCase()}/issues/${String(number)}`);
+}
 import { readIssue, subjectRecord } from './workitems';
 import { actor, userSchema } from './actor';
 
@@ -110,14 +133,13 @@ export async function upsertComment(
         `${root}/repos/${path}/issues/comments/${String(written.id)}`
       )
     );
-  } catch {
-    return unverified(request, 'Comment could not be read back', leaveBehind, subject);
+  } catch (cause) {
+    return unreadable(request, 'Comment could not be read back', cause, leaveBehind, subject);
   }
   const comment = commentRecord(ref, observed);
   if (
     String(observed.id) !== String(written.id) ||
-    // GitHub echoes owner/name in its registered case (see sameRepo).
-    observed.issue_url.toLowerCase() !== issue.toLowerCase() ||
+    !namesSameIssue(observed.issue_url, path, ref.number) ||
     (observed.body ?? '') !== request.body
   ) {
     return unverified(request, 'Comment read-back did not match', leaveBehind, {

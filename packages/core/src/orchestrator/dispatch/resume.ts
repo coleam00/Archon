@@ -1,8 +1,5 @@
 import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
-import { inspectResumableRun } from '@archon/workflows/run-resume';
-import { assertRunCredentials } from '@archon/workflows/run-preflight';
-import { assertRunForgeAccess } from '@archon/workflows/run-forge-access';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -12,27 +9,24 @@ import {
   WorkflowItemHeldError,
   type RunOwnerLease,
 } from '@archon/workflows/store';
-import { spellWorkflowCommand, type WorkflowDeps } from '@archon/workflows/deps';
+import { spellWorkflowCommand } from '@archon/workflows/deps';
 import * as workflowDb from '../../db/workflows';
-import { startRunLiveOwner, withRunLiveOwner } from '../../services/run-live-owner';
+import { startRunLiveOwner } from '../../services/run-live-owner';
 import { createWorkflowDeps } from '../../workflows/store-adapter';
 import { getLog } from '../agent-log';
 import { formatResumableRunState } from './resume-prompt';
-import type { DispatchScope, PreparedAiConfiguration } from './scope';
-import { captureFreshSource } from './source';
+import type { DispatchScope } from './scope';
 
 export interface ForegroundResumeInput {
   workflow: ResolvedWorkflow;
   resumableRun: WorkflowRun;
   resumableWorkingPath: string;
-  resolvedInputs: Record<string, string> | undefined;
   deferredInputError: Error | undefined;
-  prepareLaunchAiConfiguration: (definition: ResolvedWorkflow) => Promise<PreparedAiConfiguration>;
 }
 
 /**
- * Continue the detected run in the foreground, or start fresh in its worktree when it has
- * nothing to resume.
+ * Continue the detected run in the foreground under its own id, with the inputs, source and
+ * configuration it started with. A run with no completed node runs again from its first node.
  */
 export async function continueForegroundResume(
   scope: DispatchScope,
@@ -48,24 +42,14 @@ export async function continueForegroundResume(
     },
     'orchestrator.foreground_resume_detected'
   );
-  // An empty resume is the explicit restart path below; a lost claim never
-  // falls through to a fresh run on another owner's worktree.
-  const deps = createWorkflowDeps();
-  const engine = new InProcessWorkflowEngine(deps);
+  // A lost claim never falls through to a fresh run on another owner's worktree.
+  const engine = new InProcessWorkflowEngine(createWorkflowDeps());
   const resumeOwner = await startRunLiveOwner(resumableRun.id);
-  let resumeOwnerClosed = false;
   try {
-    const admission = await admitResume(scope, input, deps, engine, resumeOwner.lease);
-    if (admission === undefined) return;
-    if (admission.accepted) {
-      await admission.settled;
-      return;
-    }
-    await resumeOwner.close();
-    resumeOwnerClosed = true;
-    await startFreshInResumedWorktree(scope, input, engine);
+    const admission = await admitResume(scope, input, engine, resumeOwner.lease);
+    if (admission !== undefined) await admission.settled;
   } finally {
-    if (!resumeOwnerClosed) await resumeOwner.close();
+    await resumeOwner.close();
   }
 }
 
@@ -73,20 +57,12 @@ export async function continueForegroundResume(
 async function admitResume(
   scope: DispatchScope,
   input: ForegroundResumeInput,
-  deps: WorkflowDeps,
   engine: InProcessWorkflowEngine,
   lease: RunOwnerLease
 ): Promise<WorkflowResumeAdmission | undefined> {
   const { platform, conversationId, conversation, codebase, userId, options } = scope;
   const { workflow, resumableRun } = input;
   try {
-    const needsResumeNotice =
-      options?.runConfig !== undefined ||
-      Object.keys(options?.inputs ?? {}).length > 0 ||
-      Object.keys(options?.modelOverrides?.tiers ?? {}).length > 0 ||
-      Object.keys(options?.modelOverrides?.aliases ?? {}).length > 0;
-    if (needsResumeNotice && (await inspectResumableRun(deps, resumableRun)) === null)
-      return { accepted: false, reason: 'nothing-to-resume' };
     if (options?.runConfig) {
       await platform.sendMessage(
         conversationId,
@@ -253,89 +229,4 @@ async function reportRefusedResume(
     return;
   }
   throw err;
-}
-
-/**
- * Hydration found nothing worth resuming, so this is the ONE continuation path that
- * creates a fresh run row — in the resumed run's worktree.
- */
-async function startFreshInResumedWorktree(
-  scope: DispatchScope,
-  input: ForegroundResumeInput,
-  engine: InProcessWorkflowEngine
-): Promise<void> {
-  const { owner, platform, conversationId, conversation, codebase, userId, options } = scope;
-  // A contract violation deferred at the gate is live again and must be surfaced
-  // before any AI cost.
-  if (input.deferredInputError) {
-    await platform.sendMessage(conversationId, input.deferredInputError.message);
-    return;
-  }
-  // This branch IS a fresh run, even though the dispatch entered via the resume
-  // menu (#2686). Capture the source here so the run freezes the bytes it actually
-  // executes against; without this it would inherit the prior run's frozen graph
-  // and let the executor fall back to live command/script lookup, which is exactly
-  // the mixed-vintage shape #2660 exists to remove.
-  const captured = await captureFreshSource(
-    owner,
-    scope.runCwd,
-    input.workflow,
-    conversationId,
-    platform
-  );
-  if (!captured) return; // capture failed, message already sent
-  const workflow = captured.workflow;
-  const freshAiConfiguration = await input.prepareLaunchAiConfiguration(workflow);
-  const workflowDeps = createWorkflowDeps();
-  await assertRunCredentials(workflowDeps, freshAiConfiguration, { cwd: scope.runCwd });
-  const inputs = await assertRunForgeAccess(workflowDeps, workflow, freshAiConfiguration, {
-    cwd: codebase.default_cwd,
-    settingsCwd: scope.runCwd,
-    codebaseId: codebase.id,
-    supplied: input.resolvedInputs,
-  });
-  await platform.sendMessage(
-    conversationId,
-    `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
-  );
-  // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-  // executor adopts for us there (see #2690). `captured.preparedSource` proves
-  // the helper has already run `owner.hold`, which is the only thing the wrap
-  // needs to know to reclaim if the rename fails.
-  await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
-    await engine.submit({
-      platform,
-      conversationId,
-      cwd: input.resumableWorkingPath,
-      workflow,
-      userMessage: scope.userMessage,
-      origin: {
-        conversationId: conversation.id,
-        userId,
-        parentConversationId: conversation.id,
-      },
-      options: {
-        codebaseId: codebase.id,
-        source: scope.source,
-        preparedSource: captured.preparedSource,
-        preparedAiConfiguration: freshAiConfiguration,
-        parseWarnings: scope.parseWarnings,
-        baseBranch: scope.codebaseBaseBranch,
-        resolveChildIsolation: scope.resolveChildIsolation,
-        capturedSourceOwner: owner,
-        // This branch creates a FRESH run row (the prior run had nothing to resume),
-        // so the supplied inputs still need stamping.
-        inputs,
-        ...(options?.modelOverrides
-          ? {
-              modelOverrideLayer: {
-                kind: 'raw' as const,
-                overrides: options.modelOverrides,
-              },
-            }
-          : {}),
-        ...(options?.runConfig ? { runConfig: options.runConfig } : {}),
-      },
-    });
-  });
 }

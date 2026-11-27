@@ -4,8 +4,10 @@ import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun, RunOwnerObservation } from '@archon/core/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { operatorPause } from '@archon/workflows/schemas/operator-pause';
+import { runCostMetadataShape } from '@archon/workflows/schemas/run-usage';
 import {
   isApprovalContext,
+  readSuppliedRunInputs,
   runAttention,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -94,16 +96,21 @@ function toApiRunAttention(row: WorkflowRun): ApiWorkflowRun['attention'] {
 }
 
 function toApiRunMetadata(metadata: WorkflowRun['metadata']): ApiWorkflowRun['metadata'] {
-  const approval = metadata.approval;
+  const projected = { ...metadata };
+  for (const [key, schema] of Object.entries(runCostMetadataShape)) {
+    if (!schema.safeParse(projected[key]).success) delete projected[key];
+  }
+  const approval = projected.approval;
   return isApprovalContext(approval)
-    ? { ...metadata, approval: { ...approval, decisions: getApprovalDecisions(approval) } }
-    : metadata;
+    ? { ...projected, approval: { ...approval, decisions: getApprovalDecisions(approval) } }
+    : projected;
 }
 
 export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
   return {
     ...row,
     metadata: toApiRunMetadata(row.metadata),
+    supplied_inputs: readSuppliedRunInputs(row.metadata),
     attention: toApiRunAttention(row),
     operator_pause: operatorPause(row),
     started_at: toISOString(row.started_at),
@@ -121,6 +128,7 @@ export function toApiDashboardWorkflowRun(
     ...row,
     owner_observation: ownerObservation,
     metadata: toApiRunMetadata(row.metadata),
+    supplied_inputs: readSuppliedRunInputs(row.metadata),
     attention: toApiRunAttention(row),
     operator_pause: operatorPause(row),
     started_at: toISOString(row.started_at),

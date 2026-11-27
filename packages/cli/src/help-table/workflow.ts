@@ -314,6 +314,13 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'end',
+      spec: 'workflow end --item <key> -- <reason>',
+      description:
+        'End an item of this project: nothing more will happen on it. Its stop leaves attention and\nreads show who ended it and why; a newer run or start opens it again. Refused while anything\non the item is active or waiting, naming it',
+    },
+    {
+      command: 'workflow',
       subcommand: 'link',
       spec: 'workflow link --item <key> --kind <kind> --to <key>',
       description:
@@ -377,6 +384,24 @@ export const workflowHelp: HelpGroup = {
           spec: '--from <start-point>',
           description:
             "Create the branch on the remote from this commit or branch (<remote>/main for the\nremote's tip) before recording; an existing branch is left as it is",
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'priority',
+      spec: 'workflow priority --item <key> [--clear]',
+      description:
+        'Give an item priority. Its queued starts, and those of items part_of it, go ahead of\nordinary queued starts on each resource at the next drain; a held slot is never taken',
+      scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
+        {
+          spec: '--clear',
+          description:
+            "Remove the item's own priority; one it has from a work order stays until\ncleared there",
         },
       ],
     },

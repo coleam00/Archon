@@ -3,7 +3,8 @@
  * A loop made of runs: build, then a read-only check on the built commit, then build again
  * on the same branch when the check returns it. Three run-ended bindings with
  * `checkout: "ended-run"`, real git and SQLite, every run in its own CLI process. Then the
- * same hand-off from a run that left asks, through `checkout: "asking-run"`.
+ * same hand-off from a run that left asks, through `checkout: "asking-run"`, and from a run
+ * that left a wait, through a wake binding with `checkout: "waiting-run"`.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -18,6 +19,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { itemReadSchema } from '@archon/workflows/item-read';
 
 const CLI_PATH = resolve(import.meta.dir, '..', 'cli.ts');
 const DEADLINE_MS = 60_000;
@@ -350,7 +352,53 @@ if [ "$(git rev-list --count HEAD)" -ge 3 ]; then printf '{"outcome": "pass"}'; 
       lane: 'continue',
     });
     expect(metadata(check2).checkout_handoff).toMatchObject({ runId: build2?.id, lane: 'copy' });
+
+    // Every run measures from where the first build's branch was cut: a check on its own
+    // copy, and the land after it, show the size of the build they took.
+    const read = await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']);
+    const sizes = itemReadSchema.parse(JSON.parse(read.stdout)).runs.map(run => run.changeSize);
+    const base = fixture.git('merge-base', 'main', branch);
+    const first = {
+      base,
+      commit: fixture.git('rev-parse', `${branch}~1`),
+      files: 1,
+      added: 1,
+      removed: 0,
+    };
+    const second = { base, commit: tip, files: 2, added: 2, removed: 0 };
+    expect(sizes).toEqual([first, first, second, second, second]);
   }, 120_000);
+
+  test('a stage reading a file setting that names a file only the ended run committed starts on its checkout', async () => {
+    const fixture = await makeFixture('file-setting', 'true');
+    const pack = join(fixture.repo, '.archon', 'workflows', 'chain');
+    mkdirSync(join(pack, '.pack'), { recursive: true });
+    mkdirSync(join(pack, 'read-build'), { recursive: true });
+    writeFileSync(join(pack, '.pack', 'pack.yaml'), 'inputs:\n  brief:\n    file: true\n');
+    writeFileSync(
+      join(pack, 'read-build', 'read-build.yaml'),
+      'name: read-build\ndescription: Read what the build wrote.\nnodes:\n  - id: read\n    bash: cat "$INPUTS_BRIEF"\n'
+    );
+    // The build names its file by the commit count it sees, one more than main has now.
+    const built = `build-${String(Number(fixture.git('rev-list', '--count', 'HEAD')) + 1)}.txt`;
+    mkdirSync(join(fixture.repo, '.archon', 'packs'));
+    writeFileSync(
+      join(fixture.repo, '.archon', 'packs', 'chain.yaml'),
+      `settings:\n  brief: ${built}\n`
+    );
+    fixture.git('add', '.');
+    fixture.git('commit', '-qm', 'pack');
+    fixture.git('push', '-q', 'origin', 'main');
+    fixture.bind('read-after-build', 'build', 'built', 'read-build');
+
+    await startBuild(fixture);
+    expect((await waitForRuns(fixture, 2)).map(run => [run.workflow_name, run.status])).toEqual([
+      ['build', 'completed'],
+      ['read-build', 'completed'],
+    ]);
+    // The project checkout never had the file: only the handed-on checkout does.
+    expect(existsSync(join(fixture.repo, built))).toBe(false);
+  }, 90_000);
 
   test('a branch that moved after the ended run is refused, not built on', async () => {
     // The check moves the build branch past the commit the build ended on, then returns it.
@@ -392,6 +440,29 @@ printf '{"outcome": "return"}'`
     }[];
     expect(receipt?.outcome).toBe('unmatched');
     expect(receipt?.reason).toContain(runs(fixture)[0]?.id ?? 'build run');
+    // The refusal stops the item on the build run, in the item read and in attention.
+    const refused = [
+      {
+        receiptId: expect.any(String),
+        bindingId: 'check-after-build',
+        workflow: 'check',
+        reason: 'checkout_refused',
+        refusedAt: expect.any(String),
+      },
+    ];
+    const read = JSON.parse(
+      (await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json'])).stdout
+    ) as { questions: { kind: string }[] };
+    const attention = JSON.parse(
+      (await fixture.cli(['workflow', 'attention', '--json'])).stdout
+    ) as { items: { kind: string }[] };
+    for (const items of [read.questions, attention.items])
+      expect(items.filter(item => item.kind === 'stopped')).toEqual([
+        expect.objectContaining({
+          stoppedIn: expect.objectContaining({ workflow: 'build' }),
+          refused,
+        }),
+      ]);
   }, 120_000);
 
   test('trigger check reports a workflow pinned in place on either side, and fire refuses', async () => {
@@ -556,6 +627,16 @@ describe('a stage on the checkout the asking run left', () => {
     expect(receipts[0]?.reason).toContain(`Checkout: the worktree at '${worktree}'`);
     expect(receipts[0]?.reason).toContain('is gone');
     expect(runs(fixture).map(run => run.workflow_name)).toEqual(['ask-build']);
+    // The settled asks' refused start stops the item on the run that left them.
+    const { items } = JSON.parse(
+      (await fixture.cli(['workflow', 'attention', '--json'])).stdout
+    ) as { items: { kind: string }[] };
+    expect(items.filter(item => item.kind === 'stopped')).toEqual([
+      expect.objectContaining({
+        stoppedIn: expect.objectContaining({ runId: asking.id }),
+        refused: [expect.objectContaining({ reason: 'checkout_refused' })],
+      }),
+    ]);
   }, 120_000);
 
   test('a worktree removed after the asks settled refuses the start when its host drains it', async () => {
@@ -627,6 +708,248 @@ describe('a stage on the checkout the asking run left', () => {
     expect(fixture.git('log', '-1', '--format=%s', branch)).toBe('carry on');
   }, 120_000);
 });
+
+// A pack whose `host` stage ends waiting for checks at its head, then clears once woken.
+const HOST_PACK = `bindings:
+  checks-done:
+    workflow: host
+    resource: host
+    overlap: queue
+    event: { kind: check.changed }
+    wake: { workflow: host, wait: checks, about: check.revision, checkout: waiting-run }
+    inputs:
+      land_on: { input: land_on }
+      answers: { item: answers }
+`;
+const BUILD_FOR = `name: build-for
+description: Add a commit for a base.
+inputs:
+  land_on: { required: true }
+returns: { node: commit, outcome: outcome }
+nodes:
+  - id: commit
+    bash: |
+      set -e
+      echo built > built.txt && git add . && git commit -qm "built" && git push -q origin HEAD
+      printf '{"outcome": "built"}'
+    output_format:
+      type: object
+      properties: { outcome: { type: string, enum: [built] } }
+      required: [outcome]
+`;
+const host = (root: string) => `name: host
+description: Wait for the checks at the head once, then clear.
+inputs:
+  land_on: { required: true }
+  answers: {}
+returns: { node: read, outcome: verdict, waits: waits }
+nodes:
+  - id: read
+    bash: |
+      set -e
+      if [ -f "${root}/hosted" ]; then printf '{"verdict": "clear", "waits": []}'; exit 0; fi
+      touch "${root}/hosted"
+      printf '{"verdict": "waiting", "waits": [{"event": "checks", "about": "%s", "within_minutes": 60}]}' "$(git rev-parse HEAD)"
+    output_format:
+      type: object
+      properties: { verdict: { type: string, enum: [clear, waiting] } }
+      required: [verdict]
+`;
+
+describe('a stage woken by a wait, on the checkout the waiting run left', () => {
+  test("a check at the waited commit starts the stage again with the waiting run's inputs, the item's answers and its checkout", async () => {
+    const fixture = await makeFixture('wake', `printf '{"outcome": "pass"}'`);
+    const pack = join(fixture.repo, '.archon', 'workflows', 'factory');
+    mkdirSync(join(pack, '.pack'), { recursive: true });
+    writeFileSync(join(pack, '.pack', 'pack.yaml'), HOST_PACK);
+    for (const [name, body] of [
+      ['build-for', BUILD_FOR],
+      ['host', host(fixture.root)],
+    ] as const) {
+      mkdirSync(join(pack, name), { recursive: true });
+      writeFileSync(join(pack, name, `${name}.yaml`), body);
+    }
+    fixture.git('add', '.');
+    fixture.git('commit', '-qm', 'factory pack');
+    fixture.git('push', '-q', 'origin', 'main');
+    // The run-ended start the host stage first gets, with its inputs and the build's checkout.
+    fixture.bind('host-after-build', 'build-for', 'built', 'host');
+    writeTrigger(fixture, 'host-after-build', {
+      runEnded: {
+        workflowName: 'build-for',
+        outcome: 'built',
+        checkout: 'ended-run',
+        inputs: { land_on: { input: 'land_on' }, answers: { item: 'answers' } },
+      },
+    });
+
+    // An answer on the item, then the build the host stage follows.
+    await startAskBuild(fixture);
+    await answerTheAsk(fixture);
+    // The item, now recorded, lands on its own branch: the build and host read from there.
+    const landing = await fixture.cli([
+      'workflow',
+      'landing',
+      '--item',
+      'issue-1',
+      '--branch',
+      'landing',
+      '--from',
+      'origin/main',
+    ]);
+    if (landing.exitCode !== 0) throw new Error(landing.stderr || landing.stdout);
+
+    const built = await fixture.cli([
+      'workflow',
+      'run',
+      'build-for',
+      '--item',
+      'issue-1',
+      '--input',
+      'land_on=dev',
+    ]);
+    if (built.exitCode !== 0) throw new Error(built.stderr || built.stdout);
+    const [, build, waiting] = await waitForRuns(fixture, 3);
+    expect(waiting?.workflow_name).toBe('host');
+    // Its pack's wake takes the checkout, so its completion recorded the one it worked on:
+    // the build's branch, in the build's worktree.
+    const { handoff, worktree } = metadata(waiting).asks_checkout as {
+      handoff: { runId: string; branch: string; commit: string };
+      worktree: string;
+    };
+    expect(worktree).toBe(build?.working_path ?? '');
+    expect(fixture.git('log', '-1', '--format=%s', handoff.commit)).toBe('built');
+
+    // The project's default branch drops `land_on` from `host` while the item waits. The
+    // waiting run's own definitions still declare it, and they are what the check reads.
+    writeFileSync(
+      join(pack, 'host', 'host.yaml'),
+      host(fixture.root).replace('  land_on: { required: true }\n', '')
+    );
+    fixture.git('commit', '-qam', 'host drops land_on on main');
+    fixture.git('push', '-q', 'origin', 'main');
+
+    // A hand-edited binding that reads an input `host` does not declare is refused when its
+    // event arrives, naming the binding and the input, and the wait stays open.
+    await acceptWake(fixture, handoff.commit, 'undeclared_base');
+    const listed = JSON.parse((await fixture.cli(['trigger', 'list'])).stdout) as {
+      outcome: string;
+      reason: string | null;
+    }[];
+    const refused = listed.find(receipt => receipt.reason?.includes('undeclared_base'));
+    expect(refused?.outcome).toBe('unmatched');
+    expect(refused?.reason).toContain(
+      "binding 'checks-done': input 'land_on' reads 'undeclared_base', which 'host' does not declare"
+    );
+    expect(
+      fixture.rows<{ closed_as: string | null }>('SELECT closed_as FROM remote_agent_item_waits')
+    ).toEqual([{ closed_as: null }]);
+
+    // A completed check at that commit, as the GitHub source plugin hands it to the store.
+    await acceptWake(fixture, handoff.commit);
+    await fixture.cli(['trigger', 'drain', '--host', 'factory-host']);
+    const all = await waitForRuns(fixture, 4);
+    const woken = all[3];
+    expect([woken?.workflow_name, woken?.status]).toEqual(['host', 'completed']);
+    const given = metadata(woken).inputs_values ?? metadata(woken).inputs;
+    expect(given).toMatchObject({
+      land_on: 'dev',
+      answers: [
+        expect.objectContaining({
+          question: 'Keep going?',
+          closedAs: 'answered',
+          option: expect.objectContaining({ id: 'go' }),
+          workflowName: 'ask-build',
+        }),
+      ],
+    });
+    // On the branch the build left, at the commit the waiting run ended on.
+    expect(metadata(woken).checkout_handoff).toMatchObject({
+      runId: handoff.runId,
+      branch: handoff.branch,
+      commit: handoff.commit,
+    });
+    expect(woken?.working_path).toBe(build?.working_path);
+  }, 120_000);
+});
+
+/** Replace the `on` of a trigger file the fixture wrote. */
+function writeTrigger(fixture: Fixture, name: string, on: Record<string, unknown>): void {
+  const sample = JSON.parse(
+    readFileSync(join(fixture.home, 'triggers', `${name}.json`), 'utf8')
+  ) as Record<string, unknown>;
+  writeFileSync(join(fixture.home, 'triggers', `${name}.json`), JSON.stringify({ ...sample, on }));
+}
+
+/**
+ * Accept a completed check at `commit` through the store every surface shares
+ * (`createWorkflowStore().acceptStartReceipt`), with the binding the GitHub source plugin
+ * makes of a pack's `checks-done` wake; `landOn` is the input its `land_on` reads.
+ */
+async function acceptWake(fixture: Fixture, commit: string, landOn = 'land_on'): Promise<void> {
+  const file = JSON.parse(
+    readFileSync(join(fixture.home, 'triggers', 'host-after-build.json'), 'utf8')
+  ) as { binding: { runAsUserId: string } };
+  const acceptance = {
+    receipt: {
+      id: crypto.randomUUID(),
+      sourceInstanceId: 'github',
+      deliveryId: `check:${commit}:${landOn}`,
+      contentDigest: commit,
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'checks-done',
+        bindingRevision: 'rev-1',
+        hostId: 'factory-host',
+        runAsUserId: file.binding.runAsUserId,
+        resource: 'host',
+        overlap: 'queue',
+        launch: {
+          cwd: fixture.repo,
+          workflowName: 'host',
+          inputs: {},
+          isolation: { kind: 'default' },
+        },
+        eventInputs: {},
+        wake: {
+          workflowName: 'host',
+          wait: 'checks',
+          about: commit,
+          inputs: { land_on: { input: landOn }, answers: { item: 'answers' } },
+          checkout: 'waiting-run',
+        },
+      },
+    ],
+  };
+  const waker = join(fixture.root, 'accept-wake.ts');
+  const core = resolve(import.meta.dir, '..', '..', '..', 'core', 'src');
+  writeFileSync(
+    waker,
+    `const { createWorkflowStore } = await import(${JSON.stringify(join(core, 'workflows', 'store-adapter.ts'))});
+const { closeDatabase } = await import(${JSON.stringify(join(core, 'db', 'connection.ts'))});
+const { setPlatformPolicies } = await import(${JSON.stringify(join(core, 'platforms', 'registry.ts'))});
+const { defaultPlatformPolicies } = await import(${JSON.stringify(join(core, '..', '..', 'adapters', 'src', 'platform-policies.ts'))});
+const { registerHostProviders } = await import(${JSON.stringify(join(core, 'providers', 'register-host-providers.ts'))});
+// As the server does at start: the wake's input check loads config and discovers workflows.
+setPlatformPolicies(defaultPlatformPolicies);
+await registerHostProviders();
+await createWorkflowStore().acceptStartReceipt(JSON.parse(process.argv[2]));
+await closeDatabase();
+`
+  );
+  const accepted = Bun.spawn([process.execPath, waker, JSON.stringify(acceptance)], {
+    cwd: fixture.repo,
+    env: { ...process.env, DATABASE_URL: '', ARCHON_HOME: fixture.home },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if ((await accepted.exited) !== 0) throw new Error(await new Response(accepted.stderr).text());
+}
 
 /**
  * Answer the open ask through the store every surface shares, as the server does for an

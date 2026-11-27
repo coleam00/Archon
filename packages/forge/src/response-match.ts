@@ -118,7 +118,11 @@ function matchesMergeEvidence(
     evidence.merge?.method === request.method &&
     mergeConditionSchema.options.every(
       key => evidence.merge?.conditions[key] === request.conditions[key]
-    )
+    ) &&
+    // A merge time belongs only to a refusal that observed the pull request merged, so no
+    // other failure can have a run record a merge the forge does not report.
+    (evidence.merge.merged_at === undefined ||
+      (evidence.outcome === 'refused' && evidence.observed?.state === 'merged'))
   );
 }
 
@@ -175,6 +179,8 @@ const workitemEvidenceMatchers: { [Op in MutationOp]?: WorkitemEvidenceMatcher<O
   'workitem.labels.set': issueByRef,
   'workitem.close': issueByRef,
   'workitem.edit-body': issueByRef,
+  'workitem.assignee.add': issueByRef,
+  'workitem.assignee.remove': issueByRef,
   'workitem.label.add': bySubject,
   'workitem.label.remove': bySubject,
   'workitem.comment.upsert': bySubject,
@@ -233,6 +239,22 @@ function labelChange(
     sameTarget(value.target, request.subject.ref) &&
     sameSubject(value.workitem, request.subject) &&
     value.labels.includes(request.name) === (request.op === 'workitem.label.add')
+  );
+}
+
+/** Logins are case-insensitive; the forge echoes the case it has registered. */
+function hasLogin(logins: readonly string[], login: string): boolean {
+  return logins.some(observed => observed.toLowerCase() === login.toLowerCase());
+}
+
+function assigneeChange(
+  request: OpRequest<'workitem.assignee.add' | 'workitem.assignee.remove'>,
+  value: OpValue<'workitem.assignee.add' | 'workitem.assignee.remove'>
+): boolean {
+  return (
+    sameTarget(value.target, request.ref) &&
+    sameRef(value.workitem.ref, request.ref) &&
+    hasLogin(value.assignees, request.login) === (request.op === 'workitem.assignee.add')
   );
 }
 
@@ -357,6 +379,15 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     value.items.every(item => item.state === 'open' && sameRepo(item.ref.repo, request.repo)),
   'workitem.label.added': (request, value) =>
     sameSubject(value.subject, request.subject) && value.name === request.name,
+  'workitem.opened': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    value.since === request.since &&
+    value.items.every(
+      item =>
+        item.state === 'open' &&
+        sameRepo(item.ref.repo, request.repo) &&
+        Date.parse(item.createdAt) >= Date.parse(request.since)
+    ),
   'workitem.create': (request, value) =>
     sameTarget(value.target, request.repo) &&
     sameRepo(value.workitem.ref.repo, request.repo) &&
@@ -372,6 +403,11 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     request.labels.every(name => value.labels.includes(name)),
   'workitem.label.add': labelChange,
   'workitem.label.remove': labelChange,
+  'workitem.assignee.add': assigneeChange,
+  'workitem.assignee.remove': assigneeChange,
+  'actor.self': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    normalizeHost(value.actor.host) === normalizeHost(request.repo.host),
   'workitem.close': (request, value) =>
     sameTarget(value.target, request.ref) &&
     sameRef(value.workitem.ref, request.ref) &&

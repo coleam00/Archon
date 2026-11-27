@@ -1,28 +1,34 @@
 /**
  * The `stops` report of `archon trigger check`: the outcomes after which a run on an item
- * would stop the item, because nothing follows it (see `returns.final` and the `stopped`
+ * would stop the item, because nothing follows it (see `itemFate` and the `stopped`
  * attention item).
  */
 import { existsSync } from 'node:fs';
 import {
+  declaredItemFate,
   declaredOutcome,
-  isFinalOutcome,
   outcomeValues,
 } from '@archon/workflows/completed-outcome';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverBindingWorkflows, type BindingDefinitionsDeps } from './definition-source';
 import {
   bindingProjectKey,
+  runEndedBindingCheck,
   type OnBinding,
   type OnBindingFile,
   type RunEndedStartsDependencies,
 } from './run-ended';
 
-/** An outcome after which a run's item stops: see `runEndedStops`. */
+/**
+ * An outcome after which a run's item stops: see `runEndedStops`. `unless` names what the
+ * workflow can leave instead (`returns.asks`, `returns.waits`); it stops only when it leaves
+ * none.
+ */
 export interface RunEndedStop {
   project: string;
   workflow: string;
   outcome: string;
+  unless: ('asks' | 'waits')[];
 }
 
 /** One binding as the report reads it: its project and the workflows it names. */
@@ -43,26 +49,35 @@ function namedWorkflows(candidate: OnBinding | OnBindingFile): string[] {
 const stopKey = (project: string, workflow: string, outcome: string): string =>
   JSON.stringify([project, workflow, outcome]);
 
-/** The outcomes of `workflow` nothing follows: not final, not bound, and no ask or wait. */
+/** The outcomes of `workflow` that stop its item (`declaredItemFate`), given what is bound. */
 function workflowStops(
   workflow: ResolvedWorkflow,
   project: string,
   bound: ReadonlySet<string>
 ): RunEndedStop[] {
-  if (workflow.result?.asks !== undefined || workflow.result?.waits !== undefined) return [];
   const outcome = declaredOutcome(workflow);
   if (outcome === undefined) return [];
+  const unless = [
+    ...(workflow.result?.asks !== undefined ? (['asks'] as const) : []),
+    ...(workflow.result?.waits !== undefined ? (['waits'] as const) : []),
+  ];
   return outcomeValues(outcome.form)
-    .filter(value => !isFinalOutcome(workflow, value))
-    .filter(value => !bound.has(stopKey(project, workflow.name, value)))
-    .map(value => ({ project, workflow: workflow.name, outcome: value }));
+    .filter(
+      value =>
+        declaredItemFate(workflow, value, bound.has(stopKey(project, workflow.name, value))) ===
+        'stops'
+    )
+    .map(value => ({ project, workflow: workflow.name, outcome: value, unless }));
 }
 
 /**
  * The outcomes after which a run on an item would stop it, per project the bindings launch
- * in: each value a workflow's declared outcome can take that is not final (`returns.final`),
- * that no run-ended file in the project binds, and whose workflow declares neither
- * `returns.asks` nor `returns.waits`, so nothing follows it. The workflows read are the ones
+ * in: each value a workflow's declared outcome can take that does not end the item
+ * (`returns.ends`) and that no usable run-ended file in the project binds to a step on the
+ * item itself, of a workflow that is a step (not `observes: true`). A file is usable when the
+ * check a run gets before it starts passes, as the pack graph counts it, and a `linked` file
+ * starts on other items. A workflow that declares `returns.asks` or `returns.waits` stops
+ * its item only when a run leaves none, which `unless` says. The workflows read are the ones
  * the bindings name, ended, asking or started, including those a binding without `on`
  * (fire-only or timer) starts. Each binding's workflows are read from its own definitions
  * (`discoverBindingWorkflows`), as its check and its start read them; what is bound is
@@ -80,10 +95,13 @@ export async function runEndedStops(
   return [...stops.values()];
 }
 
-/** Each binding that can start, with its project, and every outcome a run-ended file binds. */
+/**
+ * Each binding that can start, with its project, and every outcome a usable run-ended file
+ * binds to a step on the item: one that starts a workflow observing its item starts no step.
+ */
 async function readNamedBindings(
   bindings: readonly (OnBinding | OnBindingFile)[],
-  deps: Pick<RunEndedStartsDependencies, 'projectKeyOf'>
+  deps: BindingDefinitionsDeps & Pick<RunEndedStartsDependencies, 'projectKeyOf'>
 ): Promise<{ read: NamedBinding[]; bound: Set<string> }> {
   const read: NamedBinding[] = [];
   const bound = new Set<string>();
@@ -91,8 +109,11 @@ async function readNamedBindings(
     // A binding whose checkout is gone never starts; `runEndedTriggerCheck` reports it.
     if (!existsSync(candidate.binding.launch.cwd)) continue;
     const project = (await bindingProjectKey(candidate, deps)) ?? candidate.binding.launch.cwd;
-    if ('runEnded' in candidate)
-      bound.add(stopKey(project, candidate.runEnded.workflowName, candidate.runEnded.outcome));
+    if ('runEnded' in candidate && candidate.runEnded.linked === undefined) {
+      const { problems, startsStep } = await runEndedBindingCheck(candidate, deps);
+      if (problems.length === 0 && startsStep)
+        bound.add(stopKey(project, candidate.runEnded.workflowName, candidate.runEnded.outcome));
+    }
     read.push({ project, candidate, named: namedWorkflows(candidate) });
   }
   return { read, bound };

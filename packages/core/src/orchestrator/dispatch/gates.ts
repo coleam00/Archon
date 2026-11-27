@@ -83,10 +83,9 @@ function resolveInvocationInputs(
       'workflow.required_inputs_unsatisfiable'
     );
     if (!willContinueExistingRun) return { ok: false, reason: err.message };
-    // A contract violation held back because a resume may make it moot. Only the one
-    // branch in `continueForegroundResume` that falls through to a FRESH run row
-    // (hydration found nothing worth resuming) still needs it; every other
-    // continuation path never reads inputs from this invocation at all.
+    // A contract violation held back because a resume makes it moot: a continued run
+    // keeps the inputs it started with. It is only appended to a refused resume's
+    // message, so the operator learns the fresh run they might start would fail too.
     return { ok: true, deferredInputError: err };
   }
 }

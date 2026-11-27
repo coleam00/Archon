@@ -142,7 +142,9 @@ describe('worktree removal claims on SQLite', () => {
         await expect(updateMetadata(env.id, { adopted: true }, env)).rejects.toBeInstanceOf(
           WorktreeRemovalInProgressError
         );
-        expect(await claimPendingWorkflowRun(runId)).toBeNull();
+        await expect(claimPendingWorkflowRun(runId)).rejects.toMatchObject({
+          reason: 'checkout_released',
+        });
         throw new Error('removal failed');
       })
     ).rejects.toThrow('removal failed');
@@ -155,7 +157,9 @@ describe('worktree removal claims on SQLite', () => {
     await createEnv('shared-sibling', '/tmp/claims/shared');
     const runId = await seedPendingRun(env.working_path);
     await withWorktreeRegistration(env, async markDestroyed => {
-      expect(await claimPendingWorkflowRun(runId)).toBeNull();
+      await expect(claimPendingWorkflowRun(runId)).rejects.toMatchObject({
+        reason: 'checkout_released',
+      });
       await markDestroyed();
     });
     expect((await claimPendingWorkflowRun(runId))?.status).toBe('running');

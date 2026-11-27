@@ -6,7 +6,7 @@ import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { makeIdleLockStats } from '../test/conversation-lock-fixtures';
 import { EFFORT_LADDER } from '@archon/provider-contract';
-import { InvalidConfigError } from '@archon/core/config';
+import { ConfigParseError, InvalidConfigError } from '@archon/core/config';
 import {
   makeDiscoverWorkflowsMock,
   makeLoaderMock,
@@ -500,6 +500,21 @@ describe('PATCH /api/config/* refused by config validation', () => {
     expect(await res.json()).toEqual({
       error: 'Invalid model binding config: tiers.large.model: Required',
     });
+  });
+
+  test('a config file the save cannot be made to → 400 saying why, without the server path', async () => {
+    mockUpdateGlobalConfig.mockImplementation(async () => {
+      throw new ConfigParseError(
+        'Global config',
+        '/home/operator/.archon/config.yaml',
+        'cannot take this change in place.'
+      );
+    });
+
+    const res = await patch('/api/config/tiers', { tiers: { large: null } });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Global config cannot take this change in place.' });
   });
 
   test('a genuine write failure stays a 500', async () => {

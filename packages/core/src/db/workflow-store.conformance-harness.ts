@@ -568,6 +568,44 @@ export function describeSqlStatusReadConformance(
     }
   });
 
+  test('a queued request whose launch does not read is named, blocks those behind it, and can be withdrawn', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const inserted = await db.query<{ id: string }>(
+        "INSERT INTO remote_agent_items (project_key, key) VALUES ('acme/web', 'k2') RETURNING id"
+      );
+      const k2 = inserted.rows[0]?.id ?? '';
+      const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+      const [holder, head, behind] = [start(), start(), start()];
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      expect(await store.admitResourceStart(head)).toMatchObject({ status: 'queued' });
+      expect(await store.admitResourceStart(behind)).toMatchObject({ status: 'queued' });
+      await db.query('UPDATE remote_agent_resource_start_requests SET item_id = $1 WHERE id = $2', [
+        k2,
+        behind.launch.run.id,
+      ]);
+      await db.query("UPDATE remote_agent_resource_start_requests SET launch = '{' WHERE id = $1", [
+        head.launch.run.id,
+      ]);
+
+      expect(await store.listUnreadableQueuedStarts()).toEqual([
+        expect.objectContaining({ requestId: head.launch.run.id, resource: 'resource', behind: 1 }),
+      ]);
+      expect(await store.listQueuedItemStarts(k2)).toEqual([
+        expect.objectContaining({ requestId: behind.launch.run.id, blockedBy: head.launch.run.id }),
+      ]);
+      // Withdrawn although its launch does not read, so it holds the queue no longer.
+      expect(await store.withdrawQueuedResourceStart(head.launch.run.id)).toEqual({ launch: null });
+      expect(await store.listUnreadableQueuedStarts()).toEqual([]);
+      expect(await store.listQueuedItemStarts(k2)).toEqual([
+        expect.objectContaining({ requestId: behind.launch.run.id, blockedBy: null }),
+      ]);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test("an item's queued starts count only the same resource and host starts queued ahead of them", async () => {
     const harness = await makeHarness();
     try {
@@ -613,6 +651,7 @@ export function describeSqlStatusReadConformance(
           hostId: 'host',
           queuedAt: expect.stringMatching(/Z$/),
           ahead: 1,
+          blockedBy: null,
         },
       ]);
       expect(await store.listQueuedItemStarts(idle)).toEqual([]);

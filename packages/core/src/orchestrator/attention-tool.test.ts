@@ -105,6 +105,8 @@ function harness(
       getWorkflowRunForAttention: async id => byId.get(id) ?? null,
       getCodebase: async id => [WEB, API].find(codebase => codebase.id === id) ?? null,
       getItem: async () => null,
+      getItemPriority: async () => null,
+      listEventsForRuns: async () => new Map(),
       getItemAsk: async id => asks.find(candidate => candidate.id === id) ?? null,
       answerItemAsk,
       withdrawItemAsk: async () => {
@@ -307,6 +309,7 @@ describe('attention tool', () => {
       kind: 'attention',
       ref: 'ask:1',
       project: null,
+      priority: false,
       revision: 1,
       labels: {},
       pausedAt: '2026-06-03T10:00:00.000Z',
@@ -358,7 +361,12 @@ describe('attention tool', () => {
       closed: null,
     };
     const item = await askQueueItem(
-      { getItem: async () => null, getWorkflowRun: async () => left, getCodebase: async () => WEB },
+      {
+        getItem: async () => null,
+        getItemPriority: async () => null,
+        getWorkflowRun: async () => left,
+        getCodebase: async () => WEB,
+      },
       stored
     );
     const mine = harness([left], null, { kind: 'user', userId: 'user-1' }, [item], [stored]);

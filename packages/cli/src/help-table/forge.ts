@@ -1,5 +1,7 @@
+import { cliForgeJsonSchemas } from '@archon/forge';
 import type { ForgeRequest } from '@archon/forge/operations';
-import type { HelpGroup } from './types';
+import { forgeRequestHelp } from './forge-request';
+import type { HelpEntry, HelpGroup } from './types';
 
 const forgeOperationDescriptions = {
   resolve: 'Resolve an explicit remote through optional forge plugins',
@@ -11,8 +13,12 @@ const forgeOperationDescriptions = {
   'workitem.labels.set': 'Set and verify the complete issue label set',
   'workitem.label.add': 'Add one label to an issue or pull request, keeping the rest',
   'workitem.label.remove': 'Remove one label from an issue or pull request, keeping the rest',
+  'workitem.assignee.add': 'Assign one user to an issue, keeping its other assignees',
+  'workitem.assignee.remove': 'Unassign one user from an issue, keeping its other assignees',
+  'actor.self': 'Read the forge account the plugin acts as for a repository',
   'workitem.list': 'List open issues and pull requests that carry one label',
   'workitem.label.added': 'Read when a label was last added to an issue or pull request',
+  'workitem.opened': 'List the open issues created since a time, without pull requests',
   'workitem.search': 'Search issues and pull requests in a repository by text',
   'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
   'workitem.close': 'Close an issue with a reason and verify the result',
@@ -42,78 +48,51 @@ const forgeOperationDescriptions = {
   'comment.upsert': 'Write the one marked comment on a pull request',
 } satisfies Record<ForgeRequest['op'], string>;
 
+const requestSchemas = new Map(
+  cliForgeJsonSchemas().operations.map(({ op, request }) => [op, request])
+);
+
+const dataFlags: HelpEntry['scopedFlags'] = [
+  {
+    spec: '--data <json>',
+    description: 'Structured request without operationId or op',
+  },
+  {
+    spec: '--data-file <path>',
+    description: 'Read that request from a file, keeping authored content out of argv',
+  },
+];
+
+/** A forge entry whose request block comes from the operation's schema. */
+function forgeEntry(subcommand: string, description: string, op = subcommand): HelpEntry {
+  const schema = requestSchemas.get(op);
+  if (schema === undefined) throw new Error(`forge operation ${op} declares no request schema`);
+  return {
+    command: 'forge',
+    subcommand,
+    spec: `forge ${subcommand}`,
+    description,
+    scopedFlags: dataFlags,
+    request: forgeRequestHelp(subcommand, schema),
+  };
+}
+
 export const forgeHelp: HelpGroup = {
   entries: [
-    {
-      command: 'forge',
-      subcommand: 'resolve',
-      spec: 'forge resolve',
-      description: forgeOperationDescriptions.resolve,
-      scopedFlags: [
-        {
-          spec: '--data <json>',
-          description: 'JSON object with remote (URL/SSH syntax or null)',
-        },
-      ],
-    },
-    {
-      command: 'forge',
-      subcommand: 'checks',
-      spec: 'forge checks',
-      description: forgeOperationDescriptions['checks.state'],
-      scopedFlags: [
-        {
-          spec: '--data <json>',
-          description: 'JSON object with ref: {repo: {host, path}, number}',
-        },
-      ],
-    },
+    forgeEntry('resolve', forgeOperationDescriptions.resolve),
+    forgeEntry('checks', forgeOperationDescriptions['checks.state'], 'checks.state'),
   ],
   scopedOnly: [
-    {
-      command: 'forge',
-      subcommand: 'metadata',
-      spec: 'forge metadata',
-      description:
-        'Inspect trusted plugin metadata for a host without credentials or forge operations',
-      scopedFlags: [
-        {
-          spec: '--data <json>',
-          description: 'JSON object with the forge host, for example {"host":"github.com"}',
-        },
-      ],
-    },
-    {
-      command: 'forge',
-      subcommand: 'check',
-      spec: 'forge check',
-      description:
-        'Check before a run spends that a plugin serves a host, supports the named\noperations and has a credential; for a remote or repo whose plugin serves\npr.view, one pr.view by head proves the forge accepts the credential, so it\nneeds pull-request read on the repository. Exits 1 with the reason',
-      scopedFlags: [
-        {
-          spec: '--data <json>',
-          description:
-            'JSON object with host, remote or repo, and operations, for example\n{"host":"github.com","operations":["pr.view","pr.merge"]}',
-        },
-      ],
-    },
+    forgeEntry(
+      'metadata',
+      'Inspect trusted plugin metadata for a host without credentials or forge operations'
+    ),
+    forgeEntry(
+      'check',
+      'Check before a run spends that a plugin serves a host, supports the named\noperations and has a credential; for a remote or repo whose plugin serves\npr.view, one pr.view by head proves the forge accepts the credential, so it\nneeds pull-request read on the repository. Exits 1 with the reason'
+    ),
     ...Object.entries(forgeOperationDescriptions)
       .filter(([op]) => op !== 'resolve')
-      .map(([subcommand, description]) => ({
-        command: 'forge',
-        subcommand,
-        spec: `forge ${subcommand}`,
-        description,
-        scopedFlags: [
-          {
-            spec: '--data <json>',
-            description: 'Structured request without operationId or op',
-          },
-          {
-            spec: '--data-file <path>',
-            description: 'Read that request from a file, keeping authored content out of argv',
-          },
-        ],
-      })),
+      .map(([op, description]) => forgeEntry(op, description)),
   ],
 };

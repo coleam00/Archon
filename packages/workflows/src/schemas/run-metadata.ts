@@ -14,6 +14,7 @@ import {
 } from '../output-ref';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
+import { fileSettingRefusalSchema } from './pack-settings';
 
 /**
  * Keys the sub-run machinery writes into a child run's untyped `metadata` JSONB, and the
@@ -42,6 +43,11 @@ import { workflowSourceSchema } from './workflow';
  * `summary_value`  — additive sibling of `summary` (#2637): the child's terminal
  *                    structured value, stamped at completion alongside the text summary
  *                    so a parent `workflow:` node threads the logical value back.
+ * `summary_value_null` — `true` when the child's terminal value is JSON null. A
+ *                    metadata patch removes a top-level key whose value is null, so a
+ *                    null result cannot be stored as `summary_value`; without this marker
+ *                    the parent would fall back to the text summary "null". Written only
+ *                    for null, so every other result is stored and read as before.
  * `summary_declared_output_paths` — additive sibling of `summary_value`: the field
  *                    paths the child's selected `returns:` node declared, so a parent
  *                    reads `$<node>.output.a.b` under the CHILD's contract — a
@@ -59,6 +65,7 @@ export const SUBRUN_METADATA_KEYS = {
   inputs: 'inputs',
   inputsValues: 'inputs_values',
   summaryValue: 'summary_value',
+  summaryValueNull: 'summary_value_null',
   summaryDeclaredFields: 'summary_declared_fields',
   summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
@@ -81,6 +88,26 @@ export function runInputsMetadata(
       ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
       : {}),
   };
+}
+
+/** A child's terminal value as completion stamps it; a null value becomes the null marker. */
+export function subrunSummaryMetadata(value: unknown): Record<string, unknown> {
+  return value === null
+    ? { [SUBRUN_METADATA_KEYS.summaryValueNull]: true }
+    : { [SUBRUN_METADATA_KEYS.summaryValue]: value };
+}
+
+/**
+ * The value `subrunSummaryMetadata` stamped, or undefined when none was. Presence-keyed
+ * rather than truthiness: `false`/`0` are legitimate values. A merge never keeps a null
+ * `summary_value`, so the marker restores it.
+ */
+function readSubrunSummaryValue(metadata: Record<string, unknown> | undefined): unknown {
+  if (metadata === undefined) return undefined;
+  if (Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)) {
+    return metadata[SUBRUN_METADATA_KEYS.summaryValue];
+  }
+  return metadata[SUBRUN_METADATA_KEYS.summaryValueNull] === true ? null : undefined;
 }
 
 /** Parent deletion clears the foreign key; this creation-only key preserves child provenance. */
@@ -166,11 +193,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
     fanOutItemHash: typeof fanOutItemHash === 'string' ? fanOutItemHash : undefined,
     inputs,
-    // Presence-keyed rather than truthiness: `false`/`0`/`null` are legitimate values.
-    summaryValue:
-      metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
-        ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
-        : undefined,
+    summaryValue: readSubrunSummaryValue(metadata),
     summaryDeclaredOutputPaths,
   };
 }
@@ -199,31 +222,114 @@ export function readAsksResult(metadata: Record<string, unknown>): JsonValue | u
 }
 
 /**
- * Set by the completing write of a top-level run on an item that stopped the item: it
- * completed with a declared outcome that is not final (`returns.final`), its end started
- * nothing, and it left no ask or wait. The attention queue lists the item as `stopped`
- * while this run is the newest on it. `summary` is the declared `returns.summary` value,
+ * Set by the completing write of a top-level run on an item that stopped the item: its
+ * ending left no ask or wait and ended nothing (`itemFate` is `stops`), whatever it started.
+ * The attention queue lists it while this run is the newest step on its item and no start
+ * the run caused is still unprepared or queued. `summary` is the declared `returns.summary` value,
  * or null. Older binaries read metadata as an open record and ignore the key.
+ *
+ * Admission also sets it, with `limit`, on the completed run whose end or settled asks
+ * caused a start it refused at the start's limit (see `stoppedLimitSchema`): that start
+ * was the item's next step, so nothing follows the run either. An older binary reads that
+ * stop without its limit. Preparation sets it the same way, with `refused`, when it rejects
+ * such a start before launch (see `stoppedRefusalSchema`).
  */
 export const ITEM_STOPPED_METADATA_KEY = 'item_stopped';
 
 /** The longest summary kept, so one line in attention stays one line. */
 const ITEM_STOPPED_SUMMARY_MAX = 500;
 
+/**
+ * The start limit that stopped an item: where it stood when admission refused the start
+ * (`left` was 0), and the binding and workflow the refused start was for, so a reader can
+ * name what raises it.
+ */
+export const stoppedLimitSchema = z.object({
+  name: z.string(),
+  starts: z.number().int().positive(),
+  granted: z.number().int().nonnegative(),
+  used: z.number().int().nonnegative(),
+  bindingId: z.string(),
+  workflow: z.string(),
+});
+export type StoppedLimit = z.infer<typeof stoppedLimitSchema>;
+
+/**
+ * Why a start was refused before launch. At the hand-off a run's end or settled asks make:
+ * the checkout could not be handed on (`checkout_refused`), a mapped input named nothing
+ * (`inputs_unmapped`), or the items it links to could not be read or hold no such link
+ * (`link_refused`). In preparation: the cause when the engine types it
+ * (`no_default_provider`, `file_setting_missing`), else the stage that failed, as the
+ * binding's `error` stores it. Never the exception text, which can hold secret values.
+ */
+export const startRefusalReasonSchema = z.enum([
+  'checkout_refused',
+  'inputs_unmapped',
+  'link_refused',
+  'no_default_provider',
+  'file_setting_missing',
+  'run_as_user_failed',
+  'run_configuration_failed',
+  'launch_preparation_failed',
+]);
+export type StartRefusalReason = z.infer<typeof startRefusalReasonSchema>;
+
+/**
+ * A binding a run's end or settled asks refused at the hand-off: the workflow it would have
+ * started and why, carried on the evaluated binding for the stop on that run. Not stored.
+ */
+export const handoffRefusalSchema = z.object({
+  workflow: z.string(),
+  reason: startRefusalReasonSchema,
+});
+
+/**
+ * A start refused before launch: its receipt and binding (`archon trigger inspect`), the
+ * workflow it was for, why, and when. `fileSetting` is set with `file_setting_missing`.
+ */
+export const stoppedRefusalSchema = z.object({
+  receiptId: z.string(),
+  bindingId: z.string(),
+  workflow: z.string(),
+  reason: startRefusalReasonSchema,
+  refusedAt: z.string(),
+  fileSetting: fileSettingRefusalSchema.optional(),
+});
+export type StoppedRefusal = z.infer<typeof stoppedRefusalSchema>;
+
+/** A recorded stop: why the run stopped its item, and the starts its end caused that were refused. */
+export interface ItemStopped {
+  summary: string | null;
+  limit?: StoppedLimit;
+  /** Every start refused before launch, one per binding, in the order they were refused. */
+  refused?: StoppedRefusal[];
+}
+
 /** The metadata that marks a completed run as having stopped its item. */
-export function itemStoppedMetadata(summary: string | null): Record<string, unknown> {
+export function itemStoppedMetadata(
+  summary: string | null,
+  refusals: Omit<ItemStopped, 'summary'> = {}
+): Record<string, unknown> {
   const line = summary?.trim().slice(0, ITEM_STOPPED_SUMMARY_MAX) ?? '';
-  return { [ITEM_STOPPED_METADATA_KEY]: { summary: line === '' ? null : line } };
+  return { [ITEM_STOPPED_METADATA_KEY]: { summary: line === '' ? null : line, ...refusals } };
 }
 
 /** The stop a completed run recorded, or undefined when it stopped nothing. */
-export function readItemStopped(
-  metadata: Record<string, unknown>
-): { summary: string | null } | undefined {
+export function readItemStopped(metadata: Record<string, unknown>): ItemStopped | undefined {
   const value = metadata[ITEM_STOPPED_METADATA_KEY];
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const summary = (value as Record<string, unknown>).summary;
-  return { summary: typeof summary === 'string' ? summary : null };
+  const { summary, limit, refused } = value as Record<string, unknown>;
+  // A newer binary may add keys or reasons; an entry that does not read is dropped, not refused.
+  const readLimit = stoppedLimitSchema.safeParse(limit);
+  const readRefused = (Array.isArray(refused) ? refused : []).flatMap(entry => {
+    const read = stoppedRefusalSchema.safeParse(entry);
+    return read.success ? [read.data] : [];
+  });
+  return {
+    summary: typeof summary === 'string' ? summary : null,
+    ...(readLimit.success ? { limit: readLimit.data } : {}),
+    ...(readRefused.length > 0 ? { refused: readRefused } : {}),
+  };
 }
 
 export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
@@ -468,6 +574,13 @@ export const runDispatchMetadataSchema = z.object({
    * defaults over them. Absent on rows from older builds.
    */
   inputs_resolved: z.literal(true).optional(),
+  /**
+   * Names of the inputs the run was supplied with (`--input`, the run route's `inputs`, a
+   * parent's `with:`), as opposed to the pack settings and declared defaults `inputs` also
+   * holds. A re-run restores only these, so an unsupplied input keeps taking its default.
+   * Absent on rows from older builds.
+   */
+  supplied_inputs: z.array(z.string()).optional(),
 });
 
 export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;
@@ -478,6 +591,28 @@ export function readRunDispatchMetadata(
 ): RunDispatchMetadata | undefined {
   const parsed = runDispatchMetadataSchema.safeParse(metadata?.[RUN_DISPATCH_METADATA_KEY]);
   return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The inputs a run was invoked with, as text by name: what re-running it supplies again.
+ * Empty for a run whose dispatch record names none, including every run started before
+ * the record did. Reads the canonical text map only, so a run list never depends on the
+ * rest of a row's sub-run metadata parsing.
+ */
+export function readSuppliedRunInputs(
+  metadata: Record<string, unknown> | undefined
+): Record<string, string> {
+  const names = readRunDispatchMetadata(metadata)?.supplied_inputs ?? [];
+  const text = metadata?.[SUBRUN_METADATA_KEYS.inputs];
+  if (typeof text !== 'object' || text === null) return {};
+  const supplied: Record<string, string> = {};
+  for (const name of names) {
+    const value: unknown = Object.hasOwn(text, name)
+      ? (text as Record<string, unknown>)[name]
+      : undefined;
+    if (typeof value === 'string') supplied[name] = value;
+  }
+  return supplied;
 }
 
 /**
@@ -646,12 +781,10 @@ export function isContainerRun(run: { metadata?: Record<string, unknown> }): boo
   return run.metadata?.[CONTAINER_ISOLATION_MARKER.key] === CONTAINER_ISOLATION_MARKER.value;
 }
 
-export const ownedWorktreeSchema = z
-  .object({
-    envId: z.string().min(1),
-    creationId: z.string().uuid(),
-  })
-  .strict();
+export const ownedWorktreeSchema = z.object({
+  envId: z.string().min(1),
+  creationId: z.string().uuid(),
+});
 export type OwnedWorktree = z.infer<typeof ownedWorktreeSchema>;
 
 export function readOwnedWorktree(

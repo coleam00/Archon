@@ -3,6 +3,7 @@ import { matchesForgeOperationResponse } from './response-match';
 import {
   contentDigest,
   forgeAuditResponse,
+  forgeOperationAuditSchema,
   forgeRequestSchema,
   forgeResponseSchema,
   type ForgeRequest,
@@ -325,6 +326,38 @@ test('a label-added read proves the item and label it was asked about', () => {
     expect(matches(request, answered(wrong))).toBe(false);
 });
 
+test('an opened-issue listing proves its repository, cutoff and open issues', () => {
+  const request = {
+    operationId: 'opened',
+    op: 'workitem.opened',
+    repo,
+    since: '2026-11-23T10:00:00Z',
+  } satisfies ForgeRequest;
+  const issue = {
+    ref,
+    kind: 'issue',
+    url: 'https://github.com/owner/repo/issues/7',
+    state: 'open',
+    createdAt: '2026-11-23T10:00:00Z',
+  };
+  const answered = (value: object): ForgeResponse =>
+    forgeResponseSchema.parse({
+      operationId: 'opened',
+      ok: true,
+      result: { op: request.op, value: { repo, since: request.since, items: [issue], ...value } },
+    });
+  expect(matches(request, answered({}))).toBe(true);
+  for (const wrong of [
+    { since: '2026-11-22T10:00:00Z' },
+    { items: [{ ...issue, createdAt: '2026-11-23T09:59:59Z' }] },
+    { items: [{ ...issue, state: 'closed' }] },
+    { items: [{ ...issue, ref: { ...ref, repo: { ...repo, path: 'other/repo' } } }] },
+  ])
+    expect(matches(request, answered(wrong))).toBe(false);
+  // A pull request is not an issue, so it cannot be in the answer at all.
+  expect(() => answered({ items: [{ ...issue, kind: 'pr' }] })).toThrow();
+});
+
 test('item and pull request views accept an author and still parse without one', () => {
   const author = { host: repo.host, id: '1', login: 'octo' };
   const pr = {
@@ -411,8 +444,63 @@ test('close proof verifies the issue, its closed state and the requested reason'
     expect(matches(close, response(close.op, ref, wrong))).toBe(false);
 });
 
+test('assignee proof verifies the issue and the one login, compared case-insensitively', () => {
+  const add = {
+    operationId: 'assign',
+    op: 'workitem.assignee.add',
+    ref,
+    login: 'Octo',
+  } satisfies ForgeRequest;
+  const remove = { ...add, operationId: 'unassign', op: 'workitem.assignee.remove' } as const;
+  const result = (op: string, assignees: string[], workitem: object = item) =>
+    response(op, ref, { workitem, assignees });
+  expect(matches(add, result(add.op, ['other', 'octo']))).toBe(true);
+  expect(matches(add, result(add.op, ['other']))).toBe(false);
+  expect(matches(add, result(add.op, ['octo'], { ...item, ref: { ...ref, number: 4 } }))).toBe(
+    false
+  );
+  expect(matches(remove, result(remove.op, ['other']))).toBe(true);
+  expect(matches(remove, result(remove.op, ['other', 'OCTO']))).toBe(false);
+});
+
+test('the acting account answers on the requested repository and host', () => {
+  const request = { operationId: 'self', op: 'actor.self', repo } satisfies ForgeRequest;
+  const self = { host: repo.host, id: '7', login: 'octo', type: 'user' };
+  expect(matches(request, read('actor.self', { repo, actor: self }))).toBe(true);
+  expect(
+    matches(request, read('actor.self', { repo, actor: { ...self, host: 'other.example' } }))
+  ).toBe(false);
+  expect(
+    matches(request, read('actor.self', { repo: { ...repo, path: 'a/b' }, actor: self }))
+  ).toBe(false);
+});
+
 const read = (op: string, value: object): ForgeResponse =>
   forgeResponseSchema.parse({ operationId: 'read', ok: true, result: { op, value } });
+
+test('assignee and acting-account audits record identity, never an issue title', () => {
+  const audit = (operation: string, result: ForgeResponse) =>
+    forgeOperationAuditSchema.parse({
+      operationId: 'audit',
+      operation,
+      target: repo,
+      plugin: null,
+      result: forgeAuditResponse(result),
+      retries: 0,
+      durationMs: 1,
+    });
+  const self = { host: repo.host, id: '7', login: 'octo', type: 'user' };
+  expect(audit('actor.self', read('actor.self', { repo, actor: self })).result).toMatchObject({
+    ok: true,
+    result: { value: { repo, actor: self } },
+  });
+  const assigned = response('workitem.assignee.add', ref, {
+    workitem: { ...item, title: 'sentinel title' },
+    assignees: ['octo'],
+    title: 'sentinel title',
+  });
+  expect(JSON.stringify(audit('workitem.assignee.add', assigned))).not.toContain('sentinel');
+});
 
 test('a search answers its repository, words, kind, state and limit', () => {
   const request = {

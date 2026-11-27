@@ -34,7 +34,12 @@ import {
 import { MetricsQueryError, resolveMetricsWindow } from '@archon/workflows/metrics';
 import { countWorkflowNotices, listWorkflowNotices } from '@archon/workflows/workflow-notice';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { attentionItemLines, attentionStreamText, noticeText } from './workflow-attention-text';
+import {
+  attentionItemLines,
+  attentionListBlocks,
+  attentionStreamText,
+  noticeText,
+} from './workflow-attention-text';
 import {
   getLog,
   inheritedWorkflowCodebase,
@@ -83,7 +88,7 @@ export async function resolveAttentionRunId(
   cwd: string
 ): Promise<string> {
   const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
-  return resolveRunIdArg(host, runId, undefined, false, codebase?.id);
+  return resolveRunIdArg(host, runId, undefined, 'pass-through', codebase?.id);
 }
 
 /** Chat scope takes precedence over the CLI's explicit or working-directory scope. */
@@ -473,9 +478,10 @@ async function renderAttentionItems(
     );
     return 0;
   }
-  console.log(`\n${String(selected.length)} item(s) need attention in ${where}:\n`);
-  for (const item of selected) {
-    for (const line of attentionItemLines(item, 'brief')) console.log(line);
+  const blocks = attentionListBlocks(selected);
+  console.log(`\n${String(blocks.length)} item(s) need attention in ${where}:\n`);
+  for (const block of blocks) {
+    for (const line of block) console.log(line);
     console.log('');
   }
   return 0;

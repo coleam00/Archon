@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { DEFAULT_TEST_TIMEOUT_MS, removeTempTree } from '@archon/paths/test-utils';
 import { chatRunEventSchema, type ConnectedChat, type ChatRunEvent } from '@archon/chat-contract';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { serializeRunUsage } from '@archon/workflows/schemas/run-usage';
 import { terminalWorkflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
 import { createWorkflowRun, pauseWorkflowRun } from '@archon/core/db/workflows';
@@ -62,7 +63,7 @@ async function createRun(platform: string, background = false) {
     origin: background
       ? { conversationId: workerId, parentConversationId: conversationId }
       : { conversationId },
-    metadata: { total_cost_usd: 0.25 },
+    metadata: serializeRunUsage({ costUsd: 0.25 }),
   });
 }
 

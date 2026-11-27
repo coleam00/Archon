@@ -5,7 +5,9 @@ import type {
   PrReviewsObservation,
   WorkItemLabelAdded,
   WorkItemList,
+  WorkItemOpened,
 } from '@archon/forge';
+import type { ItemWaitSubject } from './schemas/item-wait';
 import { sourceReceiptAcceptanceSchema } from './schemas/resource-start';
 
 export interface WebhookSourceRequest {
@@ -25,6 +27,8 @@ export interface ObservedItemWait {
   workflowName: string;
   event: string;
   about: string;
+  /** The issue or pull request the wait names, or null when it names none. */
+  subject: ItemWaitSubject | null;
   /** The key of the item the wait is on. */
   itemKey: string;
   /** The repository URL of the project of the run that left the wait, when it has one. */
@@ -56,6 +60,36 @@ export const observedLabelsSchema = z
   .strict();
 export type ObservedLabels = z.input<typeof observedLabelsSchema>;
 
+const unservedBindingSchema = z
+  .object({ bindingId: z.string().min(1), reason: z.string().min(1) })
+  .strict();
+/** A binding a source cannot observe, with why. */
+export type UnservedBinding = z.infer<typeof unservedBindingSchema>;
+
+const observedOpenedIssueReadSchema = z
+  .object({
+    bindingId: z.string().min(1),
+    repo: z.object({ host: z.string().min(1), path: z.string().min(1) }).strict(),
+  })
+  .strict();
+/** One binding a source starts on newly opened issues of one repository. */
+export type ObservedOpenedIssueRead = z.infer<typeof observedOpenedIssueReadSchema>;
+
+/**
+ * The opened-issue reads a source's bindings name, fixed when the plugin loads as label
+ * reads are. An opened-issue binding the source cannot observe is `unserved`, with why.
+ */
+export const observedOpenedIssuesSchema = z
+  .object({
+    reads: z.array(observedOpenedIssueReadSchema),
+    unserved: z.array(unservedBindingSchema).default([]),
+  })
+  .strict();
+export type ObservedOpenedIssues = z.input<typeof observedOpenedIssuesSchema>;
+
+/** Bindings of a kind no observe read serves, such as a comment binding, with why. */
+export const unservedBindingsSchema = z.array(unservedBindingSchema);
+
 /**
  * The forge reads a source may make while it observes. Each refuses what nothing passed to
  * the same call names: a commit a wait is about; a pull request whose number ends the key
@@ -74,6 +108,14 @@ export interface SourceForgeReader {
     number: number;
     label: string;
   }): Promise<WorkItemLabelAdded>;
+  /**
+   * The open issues of a declared opened-issue read's repository created at or after
+   * `since`, which must be the `since` the engine passed for that read in the same call.
+   */
+  issuesOpened(input: {
+    repo: ObservedOpenedIssueRead['repo'];
+    since: string;
+  }): Promise<WorkItemOpened>;
 }
 
 const observedWaitSchema = z
@@ -115,14 +157,33 @@ export const sourceObservationSchema = z
           .strict()
       )
       .default([]),
+    /**
+     * Opened-issue reads that failed. A plugin sends it only when the engine passed
+     * `openedIssues`: an engine that predates it refuses an observation that carries it.
+     * The issues the reads found go in `acceptances`.
+     */
+    openedIssueFailures: z.array(unservedBindingSchema).default([]),
   })
   .strict();
 export type SourceObservation = z.infer<typeof sourceObservationSchema>;
+/**
+ * What a plugin's `observe` returns: `openedIssueFailures` only when the engine passed
+ * `openedIssues`, so an engine that predates them still parses the result.
+ */
+export type SourceObservationInput = Omit<SourceObservation, 'openedIssueFailures'> &
+  Partial<Pick<SourceObservation, 'openedIssueFailures'>>;
 
 export interface WebhookSourcePlugin {
   receive(request: WebhookSourceRequest): Promise<WebhookSourceResult>;
   /** The label reads this source's bindings name, for `observe`; none when absent. */
   readonly observedLabels?: ObservedLabels;
+  /** The opened-issue reads this source's bindings name, for `observe`; none when absent. */
+  readonly observedOpenedIssues?: ObservedOpenedIssues;
+  /**
+   * The bindings of this source that no observe read serves, with why, so an install with
+   * no webhooks is told instead of the binding never starting.
+   */
+  readonly unservedBindings?: readonly UnservedBinding[];
   /**
    * The events a webhook would have delivered, for an install that receives none: for the
    * state the open waits name, and for the open issues carrying a label in `labels`. A wait
@@ -131,12 +192,18 @@ export interface WebhookSourcePlugin {
    * `seenSince` is when the engine first saw it, or `null` on that first sight: a label
    * added before it is recorded as seen and starts nothing, and on the first sight every
    * label listed is.
+   *
+   * `openedIssues` holds the declared opened-issue reads past their first sight, each with
+   * the `since` to list from; every issue listed is new and starts its binding. It is absent
+   * when the engine predates opened-issue reads, and then the plugin reads no opened issues
+   * and sends no `openedIssueFailures`.
    */
   observe?(input: {
     waits: readonly ObservedItemWait[];
     labels: readonly (ObservedLabelRead & { seenSince: string | null })[];
+    openedIssues?: readonly (ObservedOpenedIssueRead & { since: string })[];
     forge: SourceForgeReader;
-  }): Promise<SourceObservation>;
+  }): Promise<SourceObservationInput>;
 }
 
 export type WebhookSourcePluginFactory = (input: {

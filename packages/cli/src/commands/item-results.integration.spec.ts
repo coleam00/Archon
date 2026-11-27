@@ -5,10 +5,19 @@
  */
 import { afterEach, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { itemReadSchema, type ItemRun } from '@archon/workflows/item-read';
 
 const CLI_PATH = resolve(import.meta.dir, '..', 'cli.ts');
@@ -116,12 +125,17 @@ nodes:
 interface Fixture {
   /** The project checkout every run works in. */
   projectRoot: string;
+  /** The Archon home every run uses. */
+  home: string;
   /** The run rows, oldest first. */
   rows: () => { id: string; status: string; metadata: string }[];
   /** Overwrite a run's terminal event data, as a damaged row reads. */
   corruptTerminalEvent: (runId: string, data: string) => void;
   cli: (args: string[]) => Promise<string>;
-  attempt: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  attempt: (
+    args: string[],
+    extraEnv?: Record<string, string>
+  ) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 const WORKFLOWS: Record<string, string> = {
@@ -147,7 +161,8 @@ async function makeFixture(
     writeFileSync(join(workflows, `${name}.yaml`), body);
   expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
   const attempt = async (
-    args: string[]
+    args: string[],
+    extraEnv: Record<string, string> = {}
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
     const child = Bun.spawn([process.execPath, CLI_PATH, ...args], {
       cwd: projectRoot,
@@ -161,6 +176,7 @@ async function makeFixture(
         GITHUB_TOKEN: '',
         GH_TOKEN: '',
         GITHUB_APP_ID: '',
+        ...extraEnv,
       },
       stdin: 'ignore',
       stdout: 'pipe',
@@ -203,7 +219,7 @@ async function makeFixture(
       database.close();
     }
   };
-  return { projectRoot, cli, attempt, rows, corruptTerminalEvent };
+  return { projectRoot, home: join(root, 'home'), cli, attempt, rows, corruptTerminalEvent };
 }
 
 const run = (workflow: string, ...inputs: string[]): string[] => [
@@ -313,6 +329,73 @@ test('a stage reads the latest result of its own workflow on the item', async ()
   expect((await detail(fixture, runs[1]?.id)).terminal_record.returns.value).toEqual({ round: 2 });
 }, 120_000);
 
+/** Install a pack as `acme/stages`, the way `archon plugin add` leaves it; each file an entrypoint. */
+function installPack(fixture: Fixture, workflowFiles: Record<string, string>): void {
+  const pluginsDir = join(fixture.home, 'plugins');
+  const id = 'acme/stages';
+  const commit = 'a'.repeat(40);
+  const manifest = {
+    schemaVersion: 1,
+    kind: 'workflow-pack',
+    name: 'stages',
+    description: 'stages',
+    entrypoints: Object.fromEntries(
+      Object.keys(workflowFiles).map(name => [name, `${name}/${name}.yaml`])
+    ),
+  };
+  const tree = packTreePath(pluginsDir, id, commit);
+  mkdirSync(tree, { recursive: true });
+  writeFileSync(join(tree, 'archon-plugin.json'), JSON.stringify(manifest));
+  for (const [name, body] of Object.entries(workflowFiles)) {
+    mkdirSync(join(tree, name), { recursive: true });
+    writeFileSync(join(tree, name, `${name}.yaml`), body);
+  }
+  const receipt = receiptPath(pluginsDir, id);
+  mkdirSync(join(receipt, '..'), { recursive: true });
+  writeFileSync(
+    receipt,
+    JSON.stringify({
+      schemaVersion: 1,
+      id,
+      manifest,
+      commit,
+      installedAt: new Date(0).toISOString(),
+    })
+  );
+}
+
+test("an installed pack's bare result_of reads that pack's own workflow (#6357)", async () => {
+  // The project has its own `stage-a`, which the pack's bare `stage-a` must not read.
+  const fixture = await makeFixture('installed', { 'stage-a': STAGE_A });
+  installPack(fixture, {
+    'stage-a': STAGE_A,
+    'stage-c': reader('stage-c', 'stage-a'),
+    'reads-project': reader('reads-project', 'stage-b'),
+    again: AGAIN,
+  });
+  writeFileSync(join(fixture.projectRoot, '.archon', 'workflows', 'stage-b.yaml'), STAGE_B);
+  await fixture.cli(run('acme/stages:stage-a', 'tag=pack'));
+  await fixture.cli(run('stage-a', 'tag=project'));
+  await fixture.cli(run('stage-b'));
+  const [packA, , projectB] = await itemRuns(fixture);
+
+  const output = await fixture.cli(run('acme/stages:stage-c'));
+  expect(output).toContain(`result of \`acme/stages:stage-a\` run \`${String(packA?.id)}\``);
+  // A name the pack does not hold reads the project's workflow, as before.
+  const outside = await fixture.cli(run('acme/stages:reads-project'));
+  expect(outside).toContain(`result of \`stage-b\` run \`${String(projectB?.id)}\``);
+  await fixture.cli(run('acme/stages:again'));
+  await fixture.cli(run('acme/stages:again'));
+
+  const runs = await itemRuns(fixture);
+  const value = async (index: number): Promise<unknown> =>
+    (await detail(fixture, runs[index]?.id)).terminal_record.returns.value;
+  expect(await value(3)).toEqual({ read: { tag: 'pack', pad: '' } });
+  expect(await value(4)).toEqual({ read: { done: true } });
+  expect(await value(5)).toEqual({ round: 1 });
+  expect(await value(6)).toEqual({ round: 2 });
+}, 120_000);
+
 test('a reader with no item is refused before it starts, unless the value is supplied', async () => {
   const fixture = await makeFixture('no-item');
   const refused = await fixture.attempt(['workflow', 'run', 'stage-c', '--no-worktree']);
@@ -322,12 +405,50 @@ test('a reader with no item is refused before it starts, unless the value is sup
   );
   // No node ran: the run was cancelled before its claim.
   expect(fixture.rows().map(row => row.status)).toEqual(['cancelled']);
+  // A detached start is refused in the result it prints, before its child is forked.
+  const detached = await fixture.attempt([
+    'workflow',
+    'run',
+    'stage-c',
+    '--no-worktree',
+    '--detach',
+    '--json',
+  ]);
+  expect(detached.exitCode).not.toBe(0);
+  const refusal = JSON.parse(detached.stdout) as { ok: boolean; error: string };
+  expect(refusal.ok).toBe(false);
+  expect(refusal.error).toContain(
+    "reads input 'prior' from result_of 'stage-a', which resolves from the run's item"
+  );
+  expect(fixture.rows().map(row => row.status)).toEqual(['cancelled', 'cancelled']);
 
   await fixture.cli(['workflow', 'run', 'stage-c', '--no-worktree', '--input', 'prior="supplied"']);
-  const supplied = fixture.rows()[1];
+  const supplied = fixture.rows()[2];
   expect(supplied?.status).toBe('completed');
   expect((await detail(fixture, supplied?.id)).terminal_record.returns.value).toEqual({
     read: 'supplied',
+  });
+}, 120_000);
+
+test('a detached reader with no item starts when its project pack settings supply the value', async () => {
+  const fixture = await makeFixture('pack-setting', {});
+  const pack = join(fixture.projectRoot, '.archon', 'workflows', 'kit');
+  mkdirSync(join(pack, 'kit-reader'), { recursive: true });
+  writeFileSync(join(pack, 'kit-reader', 'kit-reader.yaml'), reader('kit-reader', 'stage-a'));
+  mkdirSync(join(pack, '.pack'), { recursive: true });
+  writeFileSync(join(pack, '.pack', 'pack.yaml'), 'inputs:\n  prior: { type: string }\n');
+  mkdirSync(join(fixture.projectRoot, '.archon', 'packs'), { recursive: true });
+  writeFileSync(
+    join(fixture.projectRoot, '.archon', 'packs', 'kit.yaml'),
+    `settings:\n  prior: '"from-project"'\n`
+  );
+  const ack = JSON.parse(
+    await fixture.cli(['workflow', 'run', 'kit-reader', '--no-worktree', '--detach', '--json'])
+  ) as { ok: boolean; runId: string };
+  expect(ack.ok).toBe(true);
+  await fixture.attempt(['workflow', 'wait', ack.runId]);
+  expect((await detail(fixture, ack.runId)).terminal_record.returns.value).toEqual({
+    read: 'from-project',
   });
 }, 120_000);
 
@@ -585,4 +706,103 @@ test('a land stage merges the commit its approval was read at, not where its che
   await fixture.cli(run('review'));
   expect(await land('move=commit')).toEqual({ landed: x, message: null });
   expect(await landed()).toBe(x);
+}, 240_000);
+
+// Adds `lines` lines to `file` and commits them, removing `drop` when it is set, then fails
+// when `fail` is set. It declares no `returns:`: a run that only commits still has a size.
+const BUILD = `name: build
+description: Add lines to the change.
+inputs:
+  file: { required: true }
+  lines: { required: true }
+  drop: { default: '' }
+  fail: { default: '' }
+nodes:
+  - id: write
+    bash: |
+      seq "$INPUTS_LINES" >> "$INPUTS_FILE"
+      if [ -n "$INPUTS_DROP" ]; then git rm -q "$INPUTS_DROP"; fi
+      git add -A
+      git -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -q -m build
+  - id: after
+    depends_on: [write]
+    bash: |
+      if [ -n "$INPUTS_FAIL" ]; then exit 1; fi
+`;
+
+// Returns each earlier run's size as \`item()\` reads it.
+const SIZES = `name: sizes
+description: Read the item's change sizes.
+mutates_checkout: false
+returns: read
+nodes:
+  - id: read
+    runtime: bun
+    script: |
+      import { emit, item } from 'archon:script';
+      emit({ sizes: (item()?.runs ?? []).map(run => run.changeSize) });
+    output_format: { type: object, properties: { sizes: { type: array } }, required: [sizes] }
+`;
+
+test('each run that ended at a commit shows the size of its change from where the work was cut', async () => {
+  const fixture = await makeFixture('change-size', { build: BUILD, review: REVIEW, sizes: SIZES });
+  const git = (...args: string[]): string => {
+    const result = Bun.spawnSync(
+      ['git', '-c', 'user.name=test', '-c', 'user.email=test@example.com', ...args],
+      { cwd: fixture.projectRoot }
+    );
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    return result.stdout.toString().trim();
+  };
+  const root = fixture.projectRoot;
+  writeFileSync(join(root, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: main\n');
+  writeFileSync(join(root, 'base.txt'), 'base\n');
+  git('symbolic-ref', 'HEAD', 'refs/heads/main');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'base');
+  const cutFrom = git('rev-parse', 'HEAD');
+  const inWorktree = (workflow: string, inputs: string[], flags: string[] = []) =>
+    fixture.attempt([...run(workflow, ...inputs).filter(arg => arg !== '--no-worktree'), ...flags]);
+
+  // Each start cuts its own worktree from main.
+  expect((await inWorktree('build', ['file=a.txt', 'lines=40', 'drop=base.txt'])).exitCode).toBe(0);
+  // A build that commits and then fails still ended at its commit.
+  expect((await inWorktree('build', ['file=b.txt', 'lines=7', 'fail=yes'])).exitCode).not.toBe(0);
+  expect((await inWorktree('sizes', [])).exitCode).toBe(0);
+  // A run that adopts the first build's estate changes nothing and keeps its size.
+  const [first] = await itemRuns(fixture);
+  expect((await inWorktree('review', [], ['--adopt', String(first?.id)])).exitCode).toBe(0);
+  // A run in place has no cut-from to measure from, so it shows no size.
+  await fixture.cli(run('review'));
+
+  const runs = await itemRuns(fixture);
+  const built = { base: cutFrom, files: 2, added: 40, removed: 1 };
+  const failed = { base: cutFrom, files: 1, added: 7, removed: 0 };
+  expect(runs.map(read => [read.workflow, read.status, read.changeSize])).toEqual([
+    ['build', 'completed', { ...built, commit: expect.any(String) }],
+    ['build', 'failed', { ...failed, commit: expect.any(String) }],
+    ['sizes', 'completed', { base: cutFrom, commit: cutFrom, files: 0, added: 0, removed: 0 }],
+    ['review', 'completed', runs[0]?.changeSize],
+    ['review', 'completed', null],
+  ]);
+  // A script's item() read carries the sizes the earlier runs recorded.
+  expect((await detail(fixture, runs[2]?.id)).terminal_record.returns.value).toEqual({
+    sizes: [runs[0]?.changeSize, runs[1]?.changeSize, null],
+  });
+
+  // The read takes the recorded sizes and runs no diff.
+  const trace = join(root, '..', 'git-trace');
+  const read = await fixture.attempt(['workflow', 'runs', '--item', 'issue-1'], {
+    GIT_TRACE: trace,
+  });
+  expect(read.exitCode).toBe(0);
+  expect(existsSync(trace) ? readFileSync(trace, 'utf8') : '').not.toContain('git diff');
+  const lines = read.stdout.split('\n');
+  // The first `change:` line after the run's own line is its size.
+  const sizeLine = (id: string | undefined) =>
+    lines
+      .slice(lines.findIndex(line => line.includes(String(id).slice(0, 8))))
+      .find(line => line.trim().startsWith('change:')) ?? '';
+  expect(sizeLine(runs[0]?.id)).toContain('2 files, +40 -1');
+  expect(sizeLine(runs[1]?.id)).toContain('+7 -0');
 }, 240_000);

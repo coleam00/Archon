@@ -45,6 +45,7 @@ import type { DagNode, AgentNode, NodeOutput, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 import type { RunEndedFacts, WorkflowDeps } from '../deps';
 import type { LinkedRunEndedStart, SourceReceiptAcceptance } from '../schemas/resource-start';
+import { packEventBindingSchema } from '../schemas/pack-bindings';
 
 /**
  * #2469 — a run's spend has to survive its outcome. Usage used to be written only in
@@ -1967,27 +1968,45 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
   });
 
   it('completes with the waits the run leaves, and fails naming the field when two name one event', async () => {
-    const waits = [{ event: 'checks', about: 'a'.repeat(40), within_minutes: 30 }];
-    mockStructuredResult({ summary: 'done', waits });
-    const store = createMockStore();
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        conversationId: 'conv-waits',
-        cwd: testDir,
-        workflow: {
-          name: 'waits',
-          nodes: [resultNode],
-          returns: 'decide',
-          result: { waits: 'waits' },
-        },
-        workflowRun: makeWorkflowRun('waits-run'),
-      })
-    );
-    expect(store.completeWorkflowRun.mock.calls[0]?.[3]).toEqual({ waits });
+    const checks = { event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 30 };
+    const review = { event: 'review', about: 'a'.repeat(40), within_minutes: 30 };
+    const waits = [checks, { ...review, subject: { kind: 'pr' as const, number: 34 } }];
+    const complete = async (left: readonly unknown[], node: DagNode = resultNode) => {
+      mockStructuredResult({ summary: 'done', waits: left });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-waits',
+          cwd: testDir,
+          workflow: {
+            name: 'waits',
+            nodes: [node],
+            returns: 'decide',
+            result: { waits: 'waits' },
+          },
+          workflowRun: makeWorkflowRun('waits-run'),
+        })
+      );
+      return store.completeWorkflowRun.mock.calls[0]?.[3];
+    };
+    expect(await complete(waits)).toEqual({ waits });
+    // A review wait that names no subject is not refused.
+    expect(await complete([{ ...review, subject: null }])).toEqual({
+      waits: [{ ...review, subject: null }],
+    });
+    // A script written before `subject` existed leaves a wait that names none.
+    const script: DagNode = {
+      id: 'decide',
+      kind: 'exec',
+      runtime: 'sh',
+      script: `printf '%s' '${JSON.stringify({ summary: 'done', waits: [review] })}'`,
+      output_format: asksSchema,
+    };
+    expect(await complete([], script)).toEqual({ waits: [{ ...review, subject: null }] });
 
     // The schema cannot hold "each event once"; the engine's check does.
-    mockStructuredResult({ summary: 'done', waits: [...waits, ...waits] });
+    mockStructuredResult({ summary: 'done', waits: [checks, checks] });
     const twice = createMockStore();
     await executeDagWorkflow(
       dagOptions({
@@ -2007,6 +2026,67 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
     expect(twice.failWorkflowRun.mock.calls[0]?.[1]).toContain(
       "returns.waits 'waits' on node 'decide': [1].event 'checks' is named more than once"
     );
+  });
+
+  it('records its checkout only for a wake its pack declares that takes it for a wait it leaves', async () => {
+    const waits = [{ event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 30 }];
+    const handoff = { runId: 'waits-run', branch: 'archon/host', commit: 'b'.repeat(40) };
+    /** Complete a run of `waits` whose pack declares one wake binding on it. */
+    const leaveWaits = async (wake: Record<string, unknown>) => {
+      mockStructuredResult({ summary: 'done', waits });
+      const store = createMockStore();
+      const read: unknown[] = [];
+      await executeDagWorkflow(
+        dagOptions({
+          deps: {
+            ...createMockDeps(store),
+            asksCheckout: async (_run, left) => {
+              read.push(left);
+              return { handoff, worktree: '/worktrees/host' };
+            },
+          },
+          conversationId: 'conv-waits',
+          cwd: testDir,
+          workflow: {
+            name: 'waits',
+            nodes: [resultNode],
+            returns: 'decide',
+            result: { waits: 'waits' },
+            pack: {
+              key: 'factory',
+              workflow: 'waits',
+              source: 'project',
+              bindings: {
+                'checks-done': packEventBindingSchema.parse({
+                  workflow: 'waits',
+                  resource: 'host',
+                  overlap: 'queue',
+                  event: { kind: 'check.changed' },
+                  wake: { workflow: 'waits', wait: 'checks', about: 'check.revision', ...wake },
+                }),
+              },
+            },
+          },
+          workflowRun: makeWorkflowRun('waits-run'),
+        })
+      );
+      const metadata = store.completeWorkflowRun.mock.calls[0]?.[2] as
+        | Record<string, unknown>
+        | undefined;
+      return { read, recorded: metadata?.asks_checkout };
+    };
+    // A wake that takes the checkout: it is read now and recorded for the start.
+    expect(await leaveWaits({ checkout: 'waiting-run' })).toEqual({
+      read: [{ waits: true }],
+      recorded: { handoff, worktree: '/worktrees/host' },
+    });
+    // A wake that carries event fields only: nothing is read, so the worktree is released.
+    expect(await leaveWaits({})).toEqual({ read: [], recorded: undefined });
+    // A wake that takes the checkout for a wait this run does not leave: released as well.
+    expect(await leaveWaits({ wait: 'review', checkout: 'waiting-run' })).toEqual({
+      read: [],
+      recorded: undefined,
+    });
   });
 
   it('fails the run naming the field when an ask does not hold together, and opens none', async () => {
@@ -2095,7 +2175,7 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
   });
 });
 
-describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#6108)', () => {
+describe('executeDagWorkflow -- what a run on an item records about it as it completes', () => {
   let testDir: string;
 
   const anAsk = {
@@ -2114,6 +2194,9 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
     value: Record<string, unknown>,
     options: {
       asks?: boolean;
+      waits?: boolean;
+      observes?: boolean;
+      noOutcome?: boolean;
       workflowRun?: WorkflowRun;
       receipts?: readonly SourceReceiptAcceptance[];
     } = {}
@@ -2149,11 +2232,15 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
           ],
           returns: 'result',
           result: {
-            outcome: 'stage',
-            final: ['landed'],
+            ...(options.noOutcome === true ? {} : { outcome: 'stage' }),
+            ...(options.observes === true || options.noOutcome === true
+              ? {}
+              : { ends: ['landed'] }),
             summary: 'why',
             ...(options.asks === true ? { asks: 'asks' } : {}),
+            ...(options.waits === true ? { waits: 'waits' } : {}),
           },
+          ...(options.observes === true ? { observes: true } : {}),
         },
         workflowRun: options.workflowRun ?? makeWorkflowRun('stop-run', { item_id: 'item-1' }),
       })
@@ -2180,7 +2267,56 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
     await removeTempTree(testDir);
   });
 
-  it('records the stop with its declared summary when the outcome is not final and nothing follows', async () => {
+  /** The item facts the one completion write carried beside the metadata. */
+  const completedResult = (store: MockWorkflowStore) =>
+    store.completeWorkflowRun.mock.calls[0]?.[3];
+
+  it('records the end, naming the workflow, outcome and summary, for an outcome that ends the item', async () => {
+    const store = createMockStore();
+    await run(
+      store,
+      { stage: 'landed', why: 'merged as abc123' },
+      {
+        receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance],
+      }
+    );
+
+    expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
+    expect(completedResult(store)?.end).toEqual({
+      reason: "Workflow 'deliver' ended the item with outcome 'landed': merged as abc123",
+      node: 'result',
+    });
+  });
+
+  it('records the end for an outcome that ends the item, even when the run also left an ask', async () => {
+    const store = createMockStore();
+    await run(store, { stage: 'landed', why: 'merged', asks: [anAsk] }, { asks: true });
+
+    expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
+    expect(completedResult(store)?.end?.reason).toBe(
+      "Workflow 'deliver' ended the item with outcome 'landed': merged"
+    );
+  });
+
+  it('records the stop for a run on an item that completes with no outcome', async () => {
+    const store = createMockStore();
+    await run(store, { stage: 'replan' }, { noOutcome: true });
+
+    expect(completedMetadata(store)?.item_stopped).toEqual({ summary: null });
+  });
+
+  it('records the stop even when its end starts a stage, which moves the item on once it runs', async () => {
+    const store = createMockStore();
+    await run(
+      store,
+      { stage: 'replan', why: 'Started the build.' },
+      { receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance] }
+    );
+
+    expect(completedMetadata(store)?.item_stopped).toEqual({ summary: 'Started the build.' });
+  });
+
+  it('records the stop with its declared summary when the outcome starts nothing and ends nothing', async () => {
     const store = createMockStore();
     await run(store, { stage: 'replan', why: '  The plan missed the schema change.  ' });
 
@@ -2190,18 +2326,23 @@ describe('executeDagWorkflow -- a run whose end starts nothing stops its item (#
   });
 
   it.each([
-    ['ended in a final outcome', { stage: 'landed', why: 'merged' }, {}],
+    ['observes its item', { stage: 'replan', why: 'x' }, { observes: true }],
     ['left an ask', { stage: 'replan', why: 'x', asks: [anAsk] }, { asks: true }],
     [
-      'started the next stage',
-      { stage: 'replan', why: 'x' },
-      { receipts: [{ receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance] },
+      'left a wait',
+      {
+        stage: 'replan',
+        why: 'x',
+        waits: [{ event: 'checks', about: 'a'.repeat(40), subject: null, within_minutes: 60 }],
+      },
+      { waits: true },
     ],
-    ['is on no item', { stage: 'replan', why: 'x' }, { workflowRun: makeWorkflowRun('stop-run') }],
-  ] as const)('records no stop for a run that %s', async (_, value, options) => {
+    ['is on no item', { stage: 'landed', why: 'x' }, { workflowRun: makeWorkflowRun('stop-run') }],
+  ] as const)('records neither a stop nor an end for a run that %s', async (_, value, options) => {
     const store = createMockStore();
     await run(store, value, options);
 
     expect(completedMetadata(store)).not.toHaveProperty('item_stopped');
+    expect(completedResult(store)?.end).toBeUndefined();
   });
 });

@@ -38,6 +38,12 @@ import {
   type TransactionQuery,
 } from './resource-slots';
 import { insertWorkflowEvent } from './workflow-events';
+import { runEventsSql } from './run-events-sql';
+import {
+  isAutomaticClaim,
+  liveUnknownOutcomes,
+  UNKNOWN_OUTCOME_EVENT_TYPES,
+} from '@archon/workflows/unknown-outcome';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getLog, normalizeMetadata } from './workflow-run-shared';
 
@@ -110,6 +116,25 @@ function priorMatchesCursor(prior: PriorRunRow, cursor: ResumeClaimCursor | unde
       },
       cursor
     )
+  );
+}
+
+/** Whether the run's stored records, read in the claim's transaction, hold a live unknown outcome. */
+async function holdsUnknownOutcome(
+  query: TransactionQuery,
+  id: string,
+  prior: PriorRunRow
+): Promise<boolean> {
+  const { rows } = await query<{ event_type: string; step_name: string | null; data: unknown }>(
+    runEventsSql('event_type, step_name, data', 1, UNKNOWN_OUTCOME_EVENT_TYPES.length),
+    [id, ...UNKNOWN_OUTCOME_EVENT_TYPES]
+  );
+  const events = rows.map(row => ({
+    ...row,
+    data: typeof row.data === 'string' ? (JSON.parse(row.data) as unknown) : row.data,
+  }));
+  return (
+    liveUnknownOutcomes({ id, metadata: normalizeMetadata(prior.metadata) }, events).length > 0
   );
 }
 
@@ -252,6 +277,9 @@ export async function resumeWorkflowRun(
     updateResult = await getDatabase().withTransaction(async query => {
       const prior = await lockPriorRun(query, id);
       if (!prior || !priorMatchesCursor(prior, cursor)) return { rowCount: 0 };
+      // An automatic claim never continues a run holding a live unknown outcome.
+      if (isAutomaticClaim(cursor) && (await holdsUnknownOutcome(query, id, prior)))
+        return { rowCount: 0 };
       // A paused or running run still holds its item; a failed one gave it up.
       const held =
         prior.status === 'failed' && prior.item_id != null

@@ -2,6 +2,8 @@
 
 import { z } from 'zod';
 import { sourceActorSchema, type SourceActor, type SourceActorAccountType } from '@archon/forge';
+import type { ForgeRequest, ForgeResponse } from '@archon/forge/operations';
+import { GitHubError, githubRequest, location, type Fetch } from './api';
 
 const actorFields = sourceActorSchema.shape;
 export const userSchema = z
@@ -36,4 +38,33 @@ export function actor(host: string, user: User): SourceActor | null {
 /** A response without `user` reports no author rather than claiming the forge has none. */
 export function authorField(host: string, user: User | undefined): { author?: SourceActor | null } {
   return user === undefined ? {} : { author: actor(host, user) };
+}
+
+/**
+ * The account the token acts as. A GitHub App installation token has no user, and
+ * GitHub answers 403, which reaches the caller as `authorization`.
+ */
+export async function handleGithubActorSelf(
+  request: Extract<ForgeRequest, { op: 'actor.self' }>,
+  fetchImpl: Fetch,
+  token: string
+): Promise<ForgeResponse> {
+  const { root } = location(request.repo);
+  const self = actor(
+    request.repo.host,
+    userSchema.parse(await githubRequest(fetchImpl, token, `${root}/user`))
+  );
+  if (!self?.login)
+    throw new GitHubError({
+      kind: 'invalid_response',
+      message: 'GitHub reported no login for the authenticated user',
+    });
+  return {
+    operationId: request.operationId,
+    ok: true,
+    result: {
+      op: 'actor.self',
+      value: { repo: request.repo, actor: { ...self, login: self.login } },
+    },
+  };
 }

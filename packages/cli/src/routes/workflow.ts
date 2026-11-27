@@ -645,6 +645,23 @@ export async function runWorkflowRule(route: WorkflowRoute): Promise<number> {
   return await commands.workflowRuleCommand(route.host, effectiveCwd, request, json);
 }
 
+export async function runWorkflowEnd(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const item = values.item as string | undefined;
+  const as = values.as as string | undefined;
+  const reason = positionals[2];
+  if (item === undefined || !reason?.trim() || positionals[3] !== undefined)
+    return await fail(json, commands.WORKFLOW_END_USAGE);
+  const request = { item, reason, as };
+  return await commands.workflowEndCommand(
+    route.host,
+    effectiveCwd,
+    request,
+    json,
+    route.inheritedEnv
+  );
+}
+
 export async function runWorkflowItems(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, commands, effectiveCwd } = route;
   if (positionals[2] !== undefined) return await fail(json, commands.WORKFLOW_ITEMS_USAGE);
@@ -707,6 +724,19 @@ export async function runWorkflowLanding(route: WorkflowRoute): Promise<number> 
     route.host,
     effectiveCwd,
     { ...target, branch, ...(from === undefined ? {} : { from }) },
+    json
+  );
+}
+
+export async function runWorkflowPriority(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const target = itemTarget(values);
+  if (target === undefined || positionals[2] !== undefined)
+    return await fail(json, commands.WORKFLOW_PRIORITY_USAGE);
+  return await commands.workflowPriorityCommand(
+    route.host,
+    effectiveCwd,
+    { ...target, clear: values.clear === true },
     json
   );
 }
@@ -795,6 +825,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, pause, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, link, items, merged, landing, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, pause, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, end, link, items, merged, landing, priority, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

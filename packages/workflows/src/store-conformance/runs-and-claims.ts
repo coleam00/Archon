@@ -7,6 +7,7 @@ import {
   type OwnerlessResumeCursor,
 } from '../store';
 import { TERMINAL_WORKFLOW_STATUSES, readSourceRelease } from '../schemas/workflow-run';
+import { preparedWorkflowLaunchSchema } from '../schemas/resource-start';
 import type { WorkflowStoreHarness } from '../store-conformance';
 import {
   approval,
@@ -49,6 +50,33 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
         expect(await store.getWorkflowRun(run.id)).toEqual(before);
       }
     );
+
+    test('a run created without a reserved id carries an id resource admission accepts', async () => {
+      // A hand `--detach` start creates its row without reserving an id, then queues it for
+      // admission. A store that fell back to another id shape produced runs no admission
+      // could accept, and the detached process cancelled them a second later.
+      const run = await create(store);
+      expect(run.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+      const launch = {
+        version: 2 as const,
+        run: {
+          id: run.id,
+          workflow_name: run.workflow_name,
+          origin: { userId: run.origin?.userId ?? undefined },
+          codebase_id: 'codebase-1',
+          user_message: run.user_message,
+          metadata: {},
+        },
+        execution: {
+          cwd: '/tmp/checkout',
+          conversationId: 'conformance',
+          isolation: { kind: 'in-place' as const },
+        },
+      };
+      expect(preparedWorkflowLaunchSchema.safeParse(launch).success).toBe(true);
+      const reserved = crypto.randomUUID();
+      expect((await create(store, { id: reserved })).id).toBe(reserved);
+    });
 
     test('running metadata write merges only into a running run', async () => {
       const pending = await create(store);
@@ -97,6 +125,40 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
         inputs_values: { before: null, held: { commit: 'abc', result: null }, list: [null] },
       });
     });
+
+    test.each([
+      'update',
+      'running-update',
+      'pending-update',
+      'complete',
+      'pause',
+      'resolve',
+    ] as const)(
+      '%s removes a key its patch sets to null and keeps the nulls inside a value',
+      async writer => {
+        const metadata = { cleared: 'set', kept: 'set' };
+        const run =
+          writer === 'pending-update'
+            ? await create(store, { metadata })
+            : await running(store, { metadata });
+        const patch = { cleared: null, kept: { inner: null } };
+        if (writer === 'update') await store.updateWorkflowRun(run.id, { metadata: patch });
+        else if (writer === 'running-update')
+          expect(await store.updateWorkflowRunMetadataIfRunning(run.id, patch)).toBe(true);
+        else if (writer === 'pending-update')
+          expect(await store.updateWorkflowRunMetadataIfPending(run.id, patch)).toBe(true);
+        else if (writer === 'complete')
+          await store.completeWorkflowRun(run.id, { duration_ms: 1 }, patch);
+        else if (writer === 'pause') await store.pauseWorkflowRun(run.id, approval, patch);
+        else {
+          await store.pauseWorkflowRun(run.id, approval);
+          expect(await store.resolveApprovalGate(run.id, patch, [])).toEqual({ resolved: true });
+        }
+        const stored = (await store.getWorkflowRun(run.id))?.metadata;
+        expect(stored).not.toHaveProperty('cleared');
+        expect(stored?.kept).toEqual({ inner: null });
+      }
+    );
 
     test.each(['spawn', null, 42, undefined])(
       'top-level creation strips caller-supplied child provenance: %s',

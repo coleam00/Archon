@@ -72,7 +72,8 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
-| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`) and inputs filled from an earlier run's result (`result_of`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`), the outcomes that finish the run's item (`returns.ends`) and inputs filled from an earlier run's result (`result_of`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `observes` | `true` declares that the workflow's runs act on an item without being steps of it: an advice stage, a shadow judgment, a drain, a check after a merge. An observing run never stops, ends or moves its item. The stop and end rules read past it to the item's last step, so a stopped item stays listed while it runs and after it completes or fails, an ended item stays ended, and an observing run that fails is not listed itself. It can still leave asks and waits on the item. It cannot be combined with `returns.ends`. Default `false`. See [`returns.ends`](#workflow-signature-inputs-returns-and-inputs). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
@@ -327,7 +328,7 @@ Omitting the field inherits `assistants.<provider>.settingSources` from `.archon
 
 ### Plugins
 
-A Claude workflow node loads none of the Claude Code plugins installed on the machine: no plugin subagents, hooks, LSP servers, commands, skills or MCP servers. Your own settings, hooks, permissions and `CLAUDE.md` still load, and so do the plugins built into Claude Code (`@builtin`). A node that needs a plugin names it by its exact id, as `claude plugin list` prints it:
+A Claude workflow node loads none of the Claude Code plugins installed on the machine: no plugin subagents, hooks, LSP servers, commands, skills or MCP servers. Your own settings, hooks, permissions and `CLAUDE.md` still load, and so do the plugins built into Claude Code (`@builtin`) and any plugin your organization enforces at Managed scope, which `claude plugin list --json` reports with `"scope": "managed"`. A node cannot turn a Managed-scope plugin off, so Archon accepts it without the node naming it and logs `claude.managed_plugins_loaded` when it loads. A node that needs a plugin names it by its exact id, as `claude plugin list` prints it:
 
 ```yaml
 - id: triage
@@ -339,7 +340,7 @@ A Claude workflow node loads none of the Claude Code plugins installed on the ma
 
 A named plugin brings its agents, hooks, LSP servers and commands. Its skills reach the node only when `skills:` names them, and its MCP servers only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-claude-plugin)).
 
-The node fails before its first model turn when a named plugin is not installed, or when Claude Code reports a loaded plugin the node did not name, for example one synced from claude.ai or loaded by another route.
+The node fails before its first model turn when a named plugin is not installed, or when Claude Code reports a loaded plugin that the node did not name and that is neither built in nor installed at Managed scope, for example one synced from claude.ai or loaded by another route.
 
 A Codex workflow node works the same way. It loads none of the user's Codex plugins and no ChatGPT apps, while the user's `config.toml` settings, hooks and `AGENTS.md` still load. A node names a plugin by the id `codex plugin list` prints, such as `github@openai-curated`. A named Codex plugin brings its skills, which the node body invokes as `$<plugin>:<skill>`, and its hooks. Its MCP servers reach the node only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-codex-plugin)), and its apps stay off. A named plugin is turned on for the node even if you turned plugins off globally in Codex. The node fails before its turn starts when a named plugin is not installed in the Codex home in use.
 
@@ -1020,6 +1021,7 @@ Archon puts a failure it detects itself in a bucket by its kind:
 | A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
 | A cancelled node | FATAL | Never |
 | A provider error without a typed class | UNKNOWN | No (unless `on_error: all`) |
+| A failure recorded as `outcome_unknown`: the node may have had a side effect whose outcome Archon cannot know | FATAL | Never. See [A failure whose outcome is unknown](#a-failure-whose-outcome-is-unknown) |
 
 A failure recorded before Archon stored failure kinds counts as UNKNOWN.
 
@@ -1131,6 +1133,32 @@ Plain `archon workflow run` never resumes implicitly.
 **Session context on resume**: Handles required by an explicit `context: { resume: node-id }` selector are restored for completed nodes. The ambient sequential cursor is not reconstructed; a downstream node that relies on implicit inherited context should use an explicit selector or re-read durable artifacts.
 
 **Fresh start**: If zero nodes completed in the prior run, Archon starts fresh (no nodes to skip).
+
+### A failure whose outcome is unknown
+
+A node failure can record the kind `outcome_unknown`: the node may have had a side effect (a write, a call that timed out after sending) and Archon cannot know whether it happened. No built-in node records this kind yet; a node that writes through a tool is the intended first use.
+
+The rule: while a run holds a live unknown outcome, nothing continues it by itself. A node's failure is live while its latest stored record is that failure, unless it sits in a composed fan-out whose join, in the same loop round, completed after it (`join: all_done` absorbs a failed instance, as today).
+
+- The node is never retried, whatever its `retry.on_error` says.
+- When a node fails over a live unknown outcome it owns, the walk it ran in starts nothing more: no queued node of the same layer and no later layer, an `always_run` node or one with `trigger_rule: all_done` included. At the top level Archon fails the run right then with stop reason `outcome_unknown`, and nodes still running beside it are stopped, as at any run end. Inside a `loop_group` body or a composed fan-out instance, the body or instance ends there and its aggregate fails over it.
+- A node owns its own record and the records of what ran under it: the body of the `loop_group` it is, and the instances of the composed fan-out it is. Another node's record does not stop its walk. So a node that fails ordinarily while an instance of a running `join: all_done` fan-out holds such a failure records an ordinary failure (stop reason `node_error`), and a resume by hand past an ordinary failure still reaches the uncertain node and runs it again.
+- A pause that a parallel `wait:` or gate of the same pass published does not survive: the pass fails the run, not leaves it paused.
+- Every claim that would continue the run by itself is refused while the run holds a live unknown outcome anywhere: a timed or event wait coming due, an answered gate or wait, a source release, and a parent continued after the child it waited on. A run whose sibling's source is unreadable is failed instead of released. A node that fails this way after a provider usage limit fails the run before it waits.
+- `archon workflow attention` lists the failed run as `stopped`, naming the nodes whose outcome is unknown, also when it is a child run or has no item, until it is resumed or abandoned. A new run on its item does not close it.
+
+The operator decides what happens next: check what the node did, then resume the run with `archon workflow resume <run-id>`, which runs the failed node again when the pass reaches it, or discard it with `archon workflow abandon <run-id>`. The unknown outcome never refuses a resume by hand; the usual admission checks (the item, the run limit, a busy resource) still apply. Only that resume by hand runs an uncertain node again: a continuation by itself never does, and a join it recomputes gets back the failure its own join absorbed instead of running that instance again.
+
+What each aggregate does with a node or instance that fails this way:
+
+| Where it fails | What happens |
+|---|---|
+| A composed fan-out instance under `join: all_success` | The fan-out node fails once its instances finish, and the run ends with the reason |
+| A composed fan-out instance under `join: all_done` | A failed instance, as today: the other instances run, the join completes with the `archon_failed` marker in that slot, and the run goes on. A later failure is reported as any failure. A later pass that recomputes the join (its cached result went stale) gets that instance's recorded failure back and does not run it again. An instance whose failure only an inner fan-out's join absorbed runs again, so its ordinary failure is retried |
+| A `loop_group` body node | The body starts nothing more, the group fails, and the run ends with the reason. A loop group that completes over the failure still holds it |
+| A child run of a `workflow:` node or fan-out | The child run ends with the reason, and attention lists the child. The parent treats it as any failed child. A parent continued by itself does not drive that child again; a parent resumed by hand does |
+
+This is separate from `retryable: false`, which a `bash:`/`script:` contract failure records and which only stops the immediate retry of that node. A failure with `retryable: false` keeps the later layers, usage-limit wait, source release and stop reason of any other failure.
 
 ### Opting Out of Resume Caching
 
@@ -1832,6 +1860,12 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
   `null`. The engine never falls back to an older run; a node that needs an older one reads
   the item's runs itself. The start says on the run's conversation which run each input read,
   or why it is `null`, so a misspelled workflow name shows as "no completed run".
+- In a pack's workflow, a bare name in `result_of` names that pack's own workflow by its
+  `name:`, as `include:` does. In an installed pack the engine reads the runs of the pack's
+  workflow under its installed name (`owner/plugin:<entrypoint>`), so the pack reads the same
+  in the project copy and the installed one, and its own workflow wins over a project workflow
+  of the same name. A name the pack does not hold reads the project's workflow of that name;
+  to read another installed pack's workflow, write its qualified name.
 - A run on the item that the engine cannot read fails the starting run, naming that run: it
   may be the latest one, so no value is read in its place. An unreadable terminal record fails
   the starting run too.
@@ -1849,12 +1883,17 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
 - A run with no item is refused before it does any work, unless every `result_of` input is
   supplied. A `workflow:` child carries no item, so its parent passes the value through
   `with:`.
-- `result_of` with `default:` or `required: true` is contradictory, and the input is dropped at
-  load with a warning. A dry run has no item and previews an unsupplied `result_of` input as
-  `null`.
+- `result_of` with `default:` or `required: true` is contradictory, and the workflow is refused
+  at load, naming the input and both keys. A dry run has no item and previews an unsupplied
+  `result_of` input as `null`.
 
 `archon workflow runs --item <key>` shows, for each run, `hasResult`: whether a reader would
-get a value from it, and `resultCommit`: the commit its result holds at.
+get a value from it, `resultCommit`: the commit its result holds at, and `changeSize`: how
+large the change was when the run completed or failed (`files`, `added`, `removed`) from
+`base`, the commit the item's work was cut from, to `commit`, the clean commit it ended on.
+A run on a checkout another run left (a hand-off, or `--adopt`) keeps that run's base.
+`changeSize` is `null` when the checkout ended on no clean commit or no cut-from is known for
+its work, such as a branch reused with `--branch`, never zeros.
 
 ### The result that holds at this run's commit
 
@@ -1907,8 +1946,8 @@ inputs:
 - The commit is read from this run's starting checkout. A dirty checkout still reads at its
   HEAD commit, because a land merges commits, not worktree changes. A checkout at no commit
   reads `null`.
-- `at:` without `result_of:` is contradictory, and the input is dropped at load with a
-  warning. A dry run previews the input as `null`, as it does any unsupplied `result_of`.
+- `at:` without `result_of:` is contradictory, and the workflow is refused at load. A dry run
+  previews the input as `null`, as it does any unsupplied `result_of`.
 
 A result at a commit is not an approval by itself: it is whatever the stage returned there,
 and the reading node judges it. A land stage runs on the change's own checkout, for example
@@ -1947,7 +1986,8 @@ nodes:
 ```
 
 `item().runs[].resultCommit` and `archon workflow runs --item <key> --json` show the commit
-each run's result holds at, so a node that got `null` can say why.
+each run's result holds at, so a node that got `null` can say why. `changeSize` beside it lets
+a stage see whether the change grew since an earlier run on the item.
 
 ## Reading a project's items over a window
 
@@ -2404,7 +2444,8 @@ nodes:
 - **`inputs:`**: a map of input name → `{ required?, default?, description?, result_of?, at? }`. `required: true`
   and `default:` are mutually exclusive (a required input has no default; declaring both drops
   the key at load with a warning). `result_of: <workflow>` fills an unsupplied input with what
-  the latest completed run of that workflow on the run's item returned, and excludes both
+  the latest completed run of that workflow on the run's item returned (in a pack, a bare name
+  is the pack's own workflow), and excludes both
   (see [Reading an earlier run's result](#reading-an-earlier-runs-result)). `at: checkout`
   narrows `result_of` to the latest run whose result holds at this run's commit, read as
   `{ commit, result }` (see [The result
@@ -2463,28 +2504,62 @@ nodes:
 - **`returns.waits`**: a property of the `returns:` node's output, defined and required by the engine, that holds what
   the run's item now waits for outside Archon. See [Waits](#waits-what-an-item-waits-for-outside-archon).
 
-- **`returns.final`**: the outcomes after which the run's item needs nothing more, such as a
-  landed change. Each entry is a value `returns.outcome` can take: one of its `enum` values, or
+- **`returns.ends`**: the outcomes that finish the run's item, such as a landed change or a
+  dropped one. Each entry is a value `returns.outcome` can take: one of its `enum` values, or
   `succeeded` or `failed` for the boolean form. It needs `returns.outcome`, and a value the
-  outcome cannot take or one listed twice fails the workflow at load.
+  outcome cannot take or one listed twice fails the workflow at load. A workflow that declares
+  `observes: true` cannot declare it.
 
-  It decides when an item has stopped. A top-level run on an item stops the item when it
-  completes with an outcome that is not final, its end starts nothing (no
-  [run-ended binding](/guides/workflow-triggers/) starts from that outcome), and it leaves no
-  ask and no wait. Nothing follows such a run, so
+  A top-level run on an item that completes with one of these outcomes ends the item. The
+  write that completes the run records the same end
+  [`archon workflow end`](/reference/cli/#workflow-end) records, `via: engine`, from the run
+  and its `returns:` node, with the reason `Workflow '<name>' ended the item with outcome
+  '<value>'`, followed by the `returns.summary` value when the run gave one. It does so even
+  when the run also leaves an ask or a wait. The item leaves the attention queue, the asks
+  and waits still open on it included (they stay open, and show again if a newer step opens
+  the item), and the item read shows the end. The end sees the steps up to the finishing
+  run, so a step started on the item after it, even one already finished, opens it. A stage the outcome starts does not
+  keep the end from being written: an observing stage (a check after the merge) leaves it
+  holding, and a step started on the item opens it, as any new step opens an end.
+
+  Every other ending of a step stops its item. A top-level run on an item, of a workflow that
+  does not declare `observes: true`, stops the item when it completes with an outcome that
+  is not in `returns.ends`, or with no outcome at all, and leaves no ask and no wait. What
+  the outcome is called does not matter, and no timer is involved. The write that completes
+  the run records the stop, and
   [`archon workflow attention`](/reference/cli/#workflow-attention) lists the item as
-  `stopped` until another run starts on the item, whatever its status. A run on no item, a run
-  that ended in a final outcome, and a run that left an ask or a wait stop nothing. A
-  workflow that declares no `final` has none, so every unbound outcome stops its item.
+  `stopped` until another step starts on the item, whatever its status, unless the item's
+  [merge is recorded](/reference/cli/#workflow-merged). A stage the run's end starts on the
+  item through a [run-ended binding](/guides/workflow-triggers/), its settled asks or one of
+  its nodes is such a step once its run exists; while the start waits to be prepared (during
+  an install hold too) or in its resource's queue, the stop is held back. A queued start of a
+  stage that declares `observes: true` holds nothing back, and its run is no step, so the
+  stop shows. A start not yet prepared has no role, so it opens an end only once it is
+  prepared as a step. A `linked` binding starts on other items and
+  moves nothing here. A
+  run on no item, an observing run, a run that ended its item, and a run that left an ask or
+  a wait stop nothing. A run whose end does start a binding also stops its item when
+  admission refuses that start at its
+  [start limit](/guides/workflow-triggers/#limit-how-often-a-stage-starts-on-an-item), or
+  when that start is refused before launch, once the run's own asks and waits are closed; the
+  listing then names the limit or the refusal. `archon validate workflows` warns for each
+  outcome of a step workflow that does not end the item and that no binding its pack
+  declares starts a step on (a binding that starts only an observing stage counts for none), saying when an ask or wait the workflow can leave would keep
+  the item moving instead.
+
+  `returns.final`, which marked an outcome as never stopping its item, was removed. A
+  workflow that declares it fails to load with a message naming `returns.ends` and
+  `observes`.
 
 - **`returns.summary`**: a string property of the `returns:` node's output that the attention
-  queue shows, as one line, on a `stopped` item: why the stage stopped. The node's
+  queue shows, as one line, on a `stopped` item: why the stage stopped. An end the run
+  records gives it in its reason. The node's
   `output_format` must declare it with `type: string`; it need not be required, and a run that
   leaves it out shows none. It is read only because it is declared here, never because a
   property is called `summary`, and it changes nothing about the run.
 
 ```yaml
-returns: { node: result, outcome: stage, final: [landed], summary: why }
+returns: { node: result, outcome: stage, ends: [landed], summary: why }
 nodes:
   - id: result
     prompt: Say where the change stands.
@@ -2496,8 +2571,9 @@ nodes:
       required: [stage]
 ```
 
-A run of this workflow that ends `landed` stops nothing. One that ends `replan` with no
-binding for it and no ask lists its item as `stopped` with `why` as the summary.
+A run of this workflow that ends `landed` ends its item, with `why` in the reason. One that
+ends `replan` with no binding for it and no ask lists its item as `stopped` with `why` as the
+summary.
 
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
@@ -2538,9 +2614,10 @@ none. An ask holds:
 - `context`: what is at stake and why it came up.
 - `options`: at least two, each with a kebab-case `id`, what it `does` and what it `cost`s.
   The id `other` is reserved: every ask also offers it, answered with text.
-- `recommendation`: `{ option, why }`, where `option` names one of the ask's options, or
-  `null` when the stage has no basis to choose between them. The key is still required, so a
-  `bash:` or `script:` node writes `"recommendation": null` rather than leaving it out.
+- `recommendation`: `{ option, why }`, where `option` names one of the ask's options. When the
+  stage has no basis to choose between them, `option` is `null` and `why` says why it
+  recommends none. A whole `null` recommendation, with no reason, is still accepted. The key is
+  required either way, so a `bash:` or `script:` node writes it rather than leaving it out.
 - `artifacts`: [artifact pointers](#a-small-result-that-points-at-a-large-file) the operator
   should read to decide; empty when there are none.
 
@@ -2580,7 +2657,8 @@ returns:
   ask offers anyway. `options` without `asks` fails to load.
 - The node writes no options. Its ask schema has no `options` field, and
   `recommendation.option` is limited to the declared ids (an `enum`), with each option's
-  `does` and `cost` in its description. The recommendation may still be `null`.
+  `does` and `cost` in its description. The recommendation's `option` may still be `null`,
+  with its `why`, and so may the whole recommendation.
 - Output that carries `options`, or recommends an id outside the set, fails the node's output
   validation like any other schema miss: an agent node is asked again with the errors, and a
   `bash:` or `script:` node fails. Both errors name the declared ids. A wrong recommendation
@@ -2612,13 +2690,19 @@ What the engine does with them:
 - **Only a top-level run opens them.** A `workflow:` child has no item of its own; its asks stay
   data in the result it hands its parent.
 - **A newer set replaces the open one.** A later completed run of the same workflow on the same
-  item closes that workflow's open asks as `replaced`, even when it leaves none itself.
+  item closes that workflow's open asks as `replaced`, even when it leaves none itself. While
+  an end holds on the item ([`returns.ends`](#workflow-signature-inputs-returns-and-inputs), or
+  `archon workflow end`), its open asks stay open and out of the attention queue.
 - **They are answered by ref.** Open asks are listed in the attention queue with no run behind
   them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
   --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
   tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
-- **An ask may carry no recommendation.** One whose `recommendation` is `null` shows as having
-  none in `archon workflow attention`, in the console and in the item's tracker comment.
+- **An ask may carry no recommendation.** One whose `recommendation` is `null`, or names no
+  option, shows as having none in `archon workflow attention`, in the console and in the
+  item's tracker comment. The stage's reason for recommending none (the `why` of a
+  recommendation whose `option` is `null`) shows in the recommendation's place: the stored ask
+  keeps it as `no_recommendation`, with `recommendation` stored as `null`, and the attention
+  item carries it as `noRecommendation`. The engine never writes a reason of its own.
   `workflow answer --ref <ref> --recommended` on it is refused, and the ask stays open: choose
   one of its options. An Archon binary from before this field could be `null` reports such an
   ask as unreadable and leaves it out of its queue; answer it with a binary that knows it.
@@ -2640,8 +2724,9 @@ What the engine does with them:
 A stage that has to wait for something outside Archon (a change's checks finishing, a review
 arriving, a deploy) ends instead of sleeping, and says what its item now waits for.
 `returns: { node: host, waits: waits }` names the property of the returns node's output that
-holds the waits. The run completes and holds no agent session, checkout or capacity slot while
-the item waits. A source plugin's event binding with `wake` starts the next stage on the item
+holds the waits. The run completes and releases its agent session, capacity slot and claim on
+the checkout while the item waits; its worktree is kept only for a wake binding of its pack that
+takes its checkout (`wake.checkout: waiting-run`). A source plugin's event binding with `wake` starts the next stage on the item
 when the event arrives: see [start a stage when what an item waits for
 happens](/guides/workflow-triggers/#start-a-stage-when-what-an-item-waits-for-happens).
 
@@ -2653,11 +2738,17 @@ out of `output_format`. An empty list means the item waits for nothing. A wait h
   lowercase letters, digits and hyphens. Each name appears once in a set.
 - `about`: the exact value the event will carry, such as the full commit id of the change's
   head. Only an event with this value meets the wait.
+- `subject`: the issue or pull request the event will be about, as `{ kind: pr, number: 34 }`
+  or `{ kind: issue, number: 12 }`, or `null` when the event names none, as checks on a commit
+  do. A review on pull request 34 has subject `{ kind: pr, number: 34 }` also when the item is
+  keyed by its issue. The stage states it; the engine does not default it from the item's
+  links. A model is given it as required. A bash or script returns node may leave it out,
+  and an omitted subject reads as `null`.
 - `within_minutes`: how long after the run completes the event is expected.
 
 The property's description, which the model reads with the schema, reads:
 
-> What the item now waits for outside Archon, such as checks finishing or a review arriving on a change. What happens after: this run ends and holds nothing. Each wait opens on the item the run is for. When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item. An event about any other value (an older commit, say) starts nothing. The waits are alternatives: the first one met closes them all. When the set is still open past the time of any of them, the item is listed for an operator as overdue, naming what it waits for. A later completed run of this workflow on the same item replaces the waits still open. Leave the list empty when the item waits for nothing.
+> What the item now waits for outside Archon, such as checks finishing or a review arriving on a change. What happens after: this run ends, and nothing of it keeps running. Each wait opens on the item the run is for. When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item. An event about any other value (an older commit, say) starts nothing. Name the issue or pull request the event will be about as `subject` when the event names one: a review names its pull request, while checks name only a commit. The waits are alternatives: the first one met closes them all. When the set is still open past the time of any of them, the item is listed for an operator as overdue, naming what it waits for. A later completed run of this workflow on the same item replaces the waits still open. Leave the list empty when the item waits for nothing.
 
 The workflow fails to load, naming `returns.waits`, for the same reasons as `returns.asks`:
 no returns node, a returns node with no object `output_format` the engine enforces, a
@@ -2671,7 +2762,8 @@ What the engine does with them:
   no item, is refused before any node runs, as for asks. The file store holds no items.
 - **They open with the completion.** The waits open on the run's item in the write that
   completes the run, and a later completed run of the same workflow on the same item closes the
-  ones still open as `replaced`, even when it leaves none. Only a top-level run opens them.
+  ones still open as `replaced`, even when it leaves none. While an end holds on the item, its
+  open waits stay open and out of the attention queue. Only a top-level run opens them.
 - **They are one set, met once.** The waits a run leaves are alternatives. The first event that
   meets one closes the whole set as met and starts the binding's stage on the item, in the
   transaction that records the event. Another delivery of the same event, or a second event
@@ -2682,6 +2774,12 @@ What the engine does with them:
   recorded on its receipt as not started, with why. The engine does not read the forge's current
   head, so a push alone replaces no wait. Nothing in the event's own payload stands in for this
   check.
+- **A wait that names a subject is met only by an event about it.** For an event that names
+  its subject, a binding that maps `item` matches only a wait on that item, and of those only
+  one whose `subject` is the event's or names none. A binding that maps no item matches only
+  an open wait whose `subject` is the event's, together with `about`, and starts on the wait's
+  own item. That is how an item keyed by its issue waits for a review on its pull request. An
+  event that names no subject, such as a check, meets only a wait that names none.
 - **The deadline raises attention and wakes nothing.** An open set past the deadline of any of
   its waits is listed in the attention queue as an `overdue_wait` item with ref `wait:<run-id>`,
   naming each wait's event and `about` and when it opened. It stays open: a late event still
@@ -2860,7 +2958,7 @@ same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
 `INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
 
 The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
-shape as a workflow's, plus a `type`. The file holds only `inputs:`,
+shape as a workflow's, plus a `type` and the optional `section` and `file` keys. The file holds only `inputs:`,
 [`bindings:`](#pack-bindings) and [`forge:`](#pack-forge-needs):
 
 ```yaml
@@ -2876,11 +2974,39 @@ inputs:
   reviewers:
     type: list            # comma-separated text, no empty items
     description: who to request reviews from
+  review_policy:
+    description: the project's review policy
+    section: Policies     # optional grouping name
+    file: true            # string only: the value is a path to a file
+    default: docs/review-policy.md
 ```
 
 The declaration sits in a dot folder so neither workflow loader reads it as a workflow. Values
 stay text, as every `--input` is. An invalid declaration fails every workflow of the pack at
 load, naming the file and the key.
+
+Two optional keys are for a reader that lists a pack's settings, such as a settings page:
+
+- `section:` names the group a setting belongs to. Settings with the same section belong
+  together, in the order the pack lists them; a setting without one belongs to a default group.
+  How groups are shown is the reader's choice. The engine does not interpret the name.
+- `file: true` says the value is a path to a file, relative to the project or absolute. It is
+  allowed only on a `string` setting. A fresh run of a workflow that reads the setting is
+  refused at start when its value names a path that does not exist or is not a file, and
+  [`archon validate workflows`](/reference/cli/#validate-workflows-name) reports the same
+  value on that workflow. The value is resolved as the run resolves it: supplied, else the
+  project file, else the workflow's input default, else the pack's default. A workflow reads
+  the setting when `$INPUTS.<name>` appears anywhere in it, including its included blocks
+  and command files, or a bash or script body reads `INPUTS_<NAME>` (or `input('<name>')`)
+  by its literal name. A computed lookup is not seen. A setting no node of the workflow reads
+  does not block it, and an empty value is not an error. A start a binding makes is refused
+  before launch and [stops its item](/guides/workflow-triggers/) with reason
+  `file_setting_missing`, except a start in another run's checkout (`checkout: ended-run` or
+  `checkout: asking-run`), whose run checks the file in that checkout when it starts.
+
+An unknown key on a setting is ignored, so a pack can use a key a newer Archon adds, and
+`archon validate workflows` lists each one as a `parse_warning`. Releases before this one
+refuse an unknown key on a setting, so they fail to load a pack that sets `section:` or `file:`.
 
 A project sets the values in `.archon/packs/<pack>.yaml`, under `settings:` only:
 
@@ -2902,8 +3028,8 @@ that is after its worktree was created. A `required` setting must be set there, 
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Run [`archon validate workflows`](/reference/cli/#validate-workflows-name) to check project
-pack settings before starting a run. It reports invalid values and undeclared names against
-each discovered workflow's pack declaration. Required values that an invocation can supply
+pack settings before starting a run. It reports invalid values, undeclared names and missing
+files named by `file` settings against each discovered workflow's pack declaration. Required values that an invocation can supply
 are checked only at run start.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
@@ -3004,14 +3130,15 @@ bindings:
     event:
       kind: check.changed
       actions: [changed]
-    wake: { workflow: review-host, wait: checks, about: check.revision }  # meets an open wait
+    wake: { workflow: review-host, wait: checks, about: check.revision, checkout: waiting-run }  # meets an open wait
     inputs:
       waited: { wait: true }          # the met wait; event bindings with wake only
+      change: { input: change }       # an input of the run that left the wait; wake bindings too
   follow-up:                          # no schedule, event, run_ended or asks_settled: fire-only
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
-    item: { field: number, prefix: pr- }  # a key of the fire's --inputs
+    item: { field: number, prefix: pr- }  # a key of the fire's event inputs
   fix:
     workflow: review-fix
     resource: fix
@@ -3114,9 +3241,15 @@ An event binding with `wake:` starts its workflow on the item of an open
 [wait](#waits-what-an-item-waits-for-outside-archon): the wait `wake.wait` that a run of
 `wake.workflow`, a workflow of this pack, left, whose `about` is exactly the value of the event
 field `wake.about`. `{ wait: true }` passes the met wait. When the event names its subject (a
-review, a pull request or issue event), the binding also maps `item:`, and only a wait on that
-item matches; the GitHub source plugin refuses the binding without it. A check names no single
-subject and maps no `item:`. See
+review, a pull request or issue event) and the binding maps `item:`, only a wait on that item
+matches, and a wait that names a subject only for an event about it. Without `item:`, only a
+wait whose `subject` is the event's matches, on whichever item it is. A check names no single
+subject and maps no `item:`; it meets only a wait whose `subject` is `null`.
+`{ input: <name> }` reads an input of the run that left the met wait, which `wake.workflow` must
+declare, and `{ item: answers }` the item's answers. There is no `{ result }` mapping: a wake
+start does not read the waiting run's returned value. `wake.checkout: waiting-run` starts the
+stage in the checkout that run recorded when it completed, and takes no `isolation`; a run
+records it only when its own pack declares such a binding on it for a wait it leaves. See
 [start a stage when what an item waits for happens](/guides/workflow-triggers/#start-a-stage-when-what-an-item-waits-for-happens).
 
 A stage that needs both a clock and a hand-off declares two bindings with the
@@ -3134,18 +3267,19 @@ The declaration is validated when the pack loads, and an invalid one fails every
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
 input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an
 event binding, a `{ wait: true }` input to an event binding with `wake:` and at most once, an
-`{ input: <name> }` or `{ result: <pointer> }` input to a run-ended or asks-settled binding, and
-an `{ answers: true }` input to an asks-settled binding, and an `{ item: answers }` input to an
-asks-settled or a run-ended binding without `linked`. Bindings sharing a resource need not agree on its capacity. An `event:` selector
+`{ input: <name> }` input to a run-ended, asks-settled or wake binding, a `{ result: <pointer> }`
+input to a run-ended or asks-settled binding, an `{ answers: true }` input to an asks-settled
+binding, and an `{ item: answers }` input to an asks-settled or wake binding or a run-ended
+binding without `linked`. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 `item:` names the [item](/reference/cli/#items) a start is on, from one field of its event and
 an optional fixed `prefix`; see
 [putting a start on its event's item](/guides/workflow-triggers/#put-a-start-on-the-item-its-event-names).
 An event binding's `field` is a source plugin event field, checked when the binding is
-generated; a fire-only binding's is a key of the fire's `--inputs`. A timer binding with
-`item:` is refused at load, since a tick is about no item, and so is a run-ended binding with
-`item:`, since its start is on the ended run's item.
+generated; a fire-only binding's is a key of the fire's event inputs (`--inputs` or
+`--input`). A timer binding with `item:` is refused at load, since a tick is about no
+item, and so is a run-ended binding with `item:`, since its start is on the ended run's item.
 
 ### Pack forge needs
 
@@ -3301,7 +3435,9 @@ when the child declares named `inputs:` or when its `command:` bodies need named
 - **Failure & recovery.** A failed child fails the node and the parent run. Recovery is
   resume-through-parent: `/workflow resume <parentRunId>` re-drives the failed child once.
   `retry:` is **not** allowed on a `workflow:` node (a retry would orphan the first child
-  run).
+  run). When the parent's process died while the child was running, the child is left
+  `running`: resuming the parent pauses it blocked on that child and names
+  `archon workflow resume <childRunId>`, which continues the child and then the parent.
 - **Cancel cascade.** Abandoning the parent attempts to cancel discovered descendants except completed
   and cancelled runs, within the [500-parent expansion bound](#max_parallel-bounds-concurrency-not-count).
   Cancellation is cooperative: their executors abort at the next status check, within ~10s. A running

@@ -19,7 +19,9 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 import type {
   ObservedLabels,
+  ObservedOpenedIssues,
   SourceObservation,
+  UnservedBinding,
   WebhookSourcePlugin,
   WebhookSourcePluginFactory,
   WebhookSourceResult,
@@ -34,25 +36,32 @@ type EvaluatedBinding = NonNullable<
 >[number];
 
 /**
- * The wake a binding hands the engine: the value of its `about` field, which the engine
- * matches against the open waits. The plugin reads the value and compares nothing.
+ * The wake a binding hands the engine: the value of its `about` field and the issue or pull
+ * request the event names, which the engine matches against the open waits, and the rest as
+ * configured. The plugin reads the values and compares nothing; what `inputs` and `checkout`
+ * read from the waiting run is the engine's to resolve.
  */
 function wakeOf(
   wake: NonNullable<z.infer<typeof githubSourceBindingSchema>['wake']>,
   event: ForgeEvent
 ): { wake: BindingWake } | { reason: string } {
-  const about = readForgeEventField(event, wake.about.field);
+  const { workflow, about: aboutField, ...carried } = wake;
+  const about = readForgeEventField(event, aboutField.field);
+  const kind = readForgeEventField(event, 'subject.kind');
+  const number = readForgeEventField(event, 'subject.number');
   if (typeof about === 'string' && about !== '')
     return {
       wake: {
-        workflowName: wake.workflow,
-        wait: wake.wait,
+        ...carried,
+        workflowName: workflow,
         about,
-        ...(wake.input === undefined ? {} : { input: wake.input }),
+        ...((kind === 'pr' || kind === 'issue') && typeof number === 'number'
+          ? { subject: { kind, number } }
+          : {}),
       },
     };
   const state = about === undefined || about === null || about === '' ? 'missing' : 'not text';
-  return { reason: `Wake: field '${wake.about.field}' is ${state}` };
+  return { reason: `Wake: field '${aboutField.field}' is ${state}` };
 }
 
 /** The start one configured binding makes of `event`, or why it makes none. */
@@ -61,15 +70,22 @@ function evaluateBinding(
   event: ForgeEvent
 ): { start: ResourceStartBindingIntent } | { skipped: EvaluatedBinding } {
   const bindingRevision = createHash('sha256').update(JSON.stringify(binding)).digest('hex');
-  const skipped = (status: EvaluatedBinding['status'], reason: string) => ({
-    skipped: { bindingId: binding.bindingId, bindingRevision, status, reason },
-  });
   const { selector, inputMapping, item, wake, ...intent } = binding;
+  // The item is mapped first, so a refusal past it says which item it was for.
+  const itemKey = item ? mappedItemKey(item, readForgeEventField(event, item.field)) : undefined;
+  const skipped = (status: EvaluatedBinding['status'], reason: string) => ({
+    skipped: {
+      bindingId: binding.bindingId,
+      bindingRevision,
+      status,
+      reason,
+      ...(itemKey?.ok === true ? { itemKey: itemKey.key } : {}),
+    },
+  });
   if (!matchForgeEvent(selector, event)) return skipped('unmatched', 'selector_did_not_match');
+  if (itemKey && !itemKey.ok) return skipped('rejected', `Item: ${itemKey.reason}`);
   const mapped = mapForgeInputs(inputMapping, event);
   if (!mapped.ok) return skipped('rejected', `Input '${mapped.input}': ${mapped.reason}`);
-  const itemKey = item ? mappedItemKey(item, readForgeEventField(event, item.field)) : undefined;
-  if (itemKey && !itemKey.ok) return skipped('rejected', `Item: ${itemKey.reason}`);
   const woken = wake ? wakeOf(wake, event) : undefined;
   if (woken && 'reason' in woken) return skipped('rejected', woken.reason);
   // Field mappings carry event content; literal mappings are the operator's own values.
@@ -131,10 +147,13 @@ function targetOf(
   if (binding.selector.kind === 'check.changed' && field === 'check.revision')
     return { kind: 'commit', remote: wait.remote, revision: wait.about };
   if (binding.selector.kind === 'review.changed' && field === 'review.commit') {
-    const number = prNumberOf(binding, wait.itemKey);
-    return number === undefined
-      ? { reason: `item '${wait.itemKey}' names no pull request under the binding's item mapping` }
-      : { kind: 'pr', remote: wait.remote, number };
+    const { subject } = wait;
+    const number = subject === null ? prNumberOf(binding, wait.itemKey) : subject.number;
+    if (subject?.kind === 'issue' || number === undefined)
+      return {
+        reason: `the wait names no pull request, as its subject or as item '${wait.itemKey}'`,
+      };
+    return { kind: 'pr', remote: wait.remote, number };
   }
   return { reason: `${binding.selector.kind} wakes about ${String(field)} are not observed` };
 }
@@ -212,7 +231,7 @@ async function observeWaits(
   sourceInstanceId: string,
   config: GitHubSourceConfig,
   { waits, forge }: ObserveInput
-): Promise<Omit<SourceObservation, 'labelAcceptances' | 'labelFailures'>> {
+): Promise<Omit<SourceObservation, 'labelAcceptances' | 'labelFailures' | 'openedIssueFailures'>> {
   const { targets, unserved } = planTargets(config, waits);
   const failed: SourceObservation['failed'] = [];
   const acceptances: SourceReceiptAcceptance[] = [];
@@ -328,8 +347,16 @@ function waitAcceptances(
         sourceActor: null,
       },
       outcome: 'matched',
-      // The observation knows the wait's item, so the start goes to that item only.
-      bindings: [{ ...evaluated.start, itemKey: wait.itemKey }],
+      // Matched as its webhook's would be, and only against the wait on the item this
+      // observation is for, which stays apart from any item the binding maps.
+      bindings: [
+        {
+          ...evaluated.start,
+          ...(evaluated.start.wake && {
+            wake: { ...evaluated.start.wake, observedItemKey: wait.itemKey },
+          }),
+        },
+      ],
     });
   }
   return { acceptances, unserved: [...rejections].map(reason => ({ wait, reason })) };
@@ -357,6 +384,131 @@ function labelReadsOf(config: GitHubSourceConfig): ObservedLabels {
     else for (const label of new Set(names)) reads.push({ bindingId, repo: read.repo, label });
   }
   return { reads, unserved };
+}
+
+/**
+ * The opened-issue reads this source's `issue.lifecycle` bindings name, one per binding,
+ * with the opened-issue bindings it cannot observe; and, apart from those, the bindings of
+ * a kind no observe read serves. A binding with `wake` is the wait observation's, which
+ * reports per wait.
+ */
+function openedIssueReadsOf(config: GitHubSourceConfig): {
+  opened: ObservedOpenedIssues;
+  other: UnservedBinding[];
+} {
+  const reads: ObservedOpenedIssues['reads'] = [];
+  const unserved: UnservedBinding[] = [];
+  const other: UnservedBinding[] = [];
+  for (const binding of config.bindings) {
+    const { selector, bindingId } = binding;
+    if (selector.kind === 'label.changed' || binding.wake !== undefined) continue;
+    if (selector.kind !== 'issue.lifecycle') {
+      // A source that receives webhooks gets these events by webhook.
+      if (config.webhookSecretEnv === undefined)
+        other.push({ bindingId, reason: `a ${selector.kind} event is not observed` });
+      continue;
+    }
+    if (config.webhookSecretEnv !== undefined)
+      unserved.push({
+        bindingId,
+        reason: 'this source receives webhooks; issue events arrive by webhook',
+      });
+    else if (!selector.actions.includes('opened'))
+      unserved.push({ bindingId, reason: 'only an opened issue is observed' });
+    else if (selector.repository === undefined)
+      unserved.push({ bindingId, reason: 'the selector names no repository to list' });
+    else if (selector.repository.host !== config.host)
+      unserved.push({ bindingId, reason: `the selector's repository is not on ${config.host}` });
+    else reads.push({ bindingId, repo: { host: config.host, path: selector.repository.path } });
+  }
+  return { opened: { reads, unserved }, other };
+}
+
+/**
+ * The `issue.lifecycle` opened event a webhook would have carried for each issue an
+ * opened-issue read lists. The engine hands a read on only after its first sight, from the
+ * `since` it keeps, so every issue listed is new and starts its binding once. An issue
+ * opened and closed between two passes is not listed. Without `openedIssues` (an engine
+ * that predates them) nothing is read and the result has no `openedIssueFailures`, which
+ * that engine would refuse.
+ */
+async function observeOpenedIssues(
+  sourceInstanceId: string,
+  config: GitHubSourceConfig,
+  { openedIssues, forge }: ObserveInput
+): Promise<
+  Pick<SourceObservation, 'acceptances'> & Partial<Pick<SourceObservation, 'openedIssueFailures'>>
+> {
+  if (openedIssues === undefined) return { acceptances: [] };
+  const acceptances: SourceReceiptAcceptance[] = [];
+  const openedIssueFailures: SourceObservation['openedIssueFailures'] = [];
+  const receivedAt = new Date().toISOString();
+  for (const { bindingId, repo, since } of openedIssues) {
+    const binding = config.bindings.find(entry => entry.bindingId === bindingId);
+    if (binding === undefined) continue;
+    let listed: Awaited<ReturnType<ObserveInput['forge']['issuesOpened']>>;
+    try {
+      listed = await forge.issuesOpened({ repo, since });
+    } catch (error) {
+      openedIssueFailures.push({ bindingId, reason: errorText(error) });
+      continue;
+    }
+    for (const issue of listed.items) {
+      const result = openedIssueAcceptance(sourceInstanceId, receivedAt, binding, repo, issue);
+      if (result === undefined) continue;
+      if (result.kind === 'failed') openedIssueFailures.push({ bindingId, reason: result.reason });
+      else acceptances.push(result.acceptance);
+    }
+  }
+  return { acceptances, openedIssueFailures };
+}
+
+type OpenedIssue = Awaited<ReturnType<ObserveInput['forge']['issuesOpened']>>['items'][number];
+
+/**
+ * The acceptance one opened issue makes for one binding; why the binding rejects it; or
+ * nothing, when the binding does not select the event.
+ */
+function openedIssueAcceptance(
+  sourceInstanceId: string,
+  receivedAt: string,
+  binding: GitHubSourceBinding,
+  repo: { host: string; path: string },
+  issue: OpenedIssue
+):
+  | { kind: 'accepted'; acceptance: SourceReceiptAcceptance }
+  | { kind: 'failed'; reason: string }
+  | undefined {
+  const event = {
+    kind: 'issue.lifecycle',
+    action: 'opened',
+    issue: { repo, number: issue.ref.number },
+    state: issue.state,
+  } satisfies ForgeEvent;
+  const evaluated = evaluateBinding(binding, event);
+  if ('skipped' in evaluated)
+    return evaluated.skipped.status === 'rejected'
+      ? {
+          kind: 'failed',
+          reason: `issue ${String(issue.ref.number)}: the binding rejects the event: ${evaluated.skipped.reason}`,
+        }
+      : undefined;
+  const acceptance: SourceReceiptAcceptance = {
+    receipt: {
+      id: randomUUID(),
+      sourceInstanceId,
+      // A persisted contract: one delivery per issue and binding, so an issue listed again,
+      // by a later pass or a restarted process, is a replay and starts once.
+      deliveryId: `observe:issue-opened:${repo.host}/${repo.path}#${String(issue.ref.number)}:${binding.bindingId}`,
+      contentDigest: createHash('sha256').update(JSON.stringify(event)).digest('hex'),
+      receivedAt,
+      occurredAt: issue.createdAt,
+      sourceActor: issue.author == null ? null : { source: sourceInstanceId, id: issue.author.id },
+    },
+    outcome: 'matched',
+    bindings: [evaluated.start],
+  };
+  return { kind: 'accepted', acceptance };
 }
 
 /** The repository a label binding lists, or why it cannot be observed. */
@@ -489,10 +641,7 @@ async function labelAcceptance(
     actor: added.actor,
   } satisfies ForgeEvent;
   const evaluated = evaluateBinding(binding, event);
-  if ('skipped' in evaluated)
-    return evaluated.skipped.status === 'rejected'
-      ? failure(`the binding rejects the event: ${evaluated.skipped.reason}`)
-      : undefined;
+  if ('skipped' in evaluated && evaluated.skipped.status !== 'rejected') return undefined;
   const receipt: SourceReceiptInput = {
     id: randomUUID(),
     sourceInstanceId,
@@ -510,16 +659,32 @@ async function labelAcceptance(
   // The two clocks are the forge's and this host's, so an add within their skew of the
   // first sight can fall on either side of it.
   const seen = read.seenSince === null || Date.parse(added.at) < Date.parse(read.seenSince);
+  if (seen)
+    return {
+      kind: 'accepted',
+      acceptance: {
+        receipt,
+        outcome: 'unmatched',
+        reason: 'label was on the item when the binding was first observed',
+        bindings: [],
+      },
+    };
+  // A refused add is recorded once, as a webhook delivery's refusal is: its receipt names
+  // the refused binding and why, so it is not read and reported again on every pass.
+  if ('skipped' in evaluated)
+    return {
+      kind: 'accepted',
+      acceptance: {
+        receipt,
+        outcome: 'unmatched',
+        reason: 'the binding rejects the event',
+        bindings: [],
+        evaluatedBindings: [evaluated.skipped],
+      },
+    };
   return {
     kind: 'accepted',
-    acceptance: seen
-      ? {
-          receipt,
-          outcome: 'unmatched',
-          reason: 'label was on the item when the binding was first observed',
-          bindings: [],
-        }
-      : { receipt, outcome: 'matched', bindings: [evaluated.start] },
+    acceptance: { receipt, outcome: 'matched', bindings: [evaluated.start] },
   };
 }
 
@@ -535,12 +700,21 @@ const createGitHubWebhookSource: WebhookSourcePluginFactory = ({
     config.webhookSecretEnv === undefined ? undefined : process.env[config.webhookSecretEnv];
   if (config.webhookSecretEnv !== undefined && !secret)
     throw new Error('GitHub source plugin webhook secret is unavailable');
+  const { opened, other } = openedIssueReadsOf(config);
   return {
     observedLabels: labelReadsOf(config),
+    observedOpenedIssues: opened,
+    unservedBindings: other,
     async observe(input) {
       const waits = await observeWaits(sourceInstanceId, config, input);
       const labels = await observeLabels(sourceInstanceId, config, input);
-      return { ...waits, ...labels };
+      const issues = await observeOpenedIssues(sourceInstanceId, config, input);
+      return {
+        ...waits,
+        ...labels,
+        ...issues,
+        acceptances: [...waits.acceptances, ...issues.acceptances],
+      };
     },
     async receive(request): Promise<WebhookSourceResult> {
       if (

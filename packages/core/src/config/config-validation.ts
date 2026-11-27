@@ -18,6 +18,11 @@ import {
   platformStreamingSchema,
   workflowContinuationConfigSchema,
 } from './config-types';
+import {
+  providerCapsOf,
+  providerConcurrencySchema,
+  unknownProvidersDetail,
+} from './provider-concurrency';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -205,6 +210,29 @@ export function validateConversationConcurrencyConfig(parsed: unknown, configPat
       'Invalid concurrency config',
       configPath,
       "'concurrency.maxConversations' must be a finite positive integer."
+    );
+  }
+}
+
+/**
+ * Provider caps by the rules provider admission reads them with. Only a settings write runs
+ * this: admission already refuses provider attempts over a bad cap, and refusing at load would
+ * break every config read (chat, CLI, server) over one cap typo.
+ */
+export function validateProviderConcurrencyConfig(parsed: unknown, configPath: string): void {
+  const result = providerConcurrencySchema.safeParse(parsed);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid concurrency config', configPath, issues);
+  }
+  const { unknownKeys } = providerCapsOf(result.data);
+  if (unknownKeys.length > 0) {
+    throw new InvalidConfigError(
+      'Invalid concurrency config',
+      configPath,
+      unknownProvidersDetail(unknownKeys)
     );
   }
 }

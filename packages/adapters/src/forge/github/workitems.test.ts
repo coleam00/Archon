@@ -631,6 +631,57 @@ test('the latest add of the exact label is read across pages; a label never adde
   expect(await read('missing')).toMatchObject({ ok: true, result: { value: { added: null } } });
 });
 
+test('opened issues are read newest first down to the cutoff, without pull requests', async () => {
+  const row = (number: number, createdAt: string, pr = false) => ({
+    number,
+    repository_url: 'https://api.github.com/repos/owner/repo',
+    labels: [],
+    html_url: `https://github.com/owner/repo/issues/${String(number)}`,
+    title: 'new',
+    body: null,
+    state: 'open',
+    created_at: createdAt,
+    user: { id: 7, login: 'reporter', type: 'User' },
+    ...(pr ? { pull_request: {} } : {}),
+  });
+  // A full first page, all at or after the cutoff and one a pull request; the second page
+  // reaches an issue created before it, so no third page is read.
+  const pageOne = Array.from({ length: 100 }, (_, index) =>
+    row(300 - index, '2026-11-23T12:00:00Z', index === 1)
+  );
+  const pageTwo = [row(200, '2026-11-23T10:00:00Z'), row(199, '2026-11-23T09:00:00Z')];
+  const urls: URL[] = [];
+  const fake = {
+    fetch: async (input: string | URL | Request): Promise<Response> => {
+      const url = new URL(String(input));
+      urls.push(url);
+      return Response.json(url.searchParams.get('page') === '1' ? pageOne : pageTwo);
+    },
+  };
+  const since = '2026-11-23T10:00:00Z';
+  const response = await runOn({ operationId: 'opened', op: 'workitem.opened', repo, since }, fake);
+  if (!response.ok || response.result.op !== 'workitem.opened') throw new Error('read failed');
+  const { items } = response.result.value;
+  expect(items.map(item => item.ref.number)).not.toContain(299);
+  expect(items).toHaveLength(100);
+  expect(items.at(-1)).toEqual({
+    ref: { repo, number: 200 },
+    kind: 'issue',
+    url: 'https://github.com/owner/repo/issues/200',
+    state: 'open',
+    createdAt: since,
+    author: { host: 'github.com', id: '7', login: 'reporter', type: 'user' },
+  });
+  expect(urls.map(url => url.searchParams.get('page'))).toEqual(['1', '2']);
+  for (const url of urls) {
+    expect(url.pathname).toBe('/repos/owner/repo/issues');
+    expect(url.searchParams.get('state')).toBe('open');
+    expect(url.searchParams.get('sort')).toBe('created');
+    expect(url.searchParams.get('direction')).toBe('desc');
+    expect(url.searchParams.get('since')).toBe(since);
+  }
+});
+
 test('an item view returns its author, and a response without one reports none', async () => {
   const fake = labelForge({ kind: 'pr' });
   expect(await runOn({ operationId: 'view', op: 'workitem.view', ref }, fake)).toMatchObject({
@@ -652,7 +703,14 @@ test('an item view returns its author, and a response without one reports none',
 });
 
 /** One GitHub item with its conversation comments and close state. */
-function conversationForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = {}) {
+function conversationForge(
+  options: {
+    kind?: 'issue' | 'pr';
+    lose?: boolean;
+    /** The `issue_url` the instance reports, when it builds one from another host. */
+    issueUrl?: (number: number) => string;
+  } = {}
+) {
   const item = {
     number: 1,
     repository_url: root,
@@ -672,7 +730,7 @@ function conversationForge(options: { kind?: 'issue' | 'pr'; lose?: boolean } = 
     const comment = {
       id: 900 + comments.length,
       html_url: `https://github.com/owner/repo/issues/1#issuecomment-${String(900 + comments.length)}`,
-      issue_url: `${root}/issues/1`,
+      issue_url: options.issueUrl?.(1) ?? `${root}/issues/1`,
       body: body.body,
     };
     if (!options.lose) comments.push(comment);
@@ -718,6 +776,38 @@ const close = (reason: 'completed' | 'not_planned' | 'duplicate') =>
     ref,
     reason,
   }) satisfies ForgeMutationRequest;
+
+test('a comment read back from an instance that names another host still verifies', async () => {
+  // GitHub Enterprise Server builds `issue_url` from its own configured public URL, so a client
+  // that reaches it by a second name (a proxy, a LAN address) used to fail a write that succeeded.
+  const fake = conversationForge({
+    issueUrl: number => `https://ghe.corp.example/api/v3/repos/owner/repo/issues/${String(number)}`,
+  });
+  expect(await runOn(commentOn('issue', 'first'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied' } },
+  });
+});
+
+test('a comment read back for another repository with the same number still fails verification', async () => {
+  const fake = conversationForge({
+    issueUrl: () => 'https://api.github.com/repos/owner/other/issues/1',
+  });
+  expect(await runOn(commentOn('issue', 'first'), fake)).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response', message: expect.stringContaining('did not match') },
+  });
+});
+
+test('a comment read back for another item still fails verification', async () => {
+  const fake = conversationForge({
+    issueUrl: () => 'https://api.github.com/repos/owner/repo/issues/2',
+  });
+  expect(await runOn(commentOn('issue', 'first'), fake)).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response', message: expect.stringContaining('did not match') },
+  });
+});
 
 test('an issue is commented on by its issue reference, and the marked comment is updated in place', async () => {
   const fake = conversationForge();
@@ -808,4 +898,221 @@ test('issue comments and closes pass conformance for applied and verification fa
           [{ name: `${request.op}:${expectedOutcome}`, request, expectedOutcome }]
         )
       ).toEqual([]);
+});
+
+/**
+ * `ignore` answers an assignee write with the issue unchanged, as GitHub does for a caller
+ * without push access. `lose` answers as if the write landed while the issue stays as it was.
+ * `cut` applies the write and breaks the response body after its success status.
+ */
+function assigneeForge(options: { kind?: 'issue' | 'pr'; mode?: 'ignore' | 'lose' | 'cut' } = {}) {
+  const item = {
+    number: 1,
+    repository_url: root,
+    html_url: 'https://github.com/owner/repo/issues/1',
+    title: 'Title',
+    body: 'Body',
+    state: 'open',
+    labels: [],
+    assignees: [{ login: 'Other' }],
+    ...(options.kind === 'pr' ? { pull_request: {} } : {}),
+  };
+  // Who GitHub would assign on this issue; a commenter is assignable here but has no
+  // repository access, so the repository-wide check refuses them.
+  const assignable = new Set(['other', 'octo', 'commenter']);
+  const calls: string[] = [];
+  const status = (ok: boolean) =>
+    ok ? new Response(null, { status: 204 }) : Response.json({}, { status: 404 });
+  const broken = (code: number) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error('connection reset'));
+        },
+      }),
+      { status: code }
+    );
+  const write = (method: string, init?: RequestInit): Response => {
+    const { assignees } = JSON.parse(String(init?.body)) as { assignees: string[] };
+    const named = new Set(assignees.map(name => name.toLowerCase()));
+    const next =
+      method === 'POST'
+        ? [...item.assignees, ...assignees.map(name => ({ login: name }))]
+        : item.assignees.filter(row => !named.has(row.login.toLowerCase()));
+    const code = method === 'POST' ? 201 : 200;
+    if (options.mode === 'ignore') return Response.json(item, { status: code });
+    if (options.mode === 'lose')
+      return Response.json({ ...item, assignees: next }, { status: code });
+    item.assignees = next;
+    return options.mode === 'cut' ? broken(code) : Response.json(item, { status: code });
+  };
+  const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input));
+    const path = url.origin + url.pathname;
+    const method = init?.method ?? 'GET';
+    calls.push(`${method} ${path}`);
+    const login = decodeURIComponent(url.pathname.split('/').pop() ?? '').toLowerCase();
+    if (path === `${root}/issues/1`) return Response.json(structuredClone(item));
+    if (path.startsWith(`${root}/issues/1/assignees/`)) return status(assignable.has(login));
+    if (path.startsWith(`${root}/assignees/`))
+      return status(login !== 'commenter' && assignable.has(login));
+    if (path === `${root}/issues/1/assignees`) return write(method, init);
+    throw new Error(`unexpected ${method} ${path}`);
+  };
+  const assigned = (): string[] => item.assignees.map(row => row.login);
+  const writes = (): number => calls.filter(call => !call.startsWith('GET')).length;
+  return { item, fetch, calls, assigned, writes };
+}
+const assign = (login: string) =>
+  ({
+    operationId: `assign-${login}`,
+    op: 'workitem.assignee.add',
+    ref,
+    login,
+  }) satisfies ForgeMutationRequest;
+const unassign = (login: string) =>
+  ({
+    operationId: `unassign-${login}`,
+    op: 'workitem.assignee.remove',
+    ref,
+    login,
+  }) satisfies ForgeMutationRequest;
+
+test('assigning a user keeps the existing assignees, and an assigned login in another case changes nothing', async () => {
+  const fake = assigneeForge();
+  expect(await runOn(assign('octo'), fake)).toMatchObject({
+    ok: true,
+    result: {
+      value: {
+        outcome: 'applied',
+        changed: true,
+        workitem: { kind: 'issue', ref },
+        assignees: ['Other', 'octo'],
+      },
+    },
+  });
+  expect(fake.calls).toContain(`POST ${root}/issues/1/assignees`);
+  expect(await runOn(assign('OCTO'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { changed: false, assignees: ['Other', 'octo'] } },
+  });
+  expect(fake.writes()).toBe(1);
+});
+
+test('a user assignable on the issue but not across the repository is assigned', async () => {
+  const fake = assigneeForge();
+  expect(await runOn(assign('commenter'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied', assignees: ['Other', 'commenter'] } },
+  });
+});
+
+test('a user GitHub would not assign is refused with the reason and nothing is written', async () => {
+  const fake = assigneeForge();
+  const response = await runOn(assign('stranger'), fake);
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'not_found' },
+    mutation: { outcome: 'refused' },
+  });
+  expect(!response.ok && response.error.message).toContain('stranger cannot be assigned');
+  expect(!response.ok && response.error.message).toContain('access to the repository');
+  expect(fake.writes()).toBe(0);
+  expect(fake.assigned()).toEqual(['Other']);
+});
+
+test('an assignee write GitHub answers with the login unchanged is refused with what it showed', async () => {
+  const fake = assigneeForge({ mode: 'ignore' });
+  for (const [request, state] of [
+    [assign('octo'), 'left octo unassigned'],
+    [unassign('other'), 'left other assigned'],
+  ] as const) {
+    const response = await runOn(request, fake);
+    expect(response).toMatchObject({
+      ok: false,
+      error: { kind: 'conflict' },
+      mutation: { outcome: 'refused' },
+    });
+    expect(!response.ok && response.error.message).toContain(state);
+    // The ten-assignee limit caps adds only, so it cannot explain a failed removal.
+    expect(!response.ok && response.error.message.includes('ten assignees')).toBe(
+      request.op === 'workitem.assignee.add'
+    );
+  }
+  expect(fake.assigned()).toEqual(['Other']);
+});
+
+test('an acknowledged assignee write whose response body breaks is decided by reading the issue', async () => {
+  for (const [request, assignees] of [
+    [assign('octo'), ['Other', 'octo']],
+    [unassign('other'), []],
+  ] as const)
+    expect(await runOn(request, assigneeForge({ mode: 'cut' }))).toMatchObject({
+      ok: true,
+      result: { value: { outcome: 'applied', changed: true, assignees } },
+    });
+});
+
+test('unassigning removes only that user, and an absent user is already unassigned', async () => {
+  const fake = assigneeForge();
+  fake.item.assignees.push({ login: 'octo' });
+  expect(await runOn(unassign('Octo'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied', changed: true, assignees: ['Other'] } },
+  });
+  expect(await runOn(unassign('octo'), fake)).toMatchObject({
+    ok: true,
+    result: { value: { changed: false, assignees: ['Other'] } },
+  });
+  expect(fake.writes()).toBe(1);
+});
+
+test('assignee writes refuse a pull request before writing', async () => {
+  const fake = assigneeForge({ kind: 'pr' });
+  for (const request of [assign('octo'), unassign('other')])
+    expect(await runOn(request, fake)).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_request' },
+      mutation: { outcome: 'refused' },
+    });
+  expect(fake.writes()).toBe(0);
+});
+
+test('the read-back after an assignee write decides the outcome, not the write response', async () => {
+  for (const request of [assign('octo'), unassign('other')])
+    for (const [mode, expectedOutcome] of [
+      [undefined, 'applied'],
+      ['lose', 'verification_failed'],
+    ] as const)
+      expect(
+        await runForgeMutationConformance(
+          req => runOn(req, assigneeForge({ mode })),
+          githubPluginMetadata,
+          [{ name: `${request.op}:${expectedOutcome}`, request, expectedOutcome }]
+        )
+      ).toEqual([]);
+});
+
+test('the acting account is read with the credential and can be assigned by its login', async () => {
+  const fake = assigneeForge();
+  const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    if (String(input) !== 'https://api.github.com/user') return fake.fetch(input, init);
+    return new Headers(init?.headers).get('authorization') === 'Bearer secret'
+      ? Response.json({ id: 7, login: 'octo', type: 'User' })
+      : Response.json({ message: 'Requires authentication' }, { status: 401 });
+  };
+  const self = await runOn({ operationId: 'self', op: 'actor.self', repo }, { fetch });
+  expect(self).toEqual({
+    operationId: 'self',
+    ok: true,
+    result: {
+      op: 'actor.self',
+      value: { repo, actor: { host: 'github.com', id: '7', login: 'octo', type: 'user' } },
+    },
+  });
+  if (!self.ok || self.result.op !== 'actor.self') throw new Error('actor.self failed');
+  expect(await runOn(assign(self.result.value.actor.login), { fetch })).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied', assignees: ['Other', 'octo'] } },
+  });
 });

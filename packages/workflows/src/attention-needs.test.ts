@@ -15,7 +15,9 @@ test('every line type has a needs, and each level shows its lines and the close 
   // The lines that close the ask: they name it by the ref it was shown with.
   const closed = { ...run, ref: 'r:o', occurrence: 'o' };
   const resolved = { type: 'resolved', ...closed, reason: 'withdrawn' } as const;
-  const item = { project: null, revision: 1, labels: {}, pausedAt: null };
+  // The close of a usage-limit wait when its run resumes.
+  const limitEnded = { ...resolved, ref: 'r', occurrence: null } as const;
+  const item = { project: null, priority: false, revision: 1, labels: {}, pausedAt: null };
   const held = {
     id: 'r',
     workflow: 'ci',
@@ -62,13 +64,15 @@ test('every line type has a needs, and each level shows its lines and the close 
       detail: 'd',
     },
   };
-  // One stream in order: a usage-limit wait nobody was shown opens and closes, then an ask
-  // opens and closes, then an unreadable item is replaced by a usage-limit wait. The
-  // third field marks a close of a shown item: nothing to do, and every level shows it.
+  // One stream in order: a usage-limit wait opens and closes, the close of an ask never
+  // shown, then an ask opens and closes, then an unreadable item is replaced by a
+  // usage-limit wait. The third field marks a close of a shown item: nothing to do, and
+  // every level shows it.
   const stream: [AttentionStreamLine, AttentionNeeds, 'close'?][] = [
     [{ type: 'ready', cursor }, 'nothing'],
     [{ type: 'bookmark', cursor }, 'nothing'],
-    [limited, 'nothing'],
+    [limited, 'look'],
+    [limitEnded, 'nothing', 'close'],
     [resolved, 'nothing'],
     [opened, 'answer'],
     [resolved, 'nothing', 'close'],

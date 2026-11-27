@@ -355,6 +355,26 @@ export async function assertInheritedWorkflowCodebase(
   }
 }
 
+/** The refusal for a short run id prefix that has no project to resolve in. */
+export function shortRunIdNeedsProject(runId: string): string {
+  return (
+    `Short run id '${runId}' resolves only in the run's project.\n` +
+    'Run from the project directory, or pass the full run id.'
+  );
+}
+
+/** What `resolveRunIdArg` does with a prefix it cannot resolve; see there. */
+type PrefixMiss = 'pass-through' | 'require-match' | 'refuse-outside-project';
+
+/** A prefix from a cwd in no registered project: refused, or passed on to the exact lookup. */
+function prefixOutsideProject(runId: string, onPrefixMiss: PrefixMiss): string {
+  if (onPrefixMiss === 'require-match') {
+    throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
+  }
+  if (onPrefixMiss === 'refuse-outside-project') throw new Error(shortRunIdNeedsProject(runId));
+  return runId;
+}
+
 /**
  * Resolve a run-id argument that may be the 8-char short id printed by
  * `workflow runs` into the full run id. Mirrors the chat `manage_run` tool's
@@ -364,19 +384,25 @@ export async function assertInheritedWorkflowCodebase(
  * --chat-project-id requires a unique project-scoped match for every ID.
  * Without that explicit scope, full UUIDs skip resolution entirely: exact lookup
  * is global, so full ids keep working from any directory. A caller that already resolved a project can
- * provide its id; otherwise project lookup preserves an exact checkout
- * registration, then falls back to a linked worktree's canonical checkout. By
- * default, an omitted or unregistered cwd and an unmatched prefix pass through
- * unchanged so the downstream exact lookup keeps its existing error surface.
- * Callers without a downstream lookup can require a match instead.
+ * provide its id; otherwise `cwd` is the project gate's effective directory, and the
+ * project is looked up exactly as `findRunsCodebase` looks it up, so a prefix listed by
+ * `workflow runs` resolves to the same run.
+ *
+ * `onPrefixMiss` says what happens to a prefix that does not resolve. By default an
+ * omitted or unregistered cwd and an unmatched prefix pass through unchanged, so the
+ * downstream exact lookup keeps its existing error surface. `require-match` refuses
+ * both, for callers without a downstream lookup. `refuse-outside-project` refuses a
+ * prefix from a cwd in no registered project, naming the full id: the by-id reads,
+ * which run from any directory, use it so an existing run is not reported missing.
  */
 export async function resolveRunIdArg(
   host: WorkflowHost,
   runId: string,
   cwd?: string,
-  requirePrefixMatch = false,
+  onPrefixMiss: PrefixMiss = 'pass-through',
   codebaseId?: string
 ): Promise<string> {
+  const requirePrefixMatch = onPrefixMiss === 'require-match';
   const scope = readChatProjectScope();
   if (scope !== undefined) return resolveProjectScopedRunId(host, runId, scope);
   if (isFullRunId(runId)) return runId;
@@ -391,12 +417,7 @@ export async function resolveRunIdArg(
     (cwd === undefined
       ? undefined
       : (await findCodebaseForCheckoutPath(cwd, host.records.codebases))?.id);
-  if (!resolvedCodebaseId) {
-    if (requirePrefixMatch) {
-      throw new Error(`Cannot resolve run id prefix '${runId}' outside a registered project.`);
-    }
-    return runId;
-  }
+  if (!resolvedCodebaseId) return prefixOutsideProject(runId, onPrefixMiss);
   const matches = await findProjectRunsByReference(host.deps.store, runId, resolvedCodebaseId);
   if (matches.length > 1) {
     const candidates = matches.map(match => `  ${match.id}`).join('\n');

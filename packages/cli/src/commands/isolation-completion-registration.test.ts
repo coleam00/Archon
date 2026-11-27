@@ -111,7 +111,7 @@ mock.module('@archon/core/db/codebases', () => ({
 }));
 mock.module('@archon/core/operations/isolation-operations', () => ({
   listEnvironments: mock(),
-  cleanupMergedEnvironments: mock(),
+  cleanupMergedWorktrees: mock(),
 }));
 mock.module('@archon/core', () => ({ loadRepoConfig: async () => ({}) }));
 mock.module('@archon/core/config/config-loader', () => ({ loadRepoConfig: async () => ({}) }));
