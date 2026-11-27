@@ -665,7 +665,7 @@ describe('reading installed jobs back', () => {
     const directory = await scratchDirectory();
     await writeFile(join(directory, `${LABEL}.plist`), '<plist/>');
     expect(
-      await listNativeSchedules('/home', {
+      await listNativeSchedules(directory, {
         platform: 'darwin',
         uid: 501,
         launchAgentsDirectory: directory,
