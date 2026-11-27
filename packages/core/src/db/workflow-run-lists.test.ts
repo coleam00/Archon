@@ -341,6 +341,25 @@ describe('workflow run lists', () => {
   });
 
   describe('open-work inbox', () => {
+    test.each([new Date(NaN), 'not-a-date'])(
+      'excludes an unreadable required start time without hiding healthy runs',
+      async started_at => {
+        const healthy = { ...mockWorkflowRun, id: 'healthy', status: 'failed' as const };
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([{ ...healthy, id: 'bad-time', started_at }, healthy])
+        );
+        const log = spyOn(getLog(), 'error').mockImplementation(() => {});
+        try {
+          expect(await findOpenWorkRuns({ limit: null })).toEqual([healthy]);
+          expect(log.mock.calls).toEqual([
+            [{ workflowRunId: 'bad-time' }, 'open_work_run_normalization_failed'],
+          ]);
+        } finally {
+          log.mockRestore();
+        }
+      }
+    );
+
     test.each([
       '{"private-origin-sentinel":',
       JSON.stringify({ conversationId: 7, private: 'private-origin-sentinel' }),
@@ -361,16 +380,9 @@ describe('workflow run lists', () => {
       const log = spyOn(getLog(), 'error').mockImplementation(() => {});
       try {
         expect(await findOpenWorkRuns({ limit: null })).toEqual([healthyRoot, healthyChild]);
-        expect(
-          log.mock.calls.some(
-            ([fields]) =>
-              typeof fields === 'object' &&
-              fields !== null &&
-              'workflowRunId' in fields &&
-              fields.workflowRunId === 'unreadable-run'
-          )
-        ).toBe(true);
-        expect(JSON.stringify(log.mock.calls)).not.toContain('private-origin-sentinel');
+        expect(log.mock.calls).toEqual([
+          [{ workflowRunId: 'unreadable-run' }, 'open_work_run_normalization_failed'],
+        ]);
       } finally {
         log.mockRestore();
       }

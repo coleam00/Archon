@@ -403,7 +403,9 @@ export async function findOpenWorkRuns(
     const runs: WorkflowRun[] = [];
     for (const row of result.rows) {
       try {
-        runs.push(normalizeWorkflowRun(row));
+        const run = normalizeWorkflowRun(row);
+        if (!Number.isFinite(run.started_at.getTime())) throw new Error('Invalid run start time');
+        runs.push(run);
       } catch {
         // This inbox returns readable runs only. Omit unreadable candidates; parser errors
         // can quote private stored contents, so log only the run id and failure reason.

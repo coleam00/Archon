@@ -20,6 +20,7 @@ import {
 } from '@archon/workflows/store-conformance';
 import { recordItemEnd } from '../operations/item-ends';
 import { readOpenWorkRuns } from '../operations/open-work';
+import { getLog as workflowRunLog } from './workflow-run-shared';
 import {
   ask,
   completeWithAsks,
@@ -203,7 +204,9 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       const harness = await makeHarness();
       const logs: string[] = [];
       const previousLevel = rootLogger.level;
+      const previousSqlLevel = workflowRunLog().level;
       rootLogger.level = 'error';
+      workflowRunLog().level = 'error';
       try {
         const parent = await startOnItem(harness);
         const child = await createOnItem(harness, parent);
@@ -233,6 +236,12 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
           reason: 'run_unreadable',
           runId: parent,
         });
+        expect(logs.map(line => JSON.parse(line))).toContainEqual(
+          expect.objectContaining({
+            msg: 'attention_run_normalization_failed',
+            workflowRunId: parent,
+          })
+        );
         expect((await openWorkIds(harness)).sort()).toEqual([child, grandchild, healthy.id].sort());
         const named = logs.flatMap(line => {
           const record: unknown = JSON.parse(line);
@@ -249,6 +258,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       } finally {
         setLogSink(undefined);
         rootLogger.level = previousLevel;
+        workflowRunLog().level = previousSqlLevel;
         await harness.close();
       }
     }

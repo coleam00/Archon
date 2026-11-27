@@ -347,7 +347,8 @@ an unsupported persisted status. It returns HTTP 500 (`Failed to list workflow r
 it never silently drops the offending row. Server logs record `WorkflowStatusReadError` with
 the offending run ID and exact stored value; the HTTP error does not include those details.
 
-With `open=true`, unreadable failed candidates are excluded and server logs record
+With `open=true`, unreadable failed candidates (including an invalid required `started_at`)
+are excluded and server logs record
 `open_work_run_normalization_failed` with `workflowRunId`. An unreadable ancestor leaves its
 affected failed runs eligible; server logs record `open_work_ancestry_unreadable` with
 `workflowRunId` and `ancestorRunId`. These diagnostics omit stored contents and parser errors.

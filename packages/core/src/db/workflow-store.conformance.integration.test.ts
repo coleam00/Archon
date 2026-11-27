@@ -22,6 +22,9 @@ import { describeSqlStartLimitConformance } from './start-limits.conformance';
 import { describeSqlLaunchRecordConformance } from './launch-records.conformance';
 import { describeSqlItemWaitConformance } from './item-waits.conformance';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
+import { rootLogger, setLogSink } from '@archon/paths';
+import { getLog } from './workflow-run-shared';
+import { readOpenWorkRuns } from '../operations/open-work';
 
 const trackTempRoot = trackTempRoots();
 
@@ -55,6 +58,48 @@ describeSqlItemAskStartConformance(makeHarness);
 describeSqlRunDeleteConformance(makeHarness);
 describeSqlStartLimitConformance(makeHarness);
 describeSqlLaunchRecordConformance(makeHarness);
+
+test('open work skips a newer invalid start time before the eligible limit', async () => {
+  const harness = await makeHarness();
+  const log = getLog();
+  const previousLevel = log.level;
+  const previousRootLevel = rootLogger.level;
+  const logs: string[] = [];
+  log.level = 'error';
+  rootLogger.level = 'error';
+  try {
+    const healthy = await harness.store.createWorkflowRun({
+      workflow_name: 'healthy',
+      user_message: '',
+    });
+    const malformed = await harness.store.createWorkflowRun({
+      workflow_name: 'malformed',
+      user_message: '',
+    });
+    await harness.store.failWorkflowRun(healthy.id, 'failed');
+    await harness.store.failWorkflowRun(malformed.id, 'failed');
+    await harness.db.query('UPDATE remote_agent_workflow_runs SET started_at = $1 WHERE id = $2', [
+      '9999-invalid-private-time',
+      malformed.id,
+    ]);
+    setLogSink(line => logs.push(line));
+    const runs = await readOpenWorkRuns(harness.store, { limit: 1 });
+    expect(runs.map(run => run.id)).toEqual([healthy.id]);
+    expect(runs[0]?.started_at.toISOString()).toBe(healthy.started_at.toISOString());
+    expect(logs.map(line => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        msg: 'open_work_run_normalization_failed',
+        workflowRunId: malformed.id,
+      })
+    );
+    expect(logs.join('')).not.toContain('9999-invalid-private-time');
+  } finally {
+    setLogSink(undefined);
+    log.level = previousLevel;
+    rootLogger.level = previousRootLevel;
+    await harness.close();
+  }
+});
 
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();
