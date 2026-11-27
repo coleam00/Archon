@@ -5,6 +5,7 @@ import {
   foldDagUsageRecord,
   foldDeferredUsage,
   newDagUsageFold,
+  parseDagEventData,
   type DagUsageFold,
 } from './dag-usage-fold';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
@@ -142,21 +143,8 @@ function isFoldedRow(row: DagResumeEvent): row is FoldedRow {
   );
 }
 
-/** The row's data, or undefined after a warn when its JSON cannot be parsed. */
-function parseRowData(fold: ResumeFold, row: FoldedRow): Record<string, unknown> | undefined {
-  try {
-    return typeof row.data === 'string' ? JSON.parse(row.data) : (row.data ?? {});
-  } catch (parseErr) {
-    getLog().warn(
-      { err: parseErr as Error, runId: fold.runId, stepName: row.step_name },
-      'db.workflow_dag_node_output_parse_failed'
-    );
-    return undefined;
-  }
-}
-
 function foldFanOutInstances(fold: ResumeFold, row: FoldedRow): void {
-  const rawData = parseRowData(fold, row);
+  const rawData = parseDagEventData(row, fold.runId);
   if (rawData === undefined || fold.fanOutSnapshots.has(row.step_name)) return;
   const snapshots = parseFanOutSnapshots(rawData.instances);
   if (snapshots !== undefined) fold.fanOutSnapshots.set(row.step_name, snapshots);
@@ -330,7 +318,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   // carries no output (or its data cannot be recovered). Only success restores it.
   fold.completedNodeOutputs.delete(row.step_name);
   fold.failedNodes.delete(row.step_name);
-  const rawData = parseRowData(fold, row);
+  const rawData = parseDagEventData(row, fold.runId);
   if (rawData === undefined) return;
   const record = readRecord(fold, row, rawData);
   if (!record) return;

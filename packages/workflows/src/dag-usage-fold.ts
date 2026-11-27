@@ -28,6 +28,22 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export type DagUsageRow = DagResumeEvent & { step_name: string };
 
+/** Parse ordinary event JSON before record validation; typed and deferred records stay strict. */
+export function parseDagEventData(
+  row: DagUsageRow,
+  runId: string
+): Record<string, unknown> | undefined {
+  try {
+    return typeof row.data === 'string' ? JSON.parse(row.data) : (row.data ?? {});
+  } catch {
+    getLog().warn(
+      { runId, stepName: row.step_name, reason: 'invalid_json', valueType: typeof row.data },
+      'db.workflow_dag_node_output_parse_failed'
+    );
+    return undefined;
+  }
+}
+
 export interface DagUsageMeasurement {
   tokens:
     | (Omit<Extract<NodeExecutionMetadata['spend']['tokens'], { source: 'provider' }>, 'value'> & {
@@ -164,10 +180,12 @@ export function foldDagUsage(rows: readonly DagResumeEvent[], runId: string): Da
     if (row.event_type === DEFERRED_NODE_USAGE_EVENT_TYPE) {
       foldDeferredUsage(fold, usageRow);
     } else if (NODE_STATE_EVENT_TYPES.some(type => type === row.event_type)) {
+      const data = parseDagEventData(usageRow, runId);
+      if (data === undefined) continue;
       const record = readNodeRecordEvent({
         workflow_run_id: runId,
         ...usageRow,
-        data: usageRow.data,
+        data,
       });
       if (record !== undefined) foldDagUsageRecord(fold, usageRow, record);
     }
@@ -203,7 +221,16 @@ function isReportedTokens(
 
 function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsage | undefined {
   if (!isReportedTokens(tokens)) {
-    getLog().warn({ runId, stepName, tokens }, 'db.workflow_dag_node_tokens_invalid_ignored');
+    getLog().warn(
+      {
+        runId,
+        stepName,
+        axis: 'tokens',
+        valueType: typeof tokens,
+        reason: 'invalid_input_or_output',
+      },
+      'db.workflow_dag_node_tokens_invalid_ignored'
+    );
     return undefined;
   }
   const normalized: TokenUsage = { input: tokens.input, output: tokens.output };
@@ -214,7 +241,7 @@ function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsag
       normalized[axis] = value;
     } else {
       getLog().warn(
-        { runId, stepName, axis, value },
+        { runId, stepName, axis, valueType: typeof value, reason: 'not_finite_number' },
         'db.workflow_dag_node_optional_tokens_invalid_ignored'
       );
     }
@@ -235,7 +262,10 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
   // silently poison the total (NaN > 0 is false, which would drop the run's
   // cost from the persisted metadata with no trace).
   if (typeof costUsd === 'number' && Number.isFinite(costUsd)) return costUsd;
-  getLog().warn({ runId, stepName, costUsd }, 'db.workflow_dag_node_cost_invalid_ignored');
+  getLog().warn(
+    { runId, stepName, axis: 'costUsd', valueType: typeof costUsd, reason: 'not_finite_number' },
+    'db.workflow_dag_node_cost_invalid_ignored'
+  );
   return undefined;
 }
 

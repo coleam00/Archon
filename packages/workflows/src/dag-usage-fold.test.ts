@@ -1,4 +1,6 @@
+// @archon-test-isolated
 import { describe, expect, it } from 'bun:test';
+import { rootLogger, setLogSink } from '@archon/paths';
 import { countedUsage, foldDagUsage } from './dag-usage-fold';
 import { foldDagResumeSnapshot, type DagResumeEvent } from './dag-resume-snapshot';
 import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
@@ -15,6 +17,79 @@ const started = (path: string, provider = 'claude') =>
   });
 
 describe('shared usage selection', () => {
+  it('skips malformed ordinary JSON like resume without logging private values', async () => {
+    const logs: string[] = [];
+    const previousLevel = rootLogger.level;
+    rootLogger.level = 'warn';
+    setLogSink(line => logs.push(line));
+    try {
+      const rows: DagResumeEvent[] = [
+        { step_name: 'broken', event_type: 'node_completed', data: '{"private-json-marker":' },
+        {
+          step_name: 'valid',
+          event_type: 'node_completed',
+          data: {
+            type: 'agent',
+            tokens: { input: 2, output: 1, cacheRead: 'private-cache-marker', cacheWrite: 4 },
+            cost_usd: 0.25,
+          },
+        },
+      ];
+      const pure = countedUsage(foldDagUsage(rows, 'run'));
+      const resumed = await foldDagResumeSnapshot(rows, 'run');
+      expect(pure.costUsd).toBe(0.25);
+      expect(pure.tokens).toMatchObject({ input: 2, output: 1, cacheWrite: 4 });
+      expect(resumed.costUsd).toBe(pure.costUsd);
+      expect(resumed.tokens).toEqual(pure.tokens);
+      expect(resumed.tokensUnknown).toBe(pure.tokensUnknown);
+      const invalidUsage = countedUsage(
+        foldDagUsage(
+          [
+            {
+              step_name: 'bad-usage',
+              event_type: 'node_completed',
+              data: {
+                type: 'agent',
+                tokens: { input: 'private-token-marker', output: 1 },
+                cost_usd: 'private-cost-marker',
+              },
+            },
+          ],
+          'run'
+        )
+      );
+      expect(invalidUsage.tokens).toBeUndefined();
+      expect(invalidUsage.costUsd).toBeUndefined();
+      expect(invalidUsage.tokensUnknown).toBe(true);
+      const records = logs.map(line => JSON.parse(line));
+      expect(
+        records.filter(record => record.msg === 'db.workflow_dag_node_output_parse_failed')
+      ).toHaveLength(2);
+      expect(
+        records.some(record => record.msg === 'db.workflow_dag_node_tokens_invalid_ignored')
+      ).toBe(true);
+      expect(
+        records.some(record => record.msg === 'db.workflow_dag_node_cost_invalid_ignored')
+      ).toBe(true);
+      expect(
+        records.some(
+          record => record.msg === 'db.workflow_dag_node_optional_tokens_invalid_ignored'
+        )
+      ).toBe(true);
+      for (const marker of [
+        'private-json-marker',
+        'private-token-marker',
+        'private-cost-marker',
+        'private-cache-marker',
+      ]) {
+        expect(logs.join('')).not.toContain(marker);
+      }
+    } finally {
+      setLogSink(undefined);
+      rootLogger.level = previousLevel;
+    }
+  });
+
   it('observes an unmetered attempt without changing numeric admission', () => {
     const start = started('review', 'codex');
     const failed = finishNodeExecution(start, { status: 'failed', error: 'private-error' }, {});
