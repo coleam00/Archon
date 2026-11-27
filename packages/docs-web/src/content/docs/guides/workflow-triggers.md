@@ -294,7 +294,7 @@ When the run-as user has no token, the fire and the started run are scrubbed as 
 
 ### Choose the config and models for one fire
 
-A fire can decide, for the starts it creates, what a lane would otherwise bake into the binding file. `--config <file>` gives those starts a [run config layer](/reference/configuration/#per-run-config-files), which outranks the config the item carries exactly as `workflow run --config` does; `--model <tier|@alias>=<spec>`, repeatable, rebinds a tier or one of your aliases for them. A fire with neither behaves as before: the config the item carries, else the binding's `launch.configSource`.
+A fire can decide, for the starts it creates, what a lane would otherwise bake into the binding file. `--config <file>` gives those starts a [run config layer](/reference/configuration/#per-run-config-files), which outranks the config the item carries exactly as `workflow run --config` does; `--model <tier|@alias>=<spec>`, repeatable, rebinds a tier or one of your aliases for them. A fire with neither behaves as before: the config the item carries, else the binding's `launch.configSource`. Because those starts record the layer they ran on, a later fire on the same item with no flag inherits it, the way it inherits the config of the item's most recent run.
 
 ```bash
 # one heavier round on an item, without touching the lane's binding file
