@@ -163,8 +163,8 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
           `UPDATE remote_agent_workflow_runs SET ${field} = $1 WHERE id = $2`,
           [
             field === 'origin'
-              ? '{"conversationId":{"private":"private-origin-sentinel"}}'
-              : 'private-origin-sentinel',
+              ? '{"conversationId":{"private":"private-sentinel"}}'
+              : 'private-sentinel',
             parent,
           ]
         );
@@ -186,7 +186,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
             : [];
         });
         expect(named.sort()).toEqual([child, grandchild].sort());
-        expect(logs.join('')).not.toContain('private-origin-sentinel');
+        expect(logs.join('')).not.toContain('private-sentinel');
       } finally {
         setLogSink(undefined);
         rootLogger.level = previousLevel;
