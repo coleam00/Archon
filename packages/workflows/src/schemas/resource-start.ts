@@ -10,7 +10,7 @@ import {
 } from './binding-input-source';
 import { itemLinkKindSchema } from './item-link';
 import { itemWaitSubjectSchema } from './item-wait';
-import { runModelOverridesSchema } from './model-binding';
+import { startOverridesField } from './start-overrides';
 import { handoffRefusalSchema } from './run-metadata';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
@@ -492,22 +492,6 @@ export const startLimitSchema = z
   .strict();
 export type StartLimit = z.infer<typeof startLimitSchema>;
 
-/**
- * A fire's own choices for one start: the config layer it runs on (`--config`) and its
- * tier or `@alias` rebindings (`--model`). The two are stored as the operator typed them —
- * a path and raw `name=spec` mappings — never as a resolved profile, which belongs to the
- * install at preparation time.
- *
- * Stored with the start and read back by another binary, so a key this shape does not know
- * is dropped, not refused: a later release may add one, and an older reader must still
- * prepare and inspect the start.
- */
-export const startOverridesSchema = z.object({
-  config: z.object({ path: z.string().min(1) }).optional(),
-  models: runModelOverridesSchema.optional(),
-});
-export type StartOverrides = z.infer<typeof startOverridesSchema>;
-
 export const resourceStartBindingIntentSchema = z
   .object({
     bindingId: z.string().min(1),
@@ -594,16 +578,7 @@ export const resourceStartBindingIntentSchema = z
      * how an operator allows one more round. Kept out of the `intent` column like `limit`.
      */
     grants: z.string().min(1).optional(),
-    /**
-     * A fire's own choices for the starts it creates: the config layer they run on
-     * (`--config`) and the tier or `@alias` rebindings (`--model`). A binding file cannot
-     * declare them — which config and models a start uses is the operator's decision about
-     * that start, not part of the binding — and a source plugin cannot set them, since its
-     * binding is a template for many starts rather than a lever on one. Kept out of the
-     * `intent` column, which older binaries parse strictly; see `storableIntent` in core's
-     * start-receipt-writes.
-     */
-    startOverrides: startOverridesSchema.optional(),
+    ...startOverridesField,
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
@@ -868,8 +843,7 @@ export const triggerConfigSchema = z
       checkoutFrom: true,
       itemKey: true,
       wake: true,
-      // A binding file is a template for every start it causes; the config and models of one
-      // set of starts are the operator's choice at the fire, never the file's.
+      // A binding file cannot choose the config and models of its starts.
       startOverrides: true,
     }),
     item: itemMappingSchema.optional(),

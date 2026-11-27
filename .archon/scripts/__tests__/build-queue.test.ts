@@ -275,7 +275,7 @@ function intakeFires(calls: string): { item: string | undefined; inputs: unknown
     .trim()
     .split('\n')
     .map(line => JSON.parse(line) as string[])
-    .filter(argv => argv[0] === 'trigger' && argv[argv.indexOf('--config') + 1] === '/bindings/intake.json')
+    .filter(argv => argv[0] === 'trigger' && argv[argv.indexOf('--binding') + 1] === '/bindings/intake.json')
     .map(argv => ({ item: argv[argv.indexOf('--item') + 1], inputs: JSON.parse(argv[argv.indexOf('--inputs') + 1] ?? '') }));
 }
 
@@ -541,7 +541,7 @@ describe('the build queue scripts', () => {
     expect(ok(picked)).toMatchObject({ fired: [8, 7] });
     const fires = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[0] === 'trigger');
     expect(fires.map(fire => fire.slice(0, 6))).toEqual([8, 7].map(number => [
-      'trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', `build-pick:ghe.example.com/example/repo#${String(number)}:run-1`,
+      'trigger', 'fire', '--binding', '/bindings/build-queue.json', '--delivery-id', `build-pick:ghe.example.com/example/repo#${String(number)}:run-1`,
     ]));
     expect(fires[0]?.slice(6, 8)).toEqual(['--item', 'issue-8']);
     expect(JSON.parse(fires[0]?.[fires[0].indexOf('--inputs') + 1] ?? '')).toEqual({ number: '8', repo_host: 'ghe.example.com', repo_path: 'example/repo' });

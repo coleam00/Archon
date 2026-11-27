@@ -3,7 +3,6 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { z } from '@hono/zod-openapi';
 import {
   drainResourceStartHost,
   findOrRegisterCodebase,
@@ -15,8 +14,6 @@ import type { StartedExecutor } from '@archon/core/workflows/start-executor';
 import { getTriggersPath, triggerRevision } from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { observeStartExecutor } from '@archon/core/services/run-attention-watch';
-import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import {
   awaitingExecution,
   SourceReceiptDigestConflictError,
@@ -26,16 +23,18 @@ import {
 import {
   describeInstallHold,
   mappedItemKey,
-  resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
   requestingRun,
   type SourceReceiptInput,
-  type StartOverrides,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
-import { assertItemKey } from '@archon/workflows/schemas/workflow-run';
-import { parseRunModelAssignments } from '@archon/workflows/model-validation';
-import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
+import {
+  assertItemOptions,
+  fireBindingFile,
+  fireStartOverrides,
+  readEventInputs,
+  type FireFlagOptions,
+} from './trigger-fire-flags';
 import { releaseQueuedLaunchSource } from '@archon/core/workflows/queued-launch-source';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
@@ -84,24 +83,11 @@ export function drainHost(
   });
 }
 
-type TriggerOptions = {
-  /** The binding file a fire or a schedule describes (`--binding`). */
-  binding?: string;
-  /** A run config layer for the starts a fire creates (`--config`). */
-  config?: string;
-  /** `--model <tier|@alias>=<model>`, repeatable, for the starts a fire creates. */
-  model?: string[];
+type TriggerOptions = FireFlagOptions & {
   host?: string;
   owner?: string;
   yes?: boolean;
   limit?: string;
-  deliveryId?: string;
-  inputs?: string;
-  input?: readonly string[];
-  item?: string;
-  noItem?: boolean;
-  /** Give the start's item priority when the fire is first accepted. */
-  priority?: boolean;
 };
 
 /**
@@ -267,12 +253,6 @@ async function firePriority(
   return true;
 }
 
-function assertItemOptions(options: TriggerOptions): void {
-  if (options.item === undefined) return;
-  if (options.noItem) throw new Error('--item and --no-item are mutually exclusive.');
-  assertItemKey(options.item);
-}
-
 /**
  * The item a fire's start is on: `--item` first, none with `--no-item`, then the
  * binding's `item` mapping read from the event inputs (`--inputs` and `--input`), then
@@ -303,79 +283,6 @@ export async function fireItemKey(fire: {
       `Binding '${config.binding.bindingId}' names its item from the fire's --inputs or --input, but its ${mapped.reason}. Nothing was recorded or started.`
     );
   return mapped.key;
-}
-
-/**
- * A fire's event inputs: the `--inputs` JSON file and each `--input name=value`, in the
- * grammar `workflow run --input` speaks, so their values are text. A name given by both is
- * refused rather than merged, as `workflow run` refuses one given by `--input` and
- * `--input-file`. Neither flag reads as undefined, not `{}`, so a fire without inputs
- * records the intent it always has and a redelivery of it still replays.
- *
- * @throws on an unreadable or invalid file, a malformed assignment, or a name given twice.
- */
-async function readEventInputs(
-  options: Pick<TriggerOptions, 'inputs' | 'input'>
-): Promise<z.infer<typeof resourceStartBindingIntentSchema>['eventInputs']> {
-  let fromFile: z.infer<typeof resourceStartBindingIntentSchema>['eventInputs'];
-  if (options.inputs !== undefined) {
-    try {
-      fromFile = z
-        .record(z.string().min(1), jsonValueSchema)
-        .parse(JSON.parse(await readFile(options.inputs, 'utf8')) as unknown);
-    } catch (error) {
-      throw new Error(
-        '--inputs must name a readable file containing a JSON object with non-empty input names.',
-        { cause: error }
-      );
-    }
-  }
-  if (!options.input?.length) return fromFile;
-  const assigned = parseInputAssignments(options.input);
-  for (const name of Object.keys(assigned))
-    if (fromFile && Object.hasOwn(fromFile, name))
-      throw new Error(`Input '${name}' is given by both --inputs and --input: supply it once.`);
-  return { ...fromFile, ...assigned };
-}
-
-/**
- * The choices a fire makes for the starts it records: a config layer (`--config`) and
- * tier/`@alias` rebindings (`--model`). Both are read here — a typo fails the fire, not the
- * start it would have recorded a minute later — and stored as the operator typed them, so a
- * retry of that start needs no flags.
- */
-async function fireStartOverrides(
-  options: TriggerOptions,
-  layerPath: string | undefined
-): Promise<StartOverrides | undefined> {
-  const models =
-    options.model === undefined || options.model.length === 0
-      ? undefined
-      : parseRunModelAssignments(options.model);
-  const configPath = layerPath === undefined ? undefined : resolve(layerPath);
-  if (configPath !== undefined) await loadWorkflowRunConfigFile(configPath);
-  if (configPath === undefined && models === undefined) return undefined;
-  return {
-    ...(configPath === undefined ? {} : { config: { path: configPath } }),
-    ...(models === undefined ? {} : { models }),
-  };
-}
-
-/**
- * The binding file a fire describes.
- *
- * `--binding` is the name. `--config` used to be, and an installed timer's job still spells it
- * that way, so a fire that gives `--config` alone reads it as the binding and says so once on
- * stderr: breaking every timer on upgrade is not worth the tidy name. A fire that gives both
- * means the new meaning of `--config` — a run config layer — and is not a timer.
- */
-function fireBindingFile(options: TriggerOptions): string | undefined {
-  if (options.binding !== undefined) return options.binding;
-  if (options.config === undefined) return undefined;
-  process.stderr.write(
-    `Reading --config '${options.config}' as the binding file, as an installed timer writes it. Pass it as --binding; --config now names a run config layer.\n`
-  );
-  return options.config;
 }
 
 async function triggerFire(
@@ -415,13 +322,7 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
-  // A recorded delivery answers with the receipt it kept, so this call's flags cannot change
-  // it: reading the layer here would fail a retry whose layer file has since moved, for a
-  // start already accepted. A `--config` that named the binding file is not also a layer
-  // either; see `fireBindingFile`.
-  const startOverrides = recorded
-    ? undefined
-    : await fireStartOverrides(options, options.binding === undefined ? undefined : options.config);
+  const startOverrides = await fireStartOverrides(options, recorded);
   const itemKey = await fireItemKey({
     config,
     explicit: options.item,

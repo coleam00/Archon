@@ -9,8 +9,8 @@ import {
   sourceReceiptOutcomeSchema,
   resourceStartDispositionSchema,
   sourceReceiptInputSchema,
-  startOverridesSchema,
 } from '../schemas/resource-start';
+import { startOverridesSchema } from '../schemas/start-overrides';
 
 export const slotMembershipSchema = z.object({
   holders: z.array(

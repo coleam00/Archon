@@ -536,8 +536,7 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
       '',
       'Fire-only bindings. Nothing schedules these; a run or an operator starts each with:'
     );
-    for (const fire of fires)
-      lines.push(`  archon trigger fire --binding ${shellQuote(fire.path)}`);
+    lines.push(...fires.map(fire => `  archon trigger fire --binding ${shellQuote(fire.path)}`));
   }
   if (events.length > 0) {
     lines.push(

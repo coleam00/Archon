@@ -338,7 +338,7 @@ describe('item mapping', () => {
 
 describe('a fire’s own choices for its starts', () => {
   test('a config path and model rebindings are the only things it may hold', async () => {
-    const { startOverridesSchema } = await import('./schemas/resource-start');
+    const { startOverridesSchema } = await import('./schemas/start-overrides');
     expect(
       startOverridesSchema.safeParse({
         config: { path: '/srv/archon/one-off.yaml' },
@@ -359,7 +359,7 @@ describe('a fire’s own choices for its starts', () => {
   });
 
   test('a stored shape drops a key it does not know, so an older reader still parses it', async () => {
-    const { startOverridesSchema } = await import('./schemas/resource-start');
+    const { startOverridesSchema } = await import('./schemas/start-overrides');
     const { runModelOverridesSchema } = await import('./schemas/model-binding');
     // More than one binary reads these: a later release may add a key, and this one must
     // still prepare and inspect the start rather than refuse it.

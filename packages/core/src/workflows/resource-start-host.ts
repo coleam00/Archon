@@ -68,12 +68,9 @@ import {
 import { assertWorkflowRequirementsMet } from '@archon/workflows/utils/workflow-requirements';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import type { RunModelOverrides } from '@archon/workflows/schemas/model-binding';
+import { startConfiguration } from './start-configuration';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
-import {
-  itemRunConfig,
-  loadWorkflowRunConfigFile,
-  unsealWorkflowRunConfig,
-} from '../config/run-config';
+import { unsealWorkflowRunConfig } from '../config/run-config';
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
@@ -331,43 +328,6 @@ async function prepareBinding(
       log.info({ ...identity, reason: disposition.reason }, 'resource_start.limit_reached');
     return disposition;
   });
-}
-
-/**
- * The run config and model rebindings a start runs on.
- *
- * A fire's `--config` replaces the config this start would otherwise inherit, as `--config`
- * does for `workflow run`; its `--model` rebinds tiers and `@alias`es over whichever config
- * applies. Without either, the item's own config wins over `configSource`: a binding file's
- * config is written once for the install (`pack bindings --config`), a default for an item's
- * first run, not a change to this item's config.
- *
- * A file is read only for the branch that uses it, so a config a start does not use cannot
- * fail it: a binding whose `configSource` has gone still starts on the item's own config, or
- * on a fire's `--config`.
- */
-async function startConfiguration(
-  intent: ResourceStartBindingIntent,
-  found: Awaited<ReturnType<typeof bindingItem>>
-): Promise<{
-  runConfig: WorkflowRunConfigInput | undefined;
-  models: RunModelOverrides | undefined;
-}> {
-  const overrides = intent.startOverrides;
-  const models = overrides?.models;
-  if (overrides?.config !== undefined) {
-    return {
-      runConfig: await loadWorkflowRunConfigFile(overrides.config.path),
-      models,
-    };
-  }
-  const inherited = (): WorkflowRunConfigInput | undefined =>
-    found ? itemRunConfig(found.item.key, found.runs) : undefined;
-  const declared = async (): Promise<WorkflowRunConfigInput | undefined> =>
-    intent.launch.configSource
-      ? await loadWorkflowRunConfigFile(intent.launch.configSource)
-      : undefined;
-  return { runConfig: inherited() ?? (await declared()), models };
 }
 
 async function prepareClaimedBinding(
