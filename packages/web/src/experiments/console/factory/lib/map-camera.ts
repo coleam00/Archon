@@ -27,7 +27,7 @@ const tokenPx = (token: string): number => Number(token.slice('text-console-'.le
  */
 const MAP_SMALLEST_TEXT = 'text-console-12';
 export const MAP_SMALLEST_PX = tokenPx(MAP_SMALLEST_TEXT);
-const TYPE_FLOOR_PX = 12;
+export const TYPE_FLOOR_PX = 12;
 /**
  * The scale at which the map's text draws at the type floor: 1. It is only `fitCamera`'s and
  * `fittedHeight`'s default floor; the live map opens down to `LIVE_MIN_K` instead (ruling

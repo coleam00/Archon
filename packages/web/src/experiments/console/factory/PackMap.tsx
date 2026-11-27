@@ -34,7 +34,7 @@ const FULL = 'full';
  * Whether the Overview shows the derived map as "Full workflow" (`?map=full`), and the handler a
  * segment calls to choose it or the grouped map.
  */
-function useFullWorkflow(): [boolean, (next: boolean) => () => void] {
+export function useFullWorkflow(): [boolean, (next: boolean) => () => void] {
   const [params, setParams] = useSearchParams();
   const choose = (next: boolean) => (): void =>
     setParams(current => {

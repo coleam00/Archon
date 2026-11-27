@@ -5,7 +5,9 @@
  * the projects read's order, that stages it: the server reads a pack as a project has it
  * installed.
  *
- * It draws the pack's own document (`PackDocument`), then the pack's whole workflow derived from
+ * The Archon software factory gets its curated How it works picture, hardcoded in the console
+ * (`archon-software-factory.ts`), with a switch to its Full workflow, derived from the graph.
+ * Any other pack draws its own document (`PackDocument`), then its whole workflow derived from
  * its graph, with the document's problems listed above them. A pack with no document gets no
  * How it works section, only the workflow.
  */
@@ -24,6 +26,10 @@ import { graphWords } from '../lib/graph-view';
 import { DocumentProblems } from '../DocumentProblems';
 import { PackDocument } from '../PackDocument';
 import { ReadFailure } from '../ReadFailure';
+import { OverviewBody } from '../overview/OverviewPage';
+import { useFullWorkflow } from '../PackMap';
+import { SegmentedControl } from '../ui/SegmentedControl';
+import { ARCHON_SOFTWARE_FACTORY, isSoftwareFactory } from './archon-software-factory';
 import { PackFrame } from './PackFrame';
 
 /** Every pack some project stages, in the projects read's order, each with that first project. */
@@ -94,7 +100,48 @@ export function HowItWorksPage(): ReactElement {
         </p>
       </PackFrame>
     );
+  if (isSoftwareFactory(pack))
+    return <CuratedHowItWorks projectId={staged.project.id} pack={pack} />;
   return <HowItWorks projectId={staged.project.id} pack={pack} />;
+}
+
+/**
+ * The software factory's page: its curated picture (the default) or its Full workflow, one
+ * switch at the right of the title. The picture needs no read; the Full workflow waits for the
+ * graph.
+ */
+function CuratedHowItWorks({ projectId, pack }: { projectId: string; pack: string }): ReactElement {
+  const graph = usePackGraph(projectId, pack);
+  const [full, choose] = useFullWorkflow();
+  return (
+    <PackFrame
+      {...heading(pack)}
+      source="Drawn by hand for the Archon software factory, kept in the console"
+      actions={
+        <SegmentedControl
+          label="Which map"
+          active={full ? 'full' : 'map'}
+          segments={[
+            { key: 'map', label: 'How it works', onSelect: choose(false) },
+            { key: 'full', label: 'Full workflow', onSelect: choose(true) },
+          ]}
+        />
+      }
+    >
+      <DocumentProblems graph={graph.data} />
+      {!full ? (
+        <OverviewBody overview={ARCHON_SOFTWARE_FACTORY.howItWorks} />
+      ) : graph.data !== undefined ? (
+        <DerivedStructure projectId={projectId} pack={pack} view={graphWords(graph.data)} />
+      ) : graph.error === undefined ? (
+        <GraphSkeleton label="Loading the full workflow" />
+      ) : (
+        <ReadFailure retry={graph.refetch}>
+          The pack's graph could not be read: {graph.error.message}
+        </ReadFailure>
+      )}
+    </PackFrame>
+  );
 }
 
 const LABEL = 'text-console-12 font-medium uppercase tracking-console-label text-text-tertiary';

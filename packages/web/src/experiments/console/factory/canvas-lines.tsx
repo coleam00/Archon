@@ -9,6 +9,7 @@ import type { ReactElement } from 'react';
 import type { Box, Point } from './lib/map-layout';
 import { PILL_LINE, PILL_TEXT } from './lib/map-sizes';
 
+export const LINE = 'var(--text-tertiary)';
 /** A forward line's ends: dim where it leaves, brighter where it arrives (its head's colour). */
 const LINE_FROM = 'var(--border-bright)';
 export const LINE_TO = 'var(--text-secondary)';
