@@ -163,7 +163,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
           `UPDATE remote_agent_workflow_runs SET ${field} = $1 WHERE id = $2`,
           [
             field === 'origin'
-              ? '{"unexpected":"private-origin-sentinel"}'
+              ? '{"conversationId":{"private":"private-origin-sentinel"}}'
               : 'private-origin-sentinel',
             parent,
           ]

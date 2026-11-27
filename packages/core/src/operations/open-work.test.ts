@@ -3,7 +3,7 @@ import type { ItemEnd } from '@archon/workflows/schemas/item-end';
 import { mockWorkflowRun } from '../test/mocks/workflow-run';
 import { readOpenWorkRuns } from './open-work';
 
-test('open work reuses ancestry and item end reads only within one listing', async () => {
+test('open work reuses reads per run and item only within one listing', async () => {
   const parent = {
     ...mockWorkflowRun,
     id: 'parent',
@@ -18,7 +18,13 @@ test('open work reuses ancestry and item end reads only within one listing', asy
     item_id: null,
     parent_run_id: parent.id,
   }));
-  const healthy = { ...mockWorkflowRun, id: 'healthy', status: 'failed' as const };
+  const healthy = {
+    ...mockWorkflowRun,
+    id: 'healthy',
+    status: 'failed' as const,
+    item_id: 'open-item',
+    parent_run_id: null,
+  };
   const end: ItemEnd = {
     kind: 'ended',
     id: 'end',
@@ -31,18 +37,20 @@ test('open work reuses ancestry and item end reads only within one listing', asy
   const store = {
     findOpenWorkRuns: async () => [...candidates, healthy],
     getWorkflowRunForAttention: mock(async () => parent),
-    getHoldingItemEnd: mock(async (): Promise<ItemEnd | null> => end),
+    getHoldingItemEnd: mock(
+      async (id: string): Promise<ItemEnd | null> => (id === parent.item_id ? end : null)
+    ),
     listItemStarts: mock(async () => []),
   };
   expect(await readOpenWorkRuns(store, { limit: 1 })).toEqual([healthy]);
   expect(store.getWorkflowRunForAttention).toHaveBeenCalledTimes(1);
-  expect(store.getHoldingItemEnd).toHaveBeenCalledTimes(1);
+  expect(store.getHoldingItemEnd).toHaveBeenCalledTimes(2);
   expect(store.listItemStarts).toHaveBeenCalledTimes(1);
 
   store.getHoldingItemEnd.mockResolvedValue(null);
   expect(await readOpenWorkRuns(store, { limit: 1 })).toEqual([candidates[0]]);
   expect(store.getWorkflowRunForAttention).toHaveBeenCalledTimes(2);
-  expect(store.getHoldingItemEnd).toHaveBeenCalledTimes(2);
+  expect(store.getHoldingItemEnd).toHaveBeenCalledTimes(3);
 });
 
 test('open work rejects cyclic ancestry before repeating a read', async () => {
