@@ -3,16 +3,16 @@
  * route per pair of cards, from the card it leaves to an EARLIER card it returns to
  * (`map-layout.ts` merges the pack graph's send-backs between stages into these, and leaves
  * out the ones inside one card: those are a card's own retries, not a way back). The map draws
- * one card's routes at a time, while that card is hovered, focused or pinned (`MapSendBacks`),
- * so each card's routes are laid out on their own: they never meet another card's.
+ * every route at all times (`MapSendBacks`), so they are laid out together, never meeting.
  *
- * A card S with n routes: each route into a card T gets its own target leg on T's bottom edge,
- * at T's 0.1-0.45 of the width. The routes sorted by target leg, left to right, take source
- * legs on S's bottom edge over its 0.55-0.9, right to left, and tracks under the row from the
- * deepest up: the leftmost target takes the rightmost source leg and the deepest track. Every
- * target leg lies left of every source leg (every target is an earlier card), so the routes
- * are U shapes nested inside each other: none crosses another, and none enters a card, since
- * every leg starts on a card's own bottom edge and every track runs under the row.
+ * Each route into a card T gets its own target leg on T's bottom edge, spread over T's
+ * 0.1-0.45 of the width, the route from the furthest card leftmost; each route out of a card
+ * S its own source leg on S's bottom edge, over its 0.55-0.9, the route to the furthest card
+ * rightmost. Every target leg lies left of every source leg (every target is an earlier card),
+ * so the routes are U shapes under the row: shorter ones on shallower tracks, a longer one
+ * over the same stretch a track deeper (`depthsOf`). Routes that share a card, or where one
+ * spans the other, nest without crossing; none enters a card, since every leg starts on a
+ * card's own bottom edge and every track runs under the row.
  *
  * Each pill says where the route goes back to and why, in plain words: "Back to <card>:" on
  * its first line, the reason on its second (`reasonsOf`). The pills sit under the deepest
@@ -126,34 +126,105 @@ function pillLines(
   return { lines: [`Back to ${target}:`, line], shortened: more > 0 };
 }
 
-/** One card's routes, laid out as the header says; `arrows` all leave `source`, each into its own card. */
-function cardRoutes(
-  source: RouteCard,
+/** A route's two legs: where it leaves its card and where it reaches the earlier card. */
+interface Leg {
+  arrow: SendBackArrow;
+  source: Box;
+  target: Box;
+  from: number;
+  to: number;
+}
+
+/**
+ * Spread the legs on each card's bottom edge over `lo..hi` of its width, in `order`: the
+ * first in order nearest `lo`.
+ */
+function spread(
+  legs: readonly Leg[],
+  boxOf: (leg: Leg) => Box,
+  order: (p: Leg, q: Leg) => number,
+  [lo, hi]: [number, number],
+  set: (leg: Leg, x: number) => void
+): void {
+  const groups = new Map<Box, Leg[]>();
+  for (const leg of legs) groups.set(boxOf(leg), [...(groups.get(boxOf(leg)) ?? []), leg]);
+  for (const [box, group] of groups)
+    group.sort(order).forEach((leg, i) => set(leg, legX(box, lo, hi, group.length, i)));
+}
+
+/**
+ * Every route's legs, as the header says: into a card, the route from the furthest card takes
+ * the leftmost target leg; out of a card, the route to the furthest card the rightmost source
+ * leg. So two routes sharing a card nest.
+ */
+function placeLegs(arrows: readonly SendBackArrow[], cards: ReadonlyMap<string, RouteCard>): Leg[] {
+  const legs = arrows.flatMap((arrow): Leg[] => {
+    const source = cards.get(arrow.from)?.box;
+    const target = cards.get(arrow.to)?.box;
+    if (source === undefined || target === undefined) return [];
+    return [{ arrow, source, target, from: 0, to: 0 }];
+  });
+  spread(
+    legs,
+    leg => leg.target,
+    (p, q) => q.source.x - p.source.x,
+    [TARGET_FROM, TARGET_TO],
+    (leg, x) => (leg.to = x)
+  );
+  spread(
+    legs,
+    leg => leg.source,
+    (p, q) => p.target.x - q.target.x,
+    [SOURCE_TO, SOURCE_FROM],
+    (leg, x) => (leg.from = x)
+  );
+  return legs;
+}
+
+/** Whether two routes run over any of the same stretch of the row. */
+const sharesRow = (p: Leg, q: Leg): boolean => p.to <= q.from && q.to <= p.from;
+
+/**
+ * Each route's track, 0 the shallowest: shorter routes first, each one track under every
+ * route already placed over the same stretch of the row. Routes that share a card nest, the
+ * longer one deeper, so for the map's routes none crosses another.
+ */
+function depthsOf(legs: readonly Leg[]): number[] {
+  const span = (leg: Leg): number => leg.from - leg.to;
+  const order = legs.map((_, i) => i);
+  order.sort((p, q) => span(legs[p] as Leg) - span(legs[q] as Leg));
+  const depths: number[] = legs.map(() => -1);
+  for (const i of order) {
+    const leg = legs[i] as Leg;
+    const under = legs.flatMap((other, j) =>
+      (depths[j] ?? -1) >= 0 && sharesRow(other, leg) ? [(depths[j] ?? 0) + 1] : []
+    );
+    depths[i] = Math.max(0, ...under);
+  }
+  return depths;
+}
+
+/** Every route's corners, sorted by target leg, left to right. */
+function layRoutes(
   arrows: readonly SendBackArrow[],
   cards: ReadonlyMap<string, RouteCard>
 ): { arrow: SendBackArrow; points: Point[] }[] {
-  const legs = arrows.flatMap(arrow => {
-    const box = cards.get(arrow.to)?.box;
-    if (box === undefined) return [];
-    return [{ arrow, x: legX(box, TARGET_FROM, TARGET_TO, 1, 0), y: bottomOf(box) }];
-  });
-  legs.sort((p, q) => p.x - q.x);
-  const top = bottomOf(source.box);
-  const n = legs.length;
-  return legs.map(({ arrow, x, y }, i) => {
-    // The leftmost target takes the rightmost source leg and the deepest track.
-    const from = legX(source.box, SOURCE_TO, SOURCE_FROM, n, i);
-    const track = top + LANE + (n - 1 - i) * TRACK;
+  const legs = placeLegs(arrows, cards);
+  const depths = depthsOf(legs);
+  const laid = legs.map((leg, i) => {
+    const top = bottomOf(leg.source);
+    const track = top + LANE + (depths[i] ?? 0) * TRACK;
     return {
-      arrow,
+      arrow: leg.arrow,
       points: [
-        { x: from, y: top },
-        { x: from, y: track },
-        { x, y: track },
-        { x, y },
+        { x: leg.from, y: top },
+        { x: leg.from, y: track },
+        { x: leg.to, y: track },
+        { x: leg.to, y: bottomOf(leg.target) },
       ],
     };
   });
+  return laid.sort((p, q) => (p.points[3] as Point).x - (q.points[3] as Point).x);
 }
 
 /**
@@ -162,7 +233,7 @@ function cardRoutes(
  * the nearest free place on that band no further than `MAX_SLIDE` from centred, else a band
  * down. All within the row's span `row`, so a long label on the first card's leg does not
  * hang off the row's start (where the map opens). Keeping each pill near its leg (the owner's
- * ruling on #289) costs a band now and then; the frame grows to hold them while they show.
+ * ruling on #289) costs a band now and then; the frame holds them under the cards.
  */
 function placePills(
   wanted: readonly { lines: string[]; shortened: boolean; x: number }[],
@@ -211,7 +282,8 @@ function nearestFree(
   return candidates[0];
 }
 
-function extentOf(routes: readonly SendBackRoute[]): Box {
+/** What `routes` and their pills take; `routes` is never empty. */
+export function extentOf(routes: readonly SendBackRoute[]): Box {
   const boxes = routes.flatMap(route => (route.pill === undefined ? [] : [route.pill.box]));
   const points = routes.flatMap(route => route.points);
   const xs = [...points.map(p => p.x), ...boxes.flatMap(box => [box.x, box.x + box.w])];
@@ -226,48 +298,50 @@ const pathOf = (points: readonly Point[]): string => {
 };
 
 /**
- * Every card's send-backs, by card id, for the cards (by card id, in row order) and the ways
- * back between them (one per pair of cards). A card nothing leaves for another card is not in
- * the map, nor is a way back into a card not on the map or into its own card.
+ * Every card's send-backs, by card id, in row order, for the cards (by card id, in row order)
+ * and the ways back between them (one per pair of cards), laid out all together, since the
+ * map draws them all at once. A card nothing leaves for another card is not in the map, nor is
+ * a way back into a card not on the map or into its own card.
  */
 export function sendBackRoutes(
   cards: ReadonlyMap<string, RouteCard>,
   arrows: readonly SendBackArrow[]
 ): Map<string, CardSendBacks> {
+  const drawn = arrows.filter(
+    arrow => arrow.to !== arrow.from && cards.has(arrow.from) && cards.has(arrow.to)
+  );
+  const out = new Map<string, CardSendBacks>();
+  if (drawn.length === 0) return out;
   const boxes = [...cards.values()].map(card => card.box);
   const row = {
     lo: Math.min(...boxes.map(box => box.x)),
     hi: Math.max(...boxes.map(box => box.x + box.w)),
   };
-  const out = new Map<string, CardSendBacks>();
-  for (const [id, source] of cards) {
-    const mine = arrows.filter(
-      arrow => arrow.from === id && arrow.to !== id && cards.has(arrow.to)
-    );
-    if (mine.length === 0) continue;
-    const laid = cardRoutes(source, mine, cards).map(entry => ({
-      ...entry,
-      reasons: reasonsOf(entry.arrow.words, source.label),
-    }));
-    const deepest = Math.max(...laid.map(({ points }) => (points[1] as Point).y));
-    const pills = placePills(
-      laid.map(({ arrow, points, reasons }) => ({
-        ...pillLines(cards.get(arrow.to)?.label ?? arrow.to, reasons),
-        x: (points[3] as Point).x,
-      })),
-      deepest,
-      row
-    );
-    const routes = laid.map(
-      ({ arrow, points, reasons }, i): SendBackRoute => ({
-        ...arrow,
-        reasons,
-        points,
-        d: pathOf(points),
-        pill: pills[i],
-      })
-    );
-    out.set(id, { routes, extent: extentOf(routes) });
+  const laid = layRoutes(drawn, cards).map(entry => ({
+    ...entry,
+    reasons: reasonsOf(entry.arrow.words, cards.get(entry.arrow.from)?.label ?? entry.arrow.from),
+  }));
+  const deepest = Math.max(...laid.map(({ points }) => (points[1] as Point).y));
+  const pills = placePills(
+    laid.map(({ arrow, points, reasons }) => ({
+      ...pillLines(cards.get(arrow.to)?.label ?? arrow.to, reasons),
+      x: (points[3] as Point).x,
+    })),
+    deepest,
+    row
+  );
+  const routes = laid.map(
+    ({ arrow, points, reasons }, i): SendBackRoute => ({
+      ...arrow,
+      reasons,
+      points,
+      d: pathOf(points),
+      pill: pills[i],
+    })
+  );
+  for (const id of cards.keys()) {
+    const mine = routes.filter(route => route.from === id);
+    if (mine.length > 0) out.set(id, { routes: mine, extent: extentOf(mine) });
   }
   return out;
 }

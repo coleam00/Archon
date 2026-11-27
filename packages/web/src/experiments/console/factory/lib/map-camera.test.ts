@@ -59,13 +59,15 @@ describe('the map camera', () => {
     const base = fittedHeight(bounds, 1110, pad, minK, maxK);
     const camera = fitCamera(bounds, { width: 1110, height: base }, pad, minK, maxK);
     expect(grownHeight(base, camera, bounds, 0)).toBe(base);
-    for (const { extent } of layout.sendBacks.values()) {
-      const below = extent.y + extent.h - (bounds.y + bounds.h);
-      const grown = grownHeight(base, camera, bounds, below);
-      // Every pill inside the grown frame, the frame inside the window.
-      expect(camera.y + (extent.y + extent.h) * camera.k).toBeLessThanOrEqual(grown);
-      expect(grown).toBeLessThanOrEqual(900);
-    }
+    // Every send-back shows at once: the frame grows once, for all of them.
+    const extent = layout.sendBackExtent;
+    if (extent === undefined) throw new Error('the test pack has send-backs');
+    const below = extent.y + extent.h - (bounds.y + bounds.h);
+    const grown = grownHeight(base, camera, bounds, below);
+    expect(grown).toBeGreaterThan(base);
+    // Every pill inside the grown frame, the frame inside the window.
+    expect(camera.y + (extent.y + extent.h) * camera.k).toBeLessThanOrEqual(grown);
+    expect(grown).toBeLessThanOrEqual(900);
   });
 
   test('zoom keeps the point under the cursor over the same world point', () => {

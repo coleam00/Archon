@@ -12,15 +12,11 @@ export interface ShortPill {
 }
 
 /**
- * The map's short pills: every forward hand-off's whose pill shows fewer outcomes than it
- * carries, and those of the send-backs of `pinned`, the card pinned by its ↺ badge and shown.
- * Only a pinned card's: a hovered or focused card's routes go as the pointer or focus leaves
- * the card for a pill, so a tip there could never be reached.
+ * The map's short pills: every line's whose pill shows fewer outcomes than it carries, a
+ * forward hand-off's or a send-back's. The map draws every send-back always, so each of their
+ * tips can be reached.
  */
-export function shortPills(
-  layout: Pick<MapLayout, 'cards' | 'arrows' | 'sendBacks'>,
-  pinned: string | null
-): ShortPill[] {
+export function shortPills(layout: Pick<MapLayout, 'cards' | 'arrows' | 'sendBacks'>): ShortPill[] {
   const label = (id: string): string => layout.cards.find(card => card.id === id)?.label ?? id;
   const forward = layout.arrows.flatMap(arrow =>
     arrow.pill === undefined || arrow.outcomes.length <= arrow.lines.length
@@ -34,7 +30,7 @@ export function shortPills(
           },
         ]
   );
-  const routes = pinned === null ? [] : (layout.sendBacks.get(pinned)?.routes ?? []);
+  const routes = [...layout.sendBacks.values()].flatMap(card => card.routes);
   const back = routes.flatMap(route =>
     route.pill === undefined || !route.pill.shortened
       ? []
@@ -51,8 +47,8 @@ export function shortPills(
 }
 
 /**
- * Every outcome of a line whose pill shows fewer than it has: a forward hand-off's, and a
- * shown send-back's. A button laid exactly over the pill, which opens a tip listing them on
+ * Every outcome of a line whose pill shows fewer than it has: a forward hand-off's, or a
+ * send-back's. A button laid exactly over the pill, which opens a tip listing them on
  * hover, on focus and on a tap. HTML rather than part of the SVG: the map's lines are
  * `aria-hidden` and take no pointer, and a tap or the keyboard has to reach the list. Drawn
  * after the cards, so no card's box covers a button. A press on one still starts a pan of the

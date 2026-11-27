@@ -75,46 +75,67 @@ const seeded = declaration(
   ]
 );
 
-/** The forward lines, and the routes of the card whose send-backs show (none by default). */
-function lines(layout: MapLayout, shown?: string): Segment[] {
-  return [
-    ...layout.arrows.flatMap(arrow => segments(arrow.d)),
-    ...(shown === undefined ? [] : routesOf(layout, shown).flatMap(route => segments(route.d))),
-  ];
-}
+/** Every send-back route on the map: the map draws them all, always. */
+const allRoutes = (layout: MapLayout): SendBackRoute[] =>
+  [...layout.sendBacks.values()].flatMap(card => card.routes);
 
 const routesOf = (layout: MapLayout, card: string) => layout.sendBacks.get(card)?.routes ?? [];
 
-const pills = (layout: MapLayout, shown?: string): Box[] => [
+/** Every line the map draws: the forward lines and every send-back route, each with its route. */
+function lines(layout: MapLayout): { s: Segment; route?: SendBackRoute }[] {
+  return [
+    ...layout.arrows.flatMap(arrow => segments(arrow.d).map(s => ({ s }))),
+    ...allRoutes(layout).flatMap(route => segments(route.d).map(s => ({ s, route }))),
+  ];
+}
+
+/**
+ * Whether two send-backs interleave: each leaves from inside the other's stretch of the row,
+ * neither spanning the other (say 3 to 1 and 4 to 2). Drawn as U shapes under the row, those
+ * two cannot help crossing; any other two never do.
+ */
+function interleave(p: SendBackRoute | undefined, q: SendBackRoute | undefined): boolean {
+  if (p === undefined || q === undefined || p === q) return false;
+  const span = (r: SendBackRoute): [number, number] => [
+    r.points.at(-1)?.x ?? 0,
+    r.points[0]?.x ?? 0,
+  ];
+  const [[a, b], [c, d]] = [span(p), span(q)];
+  return (a < c && c < b && b < d) || (c < a && a < d && d < b);
+}
+
+/** Every pill the map draws: the forward pills and every send-back's. */
+const pills = (layout: MapLayout): Box[] => [
   ...layout.arrows.flatMap(arrow => (arrow.pill === undefined ? [] : [arrow.pill])),
-  ...(shown === undefined
-    ? []
-    : routesOf(layout, shown).flatMap(route => (route.pill === undefined ? [] : [route.pill.box]))),
+  ...allRoutes(layout).flatMap(route => (route.pill === undefined ? [] : [route.pill.box])),
 ];
 
 /**
  * The done-when of the map's geometry: one row, and nothing crossing a card, a line or a pill,
- * by default and with each card's send-backs shown in turn.
+ * with every send-back drawn at once, as the map draws them.
  */
 function expectClean(layout: MapLayout): void {
   for (const box of layout.cards.map(card => card.box)) expect(box.y).toBe(0);
-  for (const shown of [undefined, ...layout.sendBacks.keys()]) expectCleanShowing(layout, shown);
+  expectCleanDrawn(layout);
   expectSendBacksUnderRow(layout);
 }
 
-/** Nothing crosses or meets anything else with `shown`'s send-backs drawn (none by default). */
-function expectCleanShowing(layout: MapLayout, shown: string | undefined): void {
+/** Nothing crosses or meets anything else, every send-back drawn. */
+function expectCleanDrawn(layout: MapLayout): void {
   const boxes = layout.cards.map(card => card.box);
-  const all = lines(layout, shown);
+  const drawn = lines(layout);
+  const all = drawn.map(line => line.s);
   for (const s of all) for (const box of boxes) expect(enters(box, s)).toBe(false);
-  all.forEach((p, i) =>
-    all.forEach((q, j) => {
-      expect(crosses(p, q)).toBe(false);
+  drawn.forEach((p, i) =>
+    drawn.forEach((q, j) => {
+      if (!interleave(p.route, q.route)) expect(crosses(p.s, q.s)).toBe(false);
       // No two lines drawn on top of each other: each send-back on its own line.
-      if (i !== j) expect(overlaps(p, q)).toBe(false);
+      if (i !== j) expect(overlaps(p.s, q.s)).toBe(false);
     })
   );
-  const placed = pills(layout, shown);
+  const legs = allRoutes(layout).flatMap(route => [route.points[0]?.x, route.points.at(-1)?.x]);
+  expect(new Set(legs).size).toBe(legs.length);
+  const placed = pills(layout);
   placed.forEach((pill, i) => {
     for (const box of boxes) expect(boxesMeet(pill, box)).toBe(false);
     for (const s of all) expect(enters(pill, s)).toBe(false);
@@ -130,8 +151,8 @@ function expectCleanShowing(layout: MapLayout, shown: string | undefined): void 
 }
 
 /**
- * The bounds hug the cards and forward pills; every card's send-backs lie under them, within
- * the row's span, where the frame grows to hold them while they show, each pill near its own
+ * The bounds hug the cards and forward pills; every send-back lies under them, within the
+ * row's span, in `sendBackExtent`, where the frame grows to hold them, each pill near its own
  * leg (the owner's ruling on #289), not slid along the row.
  */
 function expectSendBacksUnderRow(layout: MapLayout): void {
@@ -140,12 +161,19 @@ function expectSendBacksUnderRow(layout: MapLayout): void {
   expect(layout.bounds.y + layout.bounds.h).toBe(
     Math.max(bottom, ...pillsAbove.map(pill => pill.y + pill.h))
   );
-  for (const { extent, routes } of layout.sendBacks.values()) {
-    for (const route of routes) expect(legGap(route)).toBeLessThanOrEqual(120);
-    expect(extent.y).toBeGreaterThanOrEqual(bottom);
-    expect(extent.x).toBeGreaterThanOrEqual(layout.bounds.x);
-    expect(extent.x + extent.w).toBeLessThanOrEqual(layout.bounds.x + layout.bounds.w);
+  for (const route of allRoutes(layout)) expect(legGap(route)).toBeLessThanOrEqual(120);
+  const extent = layout.sendBackExtent;
+  if (extent === undefined) {
+    expect(layout.sendBacks.size).toBe(0);
+    return;
   }
+  for (const { extent: mine } of layout.sendBacks.values()) {
+    expect(mine.y).toBeGreaterThanOrEqual(extent.y);
+    expect(mine.y + mine.h).toBeLessThanOrEqual(extent.y + extent.h);
+  }
+  expect(extent.y).toBeGreaterThanOrEqual(bottom);
+  expect(extent.x).toBeGreaterThanOrEqual(layout.bounds.x);
+  expect(extent.x + extent.w).toBeLessThanOrEqual(layout.bounds.x + layout.bounds.w);
 }
 
 /** How far a route's pill sits from its target leg, sideways; 0 for no pill or one over it. */
@@ -221,6 +249,25 @@ describe('a pack map', () => {
     for (const { routes } of layout.sendBacks.values())
       for (const route of routes)
         expect(Math.max(...segments(route.d).map(seg => seg.y2))).toBeGreaterThan(bottom);
+  });
+
+  test('two routes into one card end on their own legs and run on their own tracks, nested', () => {
+    const into = allRoutes(layout)
+      .filter(route => route.to === 'plan-and-build')
+      .sort((p, q) => (p.points.at(-1)?.x ?? 0) - (q.points.at(-1)?.x ?? 0));
+    expect(into.map(route => route.from).sort()).toEqual(['checks', 'landing']);
+    const [left, right] = into;
+    const track = (route: SendBackRoute): number => route.points[1]?.y ?? 0;
+    const leg = (route: SendBackRoute): number => route.points.at(-1)?.x ?? 0;
+    // Sorted by target leg: the route from the further card ends leftmost and runs deeper.
+    expect(left?.from).toBe('landing');
+    expect(leg(left as SendBackRoute)).toBeLessThan(leg(right as SendBackRoute));
+    expect(track(left as SendBackRoute)).toBeGreaterThan(track(right as SendBackRoute));
+    const tracks = allRoutes(layout).map(track);
+    expect(new Set(tracks).size).toBe(tracks.length);
+    // The pack's routes all nest: no two interleave, so `expectClean` lets none cross.
+    const every = allRoutes(layout);
+    for (const p of every) for (const q of every) expect(interleave(p, q)).toBe(false);
   });
 
   test("every send-back pill is within the row's span: the map opens at the first card", () => {

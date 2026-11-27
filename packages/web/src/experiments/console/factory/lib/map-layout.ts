@@ -24,18 +24,19 @@
  * - Forward hand-offs between one pair of cards are one line, their outcomes joined, each once.
  * - A send-back into an earlier card is drawn as one route per pair of cards, the outcomes of
  *   every send-back between them merged, each once, laid out under the row card by card
- *   (`map-send-backs.ts`). The map draws a card's routes only while the card
- *   is hovered, focused or pinned (`MapSendBacks`). The bounds hug the cards and forward pills
- *   (the owner's ruling on #289): a card's routes lie under them, within the row's span, and
- *   the frame grows under the cards to hold them while they show (`useMapCamera`'s `below`).
+ *   (`map-send-backs.ts`). The map draws every route, always (`MapSendBacks`). The bounds hug
+ *   the cards and forward pills (the owner's ruling on #289): the routes lie under them,
+ *   within the row's span, and the frame grows under the cards to hold them
+ *   (`useMapCamera`'s `below`, from `sendBackExtent`).
  *
- * Nothing crosses: forward lines run between cards at mid-height, a card's send-backs nest
- * under the cards, and every pill sits in a gap or under the routes, clear of cards, lines and
+ * Nothing crosses: forward lines run between cards at mid-height, the send-backs nest under
+ * the cards, and every pill sits in a gap or under the routes, clear of cards, lines and
  * pills.
  */
 import { mapColumns, type ColumnTone } from './map-columns';
 import { pillOf } from './map-pill';
 import {
+  extentOf,
   sendBackRoutes,
   type CardSendBacks,
   type RouteCard,
@@ -101,6 +102,8 @@ export interface MapLayout {
   arrows: ArrowPath[];
   /** Each card's send-backs, by card id: a card nothing leaves has none. */
   sendBacks: Map<string, CardSendBacks>;
+  /** What every send-back and its pill take, under the cards; undefined when there are none. */
+  sendBackExtent: Box | undefined;
   /** The box holding every card, line and pill; empty at the origin when there are no cards. */
   bounds: Box;
 }
@@ -250,10 +253,12 @@ export function layoutMap(view: Declaration, drawn: readonly MapArrow[]): MapLay
     cards.map((card): [string, RouteCard] => [card.id, { box: card.box, label: card.label }])
   );
   const routes = sendBackRoutes(routeCards, sendBacks);
+  const every = [...routes.values()].flatMap(card => card.routes);
   return {
     cards,
     arrows,
     sendBacks: routes,
+    sendBackExtent: every.length === 0 ? undefined : extentOf(every),
     bounds: boundsOf([
       ...cards.map(card => card.box),
       ...arrows.flatMap(arrow => (arrow.pill === undefined ? [] : [arrow.pill])),

@@ -55,7 +55,7 @@ export function MapLegend({
             />
           </svg>
           {map === 'curated'
-            ? 'Sends it back: hover or focus a card, or press its ↺, to see its ways back'
+            ? 'Sends it back to an earlier group, its pill saying where and why'
             : 'Sends it back, labelled where it returns to'}
         </li>
         {map === 'curated' ? <FlowDots /> : null}

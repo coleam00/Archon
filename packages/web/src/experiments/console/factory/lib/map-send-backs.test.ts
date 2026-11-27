@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { sendBackRoutes, type RouteCard, type SendBackArrow } from './map-send-backs';
+import { extentOf, sendBackRoutes, type RouteCard, type SendBackArrow } from './map-send-backs';
 import { boxesMeet, crosses, enters, overlaps, segments } from './map-geometry.test-fixtures';
 
 /** Four cards in a row. */
@@ -62,43 +62,46 @@ describe("each card's send-backs", () => {
     }
   });
 
-  test("no route enters a card, and a card's routes never cross, run along each other or share a leg", () => {
-    for (const [, { routes: mine }] of routes) {
-      const lines = mine.map(route => segments(route.d));
-      for (const s of lines.flat())
-        for (const card of cards.values()) expect(enters(card.box, s)).toBe(false);
-      lines.forEach((p, i) =>
-        lines.forEach((q, j) => {
-          if (i === j) return;
-          for (const s of p)
-            for (const t of q) {
-              expect(crosses(s, t)).toBe(false);
-              // Each route on its own line: none runs along another's.
-              expect(overlaps(s, t)).toBe(false);
-            }
-        })
-      );
-      const legs = mine.flatMap(route => [route.points[0]?.x, route.points.at(-1)?.x]);
-      expect(new Set(legs).size).toBe(legs.length);
-    }
+  test('no route enters a card, runs along another or shares a leg; routes sharing a card never cross', () => {
+    // Drawn all at once, laid out together. Interleaved routes (Checks to Intake, Landing to
+    // Plan and build) cannot help crossing; any two that share a card nest instead.
+    const lines = all.map(route => segments(route.d));
+    for (const s of lines.flat())
+      for (const card of cards.values()) expect(enters(card.box, s)).toBe(false);
+    lines.forEach((p, i) =>
+      lines.forEach((q, j) => {
+        if (i === j) return;
+        const [a, b] = [all[i], all[j]];
+        const share = a?.from === b?.from || a?.to === b?.to;
+        for (const s of p)
+          for (const t of q) {
+            if (share) expect(crosses(s, t)).toBe(false);
+            // Each route on its own line: none runs along another's.
+            expect(overlaps(s, t)).toBe(false);
+          }
+      })
+    );
+    const legs = all.flatMap(route => [route.points[0]?.x, route.points.at(-1)?.x]);
+    expect(new Set(legs).size).toBe(legs.length);
+    const tracks = all.map(route => route.points[1]?.y);
+    expect(new Set(tracks).size).toBe(tracks.length);
   });
 
-  test("pills meet no pill, card or line of their card, and stay within the row's span", () => {
+  test("pills meet no pill, card or line, and stay within the row's span", () => {
     const row = { lo: 0, hi: 3 * PITCH + CARD_W };
-    for (const [, { routes: mine, extent }] of routes) {
-      const pills = mine.flatMap(route => (route.pill === undefined ? [] : [route.pill.box]));
-      const lines = mine.flatMap(route => segments(route.d));
-      pills.forEach((pill, i) => {
-        expect(pill.x).toBeGreaterThanOrEqual(row.lo);
-        expect(pill.x + pill.w).toBeLessThanOrEqual(row.hi);
-        for (const card of cards.values()) expect(boxesMeet(pill, card.box)).toBe(false);
-        for (const s of lines) expect(enters(pill, s)).toBe(false);
-        pills.forEach((other, j) => {
-          if (i !== j) expect(boxesMeet(pill, other)).toBe(false);
-        });
-        expect(pill.y + pill.h).toBeLessThanOrEqual(extent.y + extent.h);
+    const extent = extentOf(all);
+    const pills = all.flatMap(route => (route.pill === undefined ? [] : [route.pill.box]));
+    const lines = all.flatMap(route => segments(route.d));
+    pills.forEach((pill, i) => {
+      expect(pill.x).toBeGreaterThanOrEqual(row.lo);
+      expect(pill.x + pill.w).toBeLessThanOrEqual(row.hi);
+      for (const card of cards.values()) expect(boxesMeet(pill, card.box)).toBe(false);
+      for (const s of lines) expect(enters(pill, s)).toBe(false);
+      pills.forEach((other, j) => {
+        if (i !== j) expect(boxesMeet(pill, other)).toBe(false);
       });
-    }
+      expect(pill.y + pill.h).toBeLessThanOrEqual(extent.y + extent.h);
+    });
   });
 
   test('each pill sits near its own leg: never more than a short slide from it', () => {
