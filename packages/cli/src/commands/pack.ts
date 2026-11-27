@@ -19,7 +19,7 @@
  * before anything is written.
  */
 import { createHash } from 'node:crypto';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import { loadConfig } from '@archon/core/config/config-loader';
@@ -70,6 +70,7 @@ import type {
 } from '@archon/workflows/schemas/binding-input-source';
 import { loadWorkflows } from './workflow-list';
 import { loadedLine, otherCopyLine } from './pack-copies';
+import { checkReplacedFiles } from './pack-replaced-files';
 
 export interface PackBindingsOptions {
   /** The checkout the bindings launch in, and where the pack is discovered from. */
@@ -657,15 +658,6 @@ async function assertSiblingFiles(
   }
 }
 
-async function assertNothingOverwritten(generated: readonly Generated[]): Promise<void> {
-  const present: string[] = [];
-  for (const item of generated) if (await exists(item.path)) present.push(item.path);
-  if (present.length === 0) return;
-  throw new Error(
-    `Refusing to overwrite ${present.join(', ')}. Nothing was written. Pass --force to replace ${present.length === 1 ? 'it' : 'them'}.`
-  );
-}
-
 /**
  * A wake binding's `{ input }` reads a run of its `wake.workflow`, so a name that workflow
  * does not declare would map nothing on every start: refused here, before an event arrives.
@@ -708,42 +700,6 @@ async function generateChecked(
   return generated;
 }
 
-/**
- * A replaced file can change which run config its starts use, and the file it replaced is
- * the only record of the old one: regenerating without `--config` silently put a lane back
- * on the install's model layer. Say what changed while the old value is still readable.
- */
-async function warnOnRunConfigChange(generated: readonly Generated[]): Promise<void> {
-  const configOf = (document: unknown): string | undefined => {
-    const binding = (document as { binding?: { launch?: { configSource?: unknown } } }).binding;
-    const value = binding?.launch?.configSource;
-    return typeof value === 'string' ? value : undefined;
-  };
-  for (const item of generated) {
-    let previous: string | undefined;
-    try {
-      previous = configOf(JSON.parse(await readFile(item.path, 'utf8')) as unknown);
-    } catch {
-      // No readable file there: nothing to compare against.
-      continue;
-    }
-    const next = configOf(item.document);
-    if (previous === next) continue;
-    const name = item.path;
-    if (previous !== undefined && next !== undefined) {
-      console.warn(
-        `warning: ${name} replaced a binding whose starts ran on ${previous} with one that runs on ${next}.`
-      );
-    } else if (previous !== undefined) {
-      console.warn(
-        `warning: ${name} removed its run config (${previous}); its starts run on the install's config. Pass --config to keep it.`
-      );
-    } else {
-      console.warn(`warning: ${name} added run config ${next} to a binding that had none.`);
-    }
-  }
-}
-
 async function packBindings(packKey: string, options: PackBindingsOptions): Promise<void> {
   const target = targetFrom(packKey, options);
   const { repo } = target;
@@ -755,9 +711,7 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
     target.discoveryCwd !== undefined
   );
   const generated = await generateChecked(pack, selectIds(pack, options.only), target);
-  if (!options.force) await assertNothingOverwritten(generated);
-
-  if (options.force) await warnOnRunConfigChange(generated);
+  await checkReplacedFiles(generated, options.force === true);
 
   await mkdir(target.outDir, { recursive: true });
   for (const item of generated) {
