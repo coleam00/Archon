@@ -13,13 +13,13 @@ import {
   AsyncQueue,
   bridgeSession,
   buildResultChunk,
-  failureClassFromMessage,
   mapPiEvent,
   serializeToolResult,
   tryParseStructuredOutput,
   usageToTokens,
 } from './event-bridge';
 import { beginPiExtensionTurn } from './extension-error-broker';
+import { failureClassFromMessage } from './failure-class';
 
 // ─── AsyncQueue ────────────────────────────────────────────────────────────
 

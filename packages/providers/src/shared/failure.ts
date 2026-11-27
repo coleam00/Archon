@@ -9,7 +9,7 @@ import type { ResultChunk } from '../types';
  * The one carve-out is a vendor SDK that normalizes a *status code* into the text and
  * exposes nothing else: it is read at a fixed position (the first token) and never read
  * when absent, so this stays a status-code class rather than prose classification. Pi is
- * the case — see `failureClassFromMessage` in `community/pi/event-bridge.ts`.
+ * the case — see `failureClassFromMessage` in `community/pi/failure-class.ts`.
  */
 export function failureResult(
   failureClass: ProviderFailureClass,

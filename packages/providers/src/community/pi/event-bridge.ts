@@ -4,14 +4,14 @@ import type { AssistantMessage, StopReason, Usage } from '@earendil-works/pi-ai'
 import {
   toolCallSchema,
   truncateToolOutput,
-  type ProviderFailureClass,
   type ProviderStopReason,
   type ModelCallUsage,
 } from '@archon/provider-contract';
 
 import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
-import { classOfHttpStatus, failureResult, unknownFailureResult } from '../../shared/failure';
+import { failureResult, unknownFailureResult } from '../../shared/failure';
 import type { PiExtensionTurn } from './extension-error-broker';
+import { failureClassFromMessage } from './failure-class';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -248,39 +248,6 @@ function piStopReason(reason: StopReason): ProviderStopReason | undefined {
 }
 
 /**
- * A status where the text starts: Pi's normalizer writes `"429: <body>"` when the vendor
- * sent a body, and the vendor SDK keeps `"429 status code (no body)"` otherwise. Both put
- * the number first, so `^` is the anchor — a status quoted later in prose is not matched.
- */
-const LEADING_HTTP_STATUS = /^(\d{3})\b/;
-
-/**
- * The class of a failed turn from the leading HTTP status, or `unknown` when the text does
- * not start with one. Pi gives the event bridge no typed error: `stopReason` says `error`
- * and everything else is inside this message, so the status is the one structured value
- * that survives. The class comes from that number through the shared status table, never
- * from the words after it.
- *
- * This read of the text is a deliberate exception to the rule that a token taken from
- * provider output never decides a retry, granted for this adapter alone while the SDK
- * exposes nothing better: a failed `AssistantMessage` carries `stopReason` and
- * `errorMessage`, and `formatProviderError` folds the status it computed
- * (`normalizeProviderError`) into that message as `"<status>: <body>"`. The format is the
- * SDK's own normalisation, so only the status token at the front is read — never the body,
- * and never any wording a vendor chose. Switch to the typed field and delete this when
- * https://github.com/earendil-works/pi/issues/11071 lands one.
- *
- * A dropped connection carries neither a status nor an errno — pi-ai reports it as the bare
- * `Connection error.`, and the cause chain 1.6 appends is still text — so it stays `unknown`
- * on purpose rather than matching prose.
- */
-export function failureClassFromMessage(message: string | undefined): ProviderFailureClass {
-  const match = LEADING_HTTP_STATUS.exec(message ?? '');
-  if (!match) return 'unknown';
-  return classOfHttpStatus(Number(match[1]));
-}
-
-/**
  * Build the terminal `result` chunk from every message the prompt produced.
  * Usage and cost are summed over all assistant messages plus `sideCalls`, the usage of
  * model calls that added no message (see sumPromptUsage); stopReason, model and error
@@ -309,8 +276,7 @@ export function buildResultChunk(
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
   // Built by assignment on a typed value so a misspelled key fails to compile.
-  // The subtype stays Pi's stop reason: the class is the typed channel, and a per-status
-  // subtype would name the same fact twice.
+  // The subtype stays Pi's stop reason; the class is the typed channel.
   const chunk: ResultChunk = isError
     ? failureResult(failureClassFromMessage(last.errorMessage), last.stopReason, last.errorMessage)
     : { type: 'result' };
