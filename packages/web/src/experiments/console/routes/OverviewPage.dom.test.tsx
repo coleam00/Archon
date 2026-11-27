@@ -115,6 +115,7 @@ test('a failed re-read of the asks keeps the asks read before on the Overview, w
     asks: [ask],
     answerRefusals: {},
     itemIds: new Set(['item-a1']),
+    refs: new Set<string>(),
     degraded: [],
   });
   const page = await mountOverview();

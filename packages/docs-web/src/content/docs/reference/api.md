@@ -633,11 +633,14 @@ Archon's forge seam, so the browser never calls it:
 - `changeRun=` and `changeUrl=` (repeatable, paired by position): a run and the change URL it
   delivered. `branchRun=` (repeatable): a run that delivered a change but named no URL; the
   pull request is searched on the branches its item's runs recorded, newest first. Each answers
-  `{ run, url, merged, mergedAt, number }`. A change whose item recorded its merge (a land run,
-  or `archon workflow merged`) is merged at the recorded time without asking the forge whether.
-  Otherwise the forge's `pr.view` answers: by number for the pull request the run's forge
-  operations recorded, else by head on the item's run branches. A `branchRun` whose item
-  recorded no branch and no merge has no change and no entry.
+  `{ run, url, merged, mergedAt, number }`. A change its item recorded as merged (a land run,
+  or `archon workflow merged`) is merged at the recorded time without asking the forge whether;
+  the record answers a `changeUrl` only when its `change` is that URL exactly, so a merge
+  recorded by hand as `#12` is asked of the forge like an unrecorded one.
+  Otherwise the forge's `pr.view` answers: a `changeUrl` by number, for the pull request the
+  run's forge operations recorded or else the one the forge resolves the URL to; a `branchRun`
+  by head on the item's run branches. A `branchRun` from another project than `codebaseId`, or
+  whose item recorded no branch and no merge, has no change and no entry.
 
 Answers are cached on the server, in memory and in a file under its home so a restarted server
 keeps them: a change that has not merged for 60 seconds, a merge for good, an issue for 6 hours,

@@ -52,6 +52,7 @@ async function mount(
     // Every listed item is held open, as the server says, so Dismiss shows only once a refetch
     // has taken an item off the list.
     itemIds: new Set(asks.flatMap(listed => (listed.item === undefined ? [] : [listed.item.id]))),
+    refs: new Set<string>(),
     degraded: [],
   });
   set(K.projects, []);

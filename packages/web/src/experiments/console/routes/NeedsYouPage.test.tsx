@@ -31,6 +31,7 @@ test('asks from every project are on the one page, each answerable by its ref', 
     asks: [ask('ask:a1', 'web'), ask('ask:b1', 'docs')],
     answerRefusals: {},
     itemIds: new Set<string>(),
+    refs: new Set<string>(),
     degraded: [],
   });
   const html = renderToStaticMarkup(

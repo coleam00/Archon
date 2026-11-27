@@ -252,7 +252,11 @@ export async function recordItemTitle(input: {
  * recorded at dispatch (`runPack`). A run that recorded no pack counts for none.
  */
 export async function listItemPacks(): Promise<ReadonlyMap<string, string[]>> {
-  const pack = getDialect().jsonText('r.metadata', `${RUN_DISPATCH_METADATA_KEY}.pack`);
+  const text = getDialect().jsonText('r.metadata', `${RUN_DISPATCH_METADATA_KEY}.pack`);
+  // SQLite stores run metadata as unvalidated TEXT: one malformed row reads as no pack instead
+  // of failing the whole list, and with it `GET /api/codebases` (#286).
+  const pack =
+    getDatabaseType() === 'sqlite' ? `CASE WHEN json_valid(r.metadata) THEN ${text} END` : text;
   const result = await pool.query<{ project_key: string; pack: string }>(
     `SELECT DISTINCT i.project_key, ${pack} AS pack
        FROM remote_agent_workflow_runs r JOIN remote_agent_items i ON i.id = r.item_id

@@ -76,6 +76,7 @@ import {
   createAsksSettledStarts,
 } from './asks-settled';
 import { createEndedCheckout } from './ended-checkout';
+import { heldStartReads } from './held-item-starts';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -159,36 +160,17 @@ function collectOAuthCredentialValues(
 const launchProjectKeyOf = launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb));
 const launchProjectOf = (cwd: string) => registeredProjectForPath(cwd, codebaseDb);
 
-/**
- * The held binding starts whose item key `keyMatches`, each with the item it names. A binding
- * is resolved to a project only when it is prepared, so its checkout decides the project here
- * the way it will then; only a start whose key matches is resolved.
- */
-async function heldItemStartsNaming(
-  keyMatches: (itemKey: string) => boolean
-): ReturnType<IWorkflowStore['listAllHeldItemStarts']> {
-  const held: Awaited<ReturnType<IWorkflowStore['listAllHeldItemStarts']>> = [];
-  for (const start of await installHold.listHeldStarts()) {
-    if (start.kind !== 'trigger' || start.itemKey === null || start.cwd === null) continue;
-    if (!keyMatches(start.itemKey)) continue;
-    const { receiptId, bindingId, hostId, workflow, receivedAt, itemKey } = start;
-    const projectKey = await launchProjectKeyOf(start.cwd);
-    if (projectKey !== null)
-      held.push({ receiptId, bindingId, hostId, workflow, receivedAt, itemKey, projectKey });
-  }
-  return held;
-}
-
-/** The held binding starts that name an item, across the install, so a read of many items lists them once. */
-function listAllHeldItemStarts(): ReturnType<IWorkflowStore['listAllHeldItemStarts']> {
-  return heldItemStartsNaming(() => true);
-}
+// Every held-start read, so the bulk one and one item's agree on the project (`heldStartReads`).
+const heldStarts = heldStartReads({
+  listHeldStarts: () => installHold.listHeldStarts(),
+  projectKeyOf: launchProjectKeyOf,
+});
 
 /** The held binding starts on item `itemId`: those naming its key whose checkout is in its project. */
 async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   const item = await itemsDb.getItem(itemId);
   if (!item) return [];
-  return (await heldItemStartsNaming(key => key === item.key))
+  return (await heldStarts.naming(item.key))
     .filter(start => start.projectKey === item.projectKey)
     .map(({ projectKey: _project, itemKey: _key, ...start }) => start);
 }
@@ -321,7 +303,7 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
-    listAllHeldItemStarts,
+    listAllHeldItemStarts: heldStarts.all,
     listItemStarts,
     listPreparingStarts,
     listRefusedStarts,

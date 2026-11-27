@@ -88,44 +88,55 @@ async function viewByNumber(ask: Ask, ref: PrRef): Promise<Found> {
   return { view: response.result.value };
 }
 
+type Resolved = Extract<
+  Extract<Extract<ForgeResponse, { ok: true }>['result'], { op: 'resolve' }>['value'],
+  { kind: 'resolved' }
+>;
+
 /**
- * The repository a change lookup searches: the one the forge resolves the change's web URL
- * to, or, for a branch lookup, the project's git remote.
+ * What the forge resolves `remote` to: with `web`, a change's web URL, which also names the
+ * pull request or issue it is; otherwise the project's git remote, the repository alone.
  */
-async function repoOf(
+async function resolve(
   ask: Ask,
-  lookup: ChangeLookup
-): Promise<{ repo: PrRef['repo'] } | { reason: string }> {
-  const remote = lookup.kind === 'url' ? lookup.url : lookup.remote;
-  if (remote === null) return { reason: 'the project has no remote to look the change up in' };
-  const resolved = await ask({
+  remote: string,
+  web: boolean
+): Promise<{ resolved: Resolved } | { reason: string }> {
+  const response = await ask({
     op: 'resolve',
     operationId: randomUUID(),
     remote,
-    ...(lookup.kind === 'url' ? { web: true as const } : {}),
+    ...(web ? { web: true as const } : {}),
   });
-  if (!resolved.ok) return { reason: failed(resolved) };
-  if (resolved.result.op !== 'resolve' || resolved.result.value.kind !== 'resolved')
+  if (!response.ok) return { reason: failed(response) };
+  if (response.result.op !== 'resolve' || response.result.value.kind !== 'resolved')
     return {
-      reason:
-        lookup.kind === 'url'
-          ? 'no forge plugin resolves this change'
-          : "no forge plugin resolves the project's remote",
+      reason: web
+        ? 'no forge plugin resolves this change'
+        : "no forge plugin resolves the project's remote",
     };
-  return { repo: resolved.result.value.repo };
+  return { resolved: response.result.value };
+}
+
+/** The repository the project's git `remote` resolves to. */
+async function repoOfRemote(
+  ask: Ask,
+  remote: string | null
+): Promise<{ repo: PrRef['repo'] } | { reason: string }> {
+  if (remote === null) return { reason: 'the project has no remote to look the change up in' };
+  const found = await resolve(ask, remote, false);
+  return 'reason' in found ? found : { repo: found.resolved.repo };
 }
 
 /**
- * The pull request opened from one of `branches` (the item's runs' recorded branches,
- * newest first) in `repo`, in any state, that `accept` takes. A branch with no pull
- * request, or one `accept` refuses, is passed over, and a forge failure ends the search as
- * unknown rather than as not found.
+ * The first pull request opened from one of `branches` (the item's runs' recorded branches,
+ * newest first) in `repo`, in any state. A branch with no pull request is passed over, and a
+ * forge failure ends the search as unknown rather than as not found.
  */
 async function viewByBranch(
   ask: Ask,
   repo: PrRef['repo'],
-  branches: readonly string[],
-  accept: (view: PrView) => boolean
+  branches: readonly string[]
 ): Promise<Found> {
   for (const head of branches) {
     const response = await ask({
@@ -135,27 +146,39 @@ async function viewByBranch(
     });
     if (!response.ok) return { reason: failed(response) };
     if (response.result.op !== 'pr.view') return { reason: 'the forge answered another operation' };
-    const view = response.result.value;
-    if (view !== null && accept(view)) return { view };
+    if (response.result.value !== null) return { view: response.result.value };
   }
-  return { reason: "no pull request on the item's run branches is this change" };
+  return { reason: "no pull request was opened from the item's run branches" };
 }
 
-/** The pull request a lookup names, through the forge. */
+/**
+ * The pull request a lookup names, through the forge. A URL is asked by number: the one its
+ * run's audit rows recorded, else the one the forge resolves the URL to, so a URL needs no
+ * branch (#286). A branch lookup takes the first pull request on the item's run branches in
+ * the repository the project's remote resolves to.
+ */
 async function findChange(
   ask: Ask,
   lookup: ChangeLookup,
   branches: () => Promise<readonly string[]>
 ): Promise<Found> {
-  const ref = lookup.kind === 'url' ? prRefFromAudits(lookup.url, lookup.audits) : null;
-  if (ref !== null) return viewByNumber(ask, ref);
+  if (lookup.kind === 'url') {
+    const ref = prRefFromAudits(lookup.url, lookup.audits);
+    if (ref !== null) return viewByNumber(ask, ref);
+    const found = await resolve(ask, lookup.url, true);
+    if ('reason' in found) return found;
+    const { repo, subject } = found.resolved;
+    // The host refuses a resolved `web` answer without a subject, so none means a forge
+    // that broke its contract; it is reported rather than guessed around.
+    if (subject === undefined) return { reason: 'the forge did not say what this URL names' };
+    if (subject.kind !== 'pr') return { reason: 'the URL names an issue, not a pull request' };
+    return viewByNumber(ask, { repo, number: subject.number });
+  }
   const heads = await branches();
-  if (heads.length === 0) return { reason: 'no forge record or run branch names this change' };
-  const repo = await repoOf(ask, lookup);
+  if (heads.length === 0) return { reason: 'no run branch names this change' };
+  const repo = await repoOfRemote(ask, lookup.remote);
   if ('reason' in repo) return repo;
-  return viewByBranch(ask, repo.repo, heads, view =>
-    lookup.kind === 'url' ? view.pr.url === lookup.url : true
-  );
+  return viewByBranch(ask, repo.repo, heads);
 }
 
 /** The plugins one lookup dispatches through. */
@@ -223,11 +246,10 @@ export function forgePluginsOnce(
 
 /**
  * Which pull request a change is and whether it merged, asked of its forge with `pr.view`.
- * For a URL lookup, when one of the recording run's forge audit rows names its pull
- * request, that is asked by number. When none does (an earlier run opened it), `branches`
- * gives the item's runs' recorded branches, newest first, read only then, and the pull
- * request on one of them whose URL is the change is taken. A branch lookup (the run named
- * no URL) takes the first pull request on those branches in the project remote's
+ * A URL lookup asks by number: the pull request one of the recording run's forge audit rows
+ * names, or, when none does (an earlier run opened it), the one the forge resolves the URL
+ * to. A branch lookup (the run named no URL) takes the first pull request on the item's runs'
+ * recorded branches (`branches`, newest first, read only for it) in the project remote's
  * repository, whatever its URL. Plugins come from `plugins` (`forgePluginsOnce`).
  * Never throws: a failure, a failed discovery included, is `unknown` with its reason.
  * Nothing is audited, as nothing here belongs to a run.
@@ -267,7 +289,7 @@ export async function viewWorkItem(
 ): Promise<WorkItemAnswer> {
   try {
     const ask = asker(options);
-    const repo = await repoOf(ask, { kind: 'branch', remote });
+    const repo = await repoOfRemote(ask, remote);
     if ('reason' in repo) return { number, unknown: repo.reason };
     const response = await ask({
       op: 'workitem.view',

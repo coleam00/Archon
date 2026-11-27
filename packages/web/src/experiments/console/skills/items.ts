@@ -21,7 +21,8 @@ export const ITEM_STATES = Object.keys({
 /** A page of items, the cursor of the next one (null on the last), and the window's totals. */
 export type ItemPage = Pick<components['schemas']['ItemWindow'], 'items' | 'next' | 'totals'>;
 
-// The read lists the items with a run started in a window; this one holds every item.
+// The read lists the items with a run started in a window; this one holds every item that has
+// a run. An item with no run is in no window: a work order shows its runless members itself.
 const EVERY_ITEM = '1970-01-01';
 
 /**
@@ -45,7 +46,7 @@ export async function listItemsPage(
   });
 }
 
-/** Every item of a project standing in one of `states`. */
+/** Every item of a project that has a run, standing in one of `states`. */
 export async function listItems(
   projectId: string,
   states: readonly ItemState[]

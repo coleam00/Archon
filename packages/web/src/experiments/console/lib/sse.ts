@@ -17,7 +17,8 @@
  */
 
 import { useEffect } from 'react';
-import { invalidate } from '../store/cache';
+import { get, invalidate } from '../store/cache';
+import type { RunsAttention } from '../primitives/run';
 import { K } from './../store/keys';
 import { SSE_BASE_URL } from './http';
 import { ATTENTION_SSE_PATH, DASHBOARD_SSE_PATH } from './sse-endpoints';
@@ -28,6 +29,8 @@ interface ParsedEvent {
   type?: string;
   /** On an attention stream line: whether it asks for someone (`attentionWatchReader`). */
   needs?: string;
+  /** On an `attention` line: the queue item, whose `ref` the attention list also holds. */
+  item?: { ref?: string };
   runId?: string;
   locked?: boolean;
   /** On a `conversation_lock` that a starting reply emits: the turn a Stop names. */
@@ -120,8 +123,11 @@ export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
  *
  * A stream opens with the open set, then `ready`. That replay is what the page's own first
  * reads already show, so it refetches nothing: refetching it reread the attention list and
- * every board window once more on each page load. A change landing between a page's first
- * read and the stream's open set is the one thing this misses, until the next line.
+ * every board window once more on each page load. The one exception is an item that opened
+ * between the list's read and the stream's open set: at `ready`, a replayed item that needs
+ * someone and that the loaded list does not hold refetches once (#286). A list still loading
+ * at `ready` is not compared, so an item that opened just before the stream's open set can
+ * still wait for the next line, and so does an item that closed in that gap.
  * After `ready`, an item that opens and needs someone, or closes, refetches. The server sends
  * the open set and `ready` on every connect, EventSource's own reconnects included, so each
  * connect starts a replay again; changes past the resumed cursor come after its `ready`.
@@ -148,18 +154,32 @@ export function useAttentionStreamSSE(): void {
     const open = (): void => {
       es = new EventSource(`${SSE_BASE_URL}${ATTENTION_SSE_PATH}`);
       let replaying = true;
+      // The refs of the replayed items that need someone, compared with the list at `ready`.
+      let replayed: string[] = [];
       es.onopen = (): void => {
         replaying = true;
+        replayed = [];
       };
       es.onmessage = (e: MessageEvent<string>): void => {
         const line = parse(e.data);
-        if (line?.type === 'ready') replaying = false;
-        else if (line?.type === 'error') {
+        if (line?.type === 'ready') {
+          replaying = false;
+          const listed = get(K.runsAttention) as RunsAttention | undefined;
+          if (listed !== undefined && replayed.some(ref => !listed.refs.has(ref)))
+            scheduleRefetch();
+          replayed = [];
+        } else if (line?.type === 'error') {
           es.close();
           scheduleRefetch();
           open();
-        } else if (replaying) return;
-        else if (
+        } else if (replaying) {
+          if (
+            line?.type === 'attention' &&
+            line.needs !== 'nothing' &&
+            line.item?.ref !== undefined
+          )
+            replayed.push(line.item.ref);
+        } else if (
           (line?.type === 'attention' && line.needs !== 'nothing') ||
           line?.type === 'resolved'
         )

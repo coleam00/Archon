@@ -24,6 +24,7 @@ import type * as CodebaseDb from '../db/codebases';
 import type * as Commands from '../utils/commands';
 import { quoteCommandArg } from '../utils/command-args';
 import {
+  CheckoutCodebaseAmbiguousError,
   findCodebaseForCheckoutPath,
   type CodebaseCheckoutResolverDeps,
 } from '../services/codebase-checkout-resolver';
@@ -412,8 +413,9 @@ describe('findCodebaseForCheckoutPath', () => {
       }),
     });
 
-    await expect(findCodebaseForCheckoutPath(cwd, deps)).rejects.toThrow(
-      'matches multiple registered codebases'
+    // Typed, so a bulk reader can isolate the one checkout without matching the message.
+    await expect(findCodebaseForCheckoutPath(cwd, deps)).rejects.toBeInstanceOf(
+      CheckoutCodebaseAmbiguousError
     );
   });
 });

@@ -379,6 +379,22 @@ describe('reading items over a window', () => {
       ['a', 'resting'],
       ['b', 'resting'],
     ]);
+    // One window read shares what it learned of linked items across them, but never an
+    // answer a cycle cut (#286). Placing t meets d inside the cycle t, d and finds it not
+    // done; placed on its own for u, d is done through t, whose part m merged, so u's wait
+    // is over.
+    const [t, d, m, u] = ['t', 'd', 'm', 'u'];
+    const cycleRead = await states(
+      [t, d, m, u],
+      [
+        [t, d, 'depends_on'],
+        [t, d],
+        [m, t],
+        [u, d, 'depends_on'],
+      ],
+      [m]
+    );
+    expect(cycleRead.find(([key]) => key === u)).toEqual([u, 'stopped']);
   });
 
   test('an item whose runs cannot all be read is reported as degraded, and the rest of it reads', async () => {

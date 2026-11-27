@@ -180,6 +180,7 @@ test('each open item is under the stage it stands at, in the order the pack grap
     asks: [ask],
     answerRefusals: {},
     itemIds: new Set(['id-issue-2']),
+    refs: new Set<string>(),
     degraded: [],
   });
 
@@ -259,6 +260,7 @@ test("a column header's chips count its cards: needs you by their buttons, the r
     asks: [askOn('issue-a'), { ...askOn('issue-a'), ref: 'ask:issue-a-2' }, askOn('issue-c')],
     answerRefusals: {},
     itemIds: new Set(['id-issue-a', 'id-issue-c']),
+    refs: new Set<string>(),
     degraded: [],
   });
 
@@ -562,6 +564,7 @@ test("the Needs you tab counts the project's open asks, not another project's (#
     ],
     answerRefusals: {},
     itemIds: new Set(),
+    refs: new Set<string>(),
     degraded: [],
   });
   const page = render('/console/p/web', <ProjectViewTabs projectId="web" active="runs" />);
@@ -583,6 +586,7 @@ function seedBoard(reads: ItemRead[]): void {
     asks: [],
     answerRefusals: {},
     itemIds: new Set(),
+    refs: new Set<string>(),
     degraded: [],
   });
 }
@@ -1037,6 +1041,7 @@ test('a failed re-read of the asks keeps the asks read before, with no alert (#2
     asks: [askOn('issue-2')],
     answerRefusals: {},
     itemIds: new Set(['id-issue-2']),
+    refs: new Set<string>(),
     degraded: [],
   });
   const board = await mountBoard(attentionDown);

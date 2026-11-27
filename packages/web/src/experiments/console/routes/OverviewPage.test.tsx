@@ -108,6 +108,7 @@ test('the Overview shows its asks as the one count link, never as ask rows', () 
     ],
     answerRefusals: {},
     itemIds: new Set<string>(),
+    refs: new Set<string>(),
     degraded: [],
   });
   const html = renderToStaticMarkup(

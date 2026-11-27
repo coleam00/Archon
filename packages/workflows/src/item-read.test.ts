@@ -1098,3 +1098,96 @@ describe('reading a work order', () => {
     expect((await readOrder({ links: [partOf(order, a)] })).workOrder).toBeNull();
   });
 });
+
+describe('placing an item through its links', () => {
+  const project = 'acme/web';
+  const at = (key: string): WorkflowItem => ({ id: `${key}-row`, projectKey: project, key });
+  const link = (kind: ItemLink['kind'], from: WorkflowItem, to: WorkflowItem): ItemLink => ({
+    id: `${from.key}-${kind}-${to.key}`,
+    kind,
+    from,
+    to,
+    ...linkAct,
+    ended: null,
+  });
+
+  /**
+   * Where `top` stands over `links` between `items`, with `merged` and `ended` naming the
+   * items that carry those facts, and how many items were placed to say so.
+   */
+  async function place(facts: {
+    top: WorkflowItem;
+    items: WorkflowItem[];
+    links: ItemLink[];
+    merged?: string[];
+    ended?: string[];
+  }) {
+    const byKey = new Map(facts.items.map(each => [each.key, each]));
+    let placed = 0;
+    const read = await readItem(
+      {
+        ...source,
+        store: {
+          ...source.store,
+          getItemRuns: async (projectKey, key) => {
+            const found = byKey.get(key);
+            return projectKey === project && found !== undefined
+              ? { item: found, runs: [], descendantIds: [] }
+              : null;
+          },
+          listQueuedItemStarts: async () => {
+            placed++;
+            return [];
+          },
+          listItemRulings: async () => [],
+          getItemLanding: async () => null,
+          getItemMerge: async id => (facts.merged?.includes(id) ? merge : null),
+          getHoldingItemEnd: async id =>
+            facts.ended?.includes(id)
+              ? {
+                  kind: 'ended',
+                  id: `end-${id}`,
+                  reason: 'Not needed.',
+                  at: '2026-11-01T10:00:00.000Z',
+                  via: 'cli',
+                  by: { declared: 'alice' },
+                  fromRun: null,
+                }
+              : null,
+          listItemLinks: async id => facts.links.filter(l => l.from.id === id || l.to.id === id),
+        },
+      },
+      project,
+      facts.top.key
+    );
+    return { state: read?.standing.state, placed };
+  }
+
+  // Ten layers of two items each under the top, every item linked to both items of the layer
+  // below: 2^11 paths from the top to the last layer, 21 items.
+  const top = at('top');
+  const layers = Array.from({ length: 10 }, (_, i) => [at(`l${String(i)}a`), at(`l${String(i)}b`)]);
+  const lattice = (kind: ItemLink['kind']): ItemLink[] =>
+    [[top], ...layers].flatMap((upper, i) =>
+      (layers[i] ?? []).flatMap(lower =>
+        upper.map(each =>
+          kind === 'depends_on' ? link(kind, each, lower) : link(kind, lower, each)
+        )
+      )
+    );
+  const items = [top, ...layers.flat()];
+
+  test('converging depends_on links place each item once, not once per path', async () => {
+    const read = await place({ top, items, links: lattice('depends_on') });
+    expect(read.state).toBe('waiting');
+    // The top, and the two it depends on: what those depend on cannot make them done.
+    expect(read.placed).toBeLessThanOrEqual(3 * items.length);
+  });
+
+  test('converging part_of links place each item once, and the top is done by its parts', async () => {
+    const lastLayer = (layers.at(-1) ?? []).map(each => each.id);
+    const read = await place({ top, items, links: lattice('part_of'), merged: lastLayer });
+    expect(read.state).toBe('done');
+    expect(read.placed).toBeLessThanOrEqual(3 * items.length);
+  });
+});

@@ -79,6 +79,7 @@ function seed(asks: ItemAsk[], reads: ItemRead[] = []): void {
     asks,
     answerRefusals: {},
     itemIds: new Set<string>(),
+    refs: new Set<string>(),
     degraded: [],
   });
   set(K.projects, []);

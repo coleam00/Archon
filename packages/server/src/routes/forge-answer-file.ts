@@ -18,6 +18,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import type { ChangeMergeState, WorkItemAnswer } from '@archon/adapters/forge-host';
+import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import { getLog } from './api-route-kit';
 
 /** One kept answer and when it settled, as the route's caches hold it. */
@@ -109,8 +110,13 @@ export function forgeAnswerFile(where: () => string): ForgeAnswerFile {
       return;
     }
     // An answer a request already settled is newer than the file's.
-    for (const [key, entry] of entries(parsed.issues, issueEntry))
+    // An issue is keyed by its project's remote, which an older server kept with any
+    // credentials it carried: the key is cleaned as the route cleans it, so the answer is
+    // kept and the credentials are never written back (#286).
+    for (const [stored, entry] of entries(parsed.issues, issueEntry)) {
+      const key = sanitizeCredentials(stored);
       if (!issues.has(key)) issues.set(key, entry);
+    }
     for (const [key, entry] of entries(parsed.changes, changeEntry))
       if (!changes.has(key)) changes.set(key, entry);
   };

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { OpenAPIHono } from '@hono/zod-openapi';
@@ -58,6 +58,7 @@ function appWith(opts: {
 }
 
 const delivered = (recorded: DeliveredRun['recorded']): DeliveredRun => ({
+  codebaseId: 'p',
   audits: [],
   branches: async () => ['archon/task-1'],
   recorded,
@@ -134,9 +135,58 @@ describe('GET /api/forge/subjects', () => {
 
   test('a run that named no URL with no branch on its item has no change', async () => {
     const { read } = appWith({
-      runs: { r2: { audits: [], branches: async () => [], recorded: null } },
+      runs: { r2: { codebaseId: 'p', audits: [], branches: async () => [], recorded: null } },
     });
     expect((await read('branchRun=r2')).body.changes).toEqual([]);
+  });
+
+  test('a merge the item recorded answers only for the change it names', async () => {
+    const PR113 = PR.replace('/112', '/113');
+    const { read, asked } = appWith({
+      runs: { r1: delivered({ change: PR, at: MERGED_AT }) },
+      state: async () => ({ url: PR113, merged: false, mergedAt: null, number: 113 }),
+    });
+    const { body } = await read(`changeRun=r1&changeUrl=${encodeURIComponent(PR113)}`);
+    expect(body.changes).toEqual([
+      { run: 'r1', url: PR113, merged: false, mergedAt: null, number: 113 },
+    ]);
+    expect(asked.changes).toBe(1);
+  });
+
+  test('a run that named no URL answers only for its own project', async () => {
+    const { read, asked } = appWith({
+      runs: { r3: { ...delivered({ change: PR, at: MERGED_AT }), codebaseId: 'other' } },
+    });
+    expect((await read('branchRun=r3')).body.changes).toEqual([]);
+    expect(asked.changes).toBe(0);
+  });
+
+  test('at most eight change lookups run at once, and every one settles into the cache', async () => {
+    let inFlight = 0;
+    let most = 0;
+    const gates: (() => void)[] = [];
+    const urls = Array.from({ length: 20 }, (_, i) => PR.replace('/112', `/${String(200 + i)}`));
+    const { read, asked } = appWith({
+      runs: { r1: delivered(null) },
+      state: async lookup => {
+        inFlight++;
+        most = Math.max(most, inFlight);
+        await new Promise<void>(resolve => gates.push(resolve));
+        inFlight--;
+        const at = lookup.kind === 'url' ? lookup.url : PR;
+        return { url: at, merged: true, mergedAt: MERGED_AT, number: 112 };
+      },
+    });
+    const query = urls.map(u => `changeRun=r1&changeUrl=${encodeURIComponent(u)}`).join('&');
+    const first = await read(query);
+    expect(first.body.changes.every(change => change.merged === 'pending')).toBe(true);
+    expect(most).toBe(8);
+    while (asked.changes < urls.length || gates.length > 0) {
+      gates.splice(0).forEach(open => open());
+      await Bun.sleep(1);
+    }
+    expect(most).toBe(8);
+    expect((await read(query)).body.changes.every(change => change.merged === true)).toBe(true);
   });
 
   test("an issue's title is answered, then served from the cache", async () => {
@@ -329,6 +379,39 @@ describe('GET /api/forge/subjects with an answer file', () => {
       [null, false],
     ]);
     expect(asked.issues).toBe(1);
+  });
+
+  test("a remote's credentials never reach the file, and a key an older server kept them in is cleaned", async () => {
+    const CREDENTIALED = 'https://user:tok@github.com/coleam00/archon-factory-console.git';
+    const answerFile = await fileWith({
+      version: 1,
+      issues: { [`${CREDENTIALED}#5`]: { value: issue5, at: NOW } },
+    });
+    const file = forgeAnswerFile(() => answerFile);
+    const asked: number[] = [];
+    const app = new OpenAPIHono();
+    registerForgeRoutes(app, {
+      remote: async () => CREDENTIALED,
+      deliveredRun: async () => null,
+      changeMergeState: async () => ({ url: PR, merged: false, mergedAt: null, number: 112 }),
+      viewWorkItem: async (number, remote) => {
+        asked.push(number);
+        // The forge is still asked through the remote as registered.
+        expect(remote).toBe(CREDENTIALED);
+        return { number, title: 'Learned', state: 'open', url: `${REMOTE}/issues/7` };
+      },
+      waitMs: 20,
+      now: () => NOW,
+      answerFile: file,
+    });
+    const res = await app.request('/api/forge/subjects?codebaseId=p&issue=5&issue=7');
+    const body = forgeSubjectsResponseSchema.parse(await res.json());
+    expect(body.issues.map(entry => entry.title)).toEqual(['Kept title', 'Learned']);
+    expect(asked).toEqual([7]);
+    await file.flush();
+    const written = await readFile(answerFile, 'utf8');
+    expect(written).not.toContain('tok');
+    expect(written).toContain('Kept title');
   });
 
   test('a file that does not parse is an empty cache', async () => {

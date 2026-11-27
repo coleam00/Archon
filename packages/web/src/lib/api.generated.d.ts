@@ -4146,7 +4146,7 @@ export interface paths {
     };
     /**
      * What the project's forge says of some issues and delivered changes
-     * @description Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change whose item recorded a merge (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.
+     * @description Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change its item recorded as merged (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.
      */
     get: {
       parameters: {

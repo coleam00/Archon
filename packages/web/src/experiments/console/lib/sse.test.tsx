@@ -189,3 +189,43 @@ test('the attention stream refetches on changes after its replay, and reopens on
     invalidate(K.runsAttention);
   }
 });
+
+test('a replayed item the loaded list does not hold refetches once at ready; a held one does not', async () => {
+  const loadAttention = mock(async () => ({ refs: new Set(['ask:a']) }));
+  function Banner(): ReactElement {
+    useAttentionStreamSSE();
+    const { data } = useEntity(K.runsAttention, loadAttention);
+    return <div>{data === undefined ? '' : 'list'}</div>;
+  }
+  const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 150));
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<Banner />));
+    const stream = TestEventSource.instances.at(-1);
+    if (!stream) throw new Error('Attention stream was not opened');
+    // Every replayed item is one the list already holds: nothing to refetch (#244).
+    await act(async () => {
+      stream.send({ type: 'attention', needs: 'answer', item: { ref: 'ask:a' } });
+      stream.send({ type: 'attention', needs: 'nothing', item: { ref: 'ask:quiet' } });
+      stream.send({ type: 'ready', cursor: 'c1' });
+      await settle();
+    });
+    expect(loadAttention).toHaveBeenCalledTimes(1);
+    // An item opened between the list's read and the stream's open set: one refetch.
+    await act(async () => {
+      stream.reconnect();
+      stream.send({ type: 'attention', needs: 'answer', item: { ref: 'ask:a' } });
+      stream.send({ type: 'attention', needs: 'answer', item: { ref: 'ask:b' } });
+      stream.send({ type: 'attention', needs: 'look', item: { ref: 'ask:c' } });
+      stream.send({ type: 'ready', cursor: 'c2' });
+      await settle();
+    });
+    expect(loadAttention).toHaveBeenCalledTimes(2);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    invalidate(K.runsAttention);
+  }
+});

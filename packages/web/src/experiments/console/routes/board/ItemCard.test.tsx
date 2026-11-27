@@ -422,6 +422,7 @@ test("a card's Needs you N is the open-ask count of the tab its link opens, twin
     asks,
     answerRefusals: {},
     itemIds: new Set(reads.map(read => read.item.id)),
+    refs: new Set<string>(),
     degraded: [],
   });
   set(K.projects, []);

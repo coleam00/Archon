@@ -914,7 +914,8 @@ The view files come from **one small read-only route file**,
   the web, with no parity test.
 - Whether a change merged comes first from the merge the engine recorded on the item (a land
   run records it, and `archon workflow merged` records one made by hand): a recorded item is
-  merged at the recorded time from the first read, placed and counted without the change
+  merged at the recorded time from the first read, for the change the record names only (an
+  earlier change of the same item is asked about as usual), placed and counted without the change
   host, since a merge does not come undone and a restart then needs no lookup for it. Only
   when no forge record of its runs names the pull request does the server ask the host, once
   per process and in the background, for the number alone: the card shows "the change" until
@@ -925,8 +926,8 @@ The view files come from **one small read-only route file**,
   Items merged before land runs recorded merges carry no record; record one by hand with
   `archon workflow merged` (the one-time backfill script of #141 went with the server read it
   used, in v2-D). The pull request is the one the
-  run's forge records name, else the one on a branch the item's runs recorded whose URL is
-  the change (an earlier run may have opened it). An
+  run's forge records name, else the one the host resolves the change URL to (an earlier run
+  may have opened it). An
   empty change URL is no URL: the item takes the latest earlier run that named one. When no
   run named one but a delivery run returned an empty URL, the change is the first pull request
   found on the item's run branches, newest branch first, in the project's registered remote,

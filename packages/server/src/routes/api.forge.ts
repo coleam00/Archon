@@ -13,6 +13,7 @@ import {
   prRefFromAudits,
   type WorkItemAnswer,
 } from '@archon/adapters/forge-host';
+import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -62,8 +63,8 @@ export const forgeSubjectsResponseSchema = z
       })
     ),
     /**
-     * One entry per change asked, by the run that delivered it. A `branchRun` whose item
-     * recorded no branch and no merge has no change and no entry.
+     * One entry per change asked, by the run that delivered it. A `branchRun` from another
+     * project, or whose item recorded no branch and no merge, has no change and no entry.
      */
     changes: z.array(
       z.object({
@@ -84,7 +85,7 @@ const getForgeSubjectsRoute = createRoute({
   tags: ['Workflows'],
   summary: "What the project's forge says of some issues and delivered changes",
   description:
-    "Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change whose item recorded a merge (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.",
+    "Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change its item recorded as merged (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.",
   request: { query: forgeSubjectsQuerySchema },
   responses: {
     200: {
@@ -105,6 +106,8 @@ interface RecordedMerge {
 
 /** What the route reads of a run that delivered a change. */
 export interface DeliveredRun {
+  /** The project the run belongs to; null when it names none. */
+  codebaseId: string | null;
   /** The run's forge audit rows, which may name the pull request its URL is. */
   audits: readonly unknown[];
   /** The branches the run's item's runs recorded, newest-started first. */
@@ -214,6 +217,12 @@ const ISSUE_LOOKUPS = 8;
  * process, and eight at a time slowed every other read of the first page load.
  */
 const ISSUE_REFRESHES = 2;
+/**
+ * The most change lookups in flight at once, across requests: each runs a forge plugin process,
+ * and a cold board of distinct changes would otherwise start one per card. A queued lookup
+ * still answers `pending` once the wait passes.
+ */
+const CHANGE_LOOKUPS = 8;
 
 /** `work`, with at most `most` of the works given to one limiter running at once. */
 function limiter(most: number): <T>(work: () => Promise<T>) => Promise<T> {
@@ -260,6 +269,7 @@ export function changeStateCache(
 ) => Promise<ShownAnswer> {
   const now = deps.now ?? Date.now;
   const waitMs = deps.waitMs ?? WAIT_MS;
+  const lookups = limiter(CHANGE_LOOKUPS);
   const keyOf = (change: Change): string =>
     change.kind === 'url' ? change.url : `run:${change.run}`;
   const answers = keyedOnce(
@@ -270,8 +280,7 @@ export function changeStateCache(
       remote: string | null
     ): Promise<ChangeMergeState> => {
       const asked: ChangeLookup = change.kind === 'url' ? change : { kind: 'branch', remote };
-      return deps
-        .changeMergeState(asked, branches)
+      return lookups(() => deps.changeMergeState(asked, branches))
         .catch(
           (error: unknown): ChangeMergeState => ({
             url: null,
@@ -328,7 +337,10 @@ export function changeStateCache(
     return known.value.url === answer.url ? { ...answer, number: known.value.number } : answer;
   };
   return async (change, branches, remote, recorded) => {
-    if (recorded !== null) return recordedAnswer(change, branches, remote, recorded);
+    // A recorded merge answers only for the change it names, compared whole: the item may
+    // have delivered other changes before it (#286).
+    if (recorded !== null && (change.kind === 'branch' || recorded.change === change.url))
+      return recordedAnswer(change, branches, remote, recorded);
     const known = answers.known(keyOf(change));
     if (known !== undefined) {
       if (known.value.merged !== true && now() - known.at >= CHANGE_TTL_MS)
@@ -339,6 +351,10 @@ export function changeStateCache(
     return shown(await within(lookup(change, branches, remote), waitMs, pending), change);
   };
 }
+
+/** An issue's cache key: its project's remote, without credentials, and its number. */
+const issueKey = (remote: string | null, number: number): string =>
+  `${sanitizeCredentials(remote ?? '')}#${String(number)}`;
 
 type IssueAnswer = z.infer<typeof forgeSubjectsResponseSchema>['issues'][number];
 
@@ -372,7 +388,9 @@ function issueCache(
       ? { number: answer.number, title: null, state: null, url: null, pending: false }
       : { ...answer, pending: false };
   return async (number, remote) => {
-    const key = `${remote ?? ''}#${String(number)}`;
+    // The remote is as registration stored it, which can carry HTTPS credentials in its
+    // userinfo; the key is logged and written to the answer file, so it never holds them.
+    const key = issueKey(remote, number);
     const known = answers.known(key);
     if (known !== undefined) {
       const life = 'unknown' in known.value ? ISSUE_FAILURE_TTL_MS : ISSUE_TTL_MS;
@@ -405,6 +423,7 @@ export function deliveredRunFrom(
     // `degraded` reports the row.
     const merge = item === null ? null : await store.getItemMerge(item.id);
     return {
+      codebaseId: run.codebase_id,
       audits: (rows ?? []).map(row => row.data),
       recorded: merge === null || 'type' in merge ? null : { change: merge.change, at: merge.at },
       branches: async () => {
@@ -431,14 +450,20 @@ export function registerForgeRoutes(app: OpenAPIHono, deps: ForgeRouteDeps): voi
   );
   const issues = issueCache(deps, file === null ? {} : { kept: file.issues, onKept: file.changed });
 
-  /** The answer for one delivered change; null when its run is gone, or it has no change. */
+  /**
+   * The answer for one delivered change; null when its run is gone, or it has no change. A run
+   * that named no URL is searched for in `remote`, so it answers only for its own project
+   * (`codebaseId`); a URL names its own repository and needs no such check.
+   */
   const answerFor = async (
     run: string,
     url: string | null,
+    codebaseId: string,
     remote: string | null
   ): Promise<ChangeAnswer | null> => {
     const delivered = await deps.deliveredRun(run);
     if (delivered === null) return null;
+    if (url === null && delivered.codebaseId !== codebaseId) return null;
     const { audits, branches, recorded } = delivered;
     if (url !== null)
       return {
@@ -474,8 +499,10 @@ export function registerForgeRoutes(app: OpenAPIHono, deps: ForgeRouteDeps): voi
       const [issueAnswers, changes] = await Promise.all([
         Promise.all([...new Set(numbers)].map(n => issues(n, remote))),
         Promise.all([
-          ...changeRuns.map((run, i) => answerFor(run, changeUrls[i] ?? null, remote)),
-          ...listOf(query.branchRun).map(run => answerFor(run, null, remote)),
+          ...changeRuns.map((run, i) =>
+            answerFor(run, changeUrls[i] ?? null, query.codebaseId, remote)
+          ),
+          ...listOf(query.branchRun).map(run => answerFor(run, null, query.codebaseId, remote)),
         ]),
       ]);
       return c.json({

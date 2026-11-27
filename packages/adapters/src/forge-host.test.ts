@@ -115,15 +115,16 @@ const viewed = (state: 'open' | 'closed' | 'merged', mergedAt: string | null) =>
 /** The options a lookup takes, with `dispatch` standing in for the forge. */
 const via = (dispatch: Dispatch, plugins = noPlugins) => ({ plugins, env: {}, dispatch });
 
+const noBranches = async (): Promise<string[]> => {
+  throw new Error('a URL lookup reads no branch');
+};
+
 describe('the merge state of a change', () => {
   test('finds the pull request in the audit rows that carry its record', () => {
     expect(prRefFromAudits(URL10, audits)).toEqual({ repo, number: 10 });
     expect(prRefFromAudits(`${URL10}1`, audits)).toBeNull();
     expect(prRefFromAudits(URL10, [{ not: 'an audit row' }])).toBeNull();
   });
-  const noBranches = async (): Promise<string[]> => {
-    throw new Error('branches are read only when no audit row names the change');
-  };
 
   test.each([
     ['merged', '2026-11-17T01:00:00Z', true],
@@ -212,20 +213,49 @@ describe('when the forge cannot say, or no audit row names the change', () => {
     }
   });
 
-  test('walks the run branches newest first, past none and another URL, to the change', async () => {
-    const forge = forgeWith({
-      newest: null,
-      middle: other,
-      oldest: viewed('merged', '2026-11-17T01:00:00Z'),
-    });
-    const branches = async () => ['newest', 'middle', 'oldest'];
-    expect(await changeMergeState(byUrl([]), branches, via(forge.dispatch))).toEqual({
+  test('a URL no audit row names is asked by the number the forge resolves it to', async () => {
+    const forge = forgeWith({});
+    const byNumber: Dispatch = async request => {
+      if (request.op === 'pr.view' && request.selector.kind === 'number')
+        return {
+          response: viewed('merged', '2026-11-17T01:00:00Z'),
+          plugin: null,
+          audit: {} as Dispatched['audit'],
+        };
+      return forge.dispatch(request);
+    };
+    // No branch is read: the URL alone names the pull request (#286).
+    expect(await changeMergeState(byUrl([]), noBranches, via(byNumber))).toEqual({
       url: URL10,
       merged: true,
       mergedAt: '2026-11-17T01:00:00Z',
       number: 10,
     });
     expect(forge.asked[0]).toMatchObject({ op: 'resolve', remote: URL10, web: true });
+  });
+
+  test('a URL the forge resolves to an issue is unknown, and no pull request is asked for', async () => {
+    const issue = structuredClone(resolved) as unknown as {
+      result: { value: { subject: { kind: string } } };
+    };
+    issue.result.value.subject.kind = 'issue';
+    const { dispatch, asked } = answering(issue as unknown as Dispatched['response']);
+    expect(await changeMergeState(byUrl([]), noBranches, via(dispatch))).toMatchObject({
+      merged: 'unknown',
+    });
+    // The issue's number is never sent to `pr.view` as if it were a pull request's.
+    expect(asked.map(request => request.op)).toEqual(['resolve']);
+  });
+
+  test('a run that named no URL walks its branches newest first, past those with none', async () => {
+    const forge = forgeWith({ newest: null, middle: null, oldest: other });
+    const branches = async () => ['newest', 'middle', 'oldest'];
+    const state = await changeMergeState(
+      { kind: 'branch', remote: 'https://github.com/coleam00/archon-factory-console.git' },
+      branches,
+      via(forge.dispatch)
+    );
+    expect(state).toMatchObject({ merged: true, number: 9 });
     expect(forge.walked()).toEqual(['newest', 'middle', 'oldest']);
   });
 
@@ -248,8 +278,6 @@ describe('forge plugins for the merge lookups', () => {
   // A home with no config file: discovery reads nothing of the operator's.
   const home = async (): Promise<string> =>
     track(await mkdtemp(join(tmpdir(), 'archon-forge-host-')));
-  // The audit rows name the pull request, so no branch is read.
-  const noBranches = async (): Promise<string[]> => [];
 
   test('a failed discovery, or one that left a plugin unavailable, is discovered again', async () => {
     const answers: (() => PluginDiscovery)[] = [

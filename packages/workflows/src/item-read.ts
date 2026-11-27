@@ -608,6 +608,8 @@ export async function readInstallFacts(source: ItemReadSource) {
     runLimit: await source.store.getRunLimit(),
     // The one queue reader, so a question here reads as `workflow attention` lists it.
     queue: splitAttentionRead(await listAttentionQueue({ ...source, ownerLost: undefined })),
+    // Shared by every placement of this read, so a linked item is placed once (`readLinked`).
+    linkedDone: new Map<string, boolean>(),
   };
 }
 type InstallFacts = Awaited<ReturnType<typeof readInstallFacts>>;
@@ -686,13 +688,18 @@ export async function placeItem(
   source: ItemReadSource,
   item: WorkflowItem,
   install: InstallFacts,
-  /** The items whose parts are being placed, so a `part_of` cycle ends. */
-  visiting: ReadonlySet<string> = new Set()
+  /**
+   * Null for the item itself. For an item linked to it, placed only to ask whether it stands
+   * `done`: the items whose links are being placed, so a cycle of links ends.
+   */
+  visiting: ReadonlySet<string> | null = null
 ): Promise<{
   standing: ItemStanding;
   /** The run `standing.runId` names, for a reader that orders or filters items by it. */
   run: WorkflowRun | undefined;
   read: () => Promise<ItemRead>;
+  /** A cycle of links was cut short in placing it (`readLinked`). */
+  cut: boolean;
 } | null> {
   const { hold, runLimit } = install;
   const held = install.held
@@ -738,8 +745,17 @@ export async function placeItem(
   // The one rule for whether an end holds. It lists the item's starts only when an end is
   // recorded, so the batch read stays free of per-item start listing for items never ended.
   const end = await readHoldingItemEnd(source.store, found.item.id);
-  const linked = await readLinked(source.store, found.item, linkReads, visiting, (other, inside) =>
-    placeItem(source, other, install, inside).then(place => place?.standing.state === 'done')
+  const { cut, ...linked } = await readLinked(
+    source.store,
+    found.item,
+    linkReads,
+    visiting ?? new Set(),
+    (other, inside) =>
+      placeItem(source, other, install, inside).then(place => ({
+        done: place?.standing.state === 'done',
+        cut: place?.cut ?? false,
+      })),
+    { dependsOn: visiting === null, known: install.linkedDone }
   );
   const standing = itemStanding({
     runs: own.values,
@@ -827,7 +843,7 @@ export async function placeItem(
       ],
     };
   };
-  return { standing, run: own.values.find(run => run.id === standing.runId), read };
+  return { standing, run: own.values.find(run => run.id === standing.runId), read, cut };
 }
 
 /**
