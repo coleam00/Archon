@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -19,8 +20,11 @@ import {
   installNativeSchedule,
   type NativeScheduleOptions,
 } from '../triggers/native-schedule';
-import { isolationCleanupScheduleCommand } from './isolation-schedule';
-import { workflowWakeScheduleCommand } from './wake-schedule';
+import {
+  isolationCleanupScheduleCommand,
+  isolationCleanupScheduleConfig,
+} from './isolation-schedule';
+import { workflowWakeScheduleCommand, workflowWakeScheduleConfig } from './wake-schedule';
 
 const trackTempRoot = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;
@@ -130,6 +134,117 @@ async function seedJob(
 }
 
 describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
+  testOnPosixHost.each(['darwin', 'linux'] as const)(
+    '%s operations ignore a permission-denied trigger definition',
+    async platform => {
+      const { root, archonHome, alias, schedules } = await fixture(idPrefix);
+      schedules.platform = platform;
+      schedules.systemdUserDirectory = join(root, 'units');
+      process.env.ARCHON_HOME = archonHome;
+      const installed = await invoke(command, 'install', schedules);
+      const otherHome = join(root, 'other-install');
+      const other = await installNativeSchedule(
+        {
+          ...workflowWakeScheduleConfig(),
+          id: createHash('sha256').update(otherHome).digest('hex'),
+          archonHome: otherHome,
+          workingDirectory: otherHome,
+          programArguments: [
+            process.execPath,
+            'trigger',
+            'fire',
+            '--config',
+            join(root, 'timer.json'),
+          ],
+        },
+        schedules
+      );
+      const definition =
+        platform === 'linux' ? other.path.replace(/\.timer$/, '.service') : other.path;
+      const contents = await readFile(definition);
+      await chmod(definition, 0);
+      try {
+        await expect(readFile(definition)).rejects.toMatchObject({ code: 'EACCES' });
+        for (const spelling of [archonHome, alias]) {
+          process.env.ARCHON_HOME = spelling;
+          expect(await invoke(command, 'status', schedules)).toMatchObject({
+            installed: true,
+            path: installed.path,
+          });
+          expect(await invoke(command, 'install', schedules)).toMatchObject({
+            path: installed.path,
+          });
+        }
+        process.env.ARCHON_HOME = archonHome;
+        expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: true });
+        await invoke(command, 'install', schedules);
+        process.env.ARCHON_HOME = alias;
+        expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: true });
+        expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: false });
+      } finally {
+        await chmod(definition, 0o600);
+      }
+      expect(await readFile(definition)).toEqual(contents);
+    }
+  );
+
+  testOnPosixHost(
+    'permission failure on the current target still fails every operation',
+    async () => {
+      const { archonHome, schedules } = await fixture(idPrefix);
+      process.env.ARCHON_HOME = archonHome;
+      const installed = await invoke(command, 'install', schedules);
+      const definition = String(installed.path);
+      await chmod(definition, 0);
+      try {
+        await expect(readFile(definition)).rejects.toMatchObject({ code: 'EACCES' });
+        for (const operation of ['install', 'status', 'remove'] as const) {
+          const { exitCode, result } = await invokeResult(command, operation, schedules);
+          expect(exitCode).toBe(1);
+          expect(result).toMatchObject({ ok: false, error: expect.stringContaining('EACCES') });
+        }
+      } finally {
+        await chmod(definition, 0o600);
+      }
+    }
+  );
+
+  testOnPosixHost('status and reinstall prefer the registered duplicate', async () => {
+    const { archonHome, alias, schedules, jobFiles } = await fixture(idPrefix);
+    const targets = [archonHome, `${archonHome}${sep}`].map(home => ({
+      id: idForHome(idPrefix, home),
+      archonHome: home,
+    }));
+    targets.sort((a, b) => a.id.localeCompare(b.id));
+    const files = [];
+    for (const target of targets) {
+      const config =
+        idPrefix === 'workflow-wake-'
+          ? workflowWakeScheduleConfig(undefined, target)
+          : isolationCleanupScheduleConfig(undefined, process.env, target);
+      files.push((await installNativeSchedule(config, schedules)).path);
+    }
+    const active = targets[1];
+    if (!active) throw new Error('Expected a second target');
+    const registered = scheduleLabel(active.id);
+    const loaded: string[] = [];
+    schedules.runCommand = async (_executable, args) => {
+      if (args[0] === 'print' && args[1] !== `gui/501/${registered}`)
+        throw new Error('Job is not loaded');
+      if (args[0] === 'bootstrap') loaded.push(args[2] ?? '');
+    };
+    process.env.ARCHON_HOME = alias;
+
+    expect(await invoke(command, 'status', schedules)).toMatchObject({
+      installed: true,
+      registered: true,
+      path: files[1],
+    });
+    expect(await invoke(command, 'install', schedules)).toMatchObject({ path: files[1] });
+    expect(loaded).toEqual([]);
+    expect(await jobFiles()).toHaveLength(2);
+  });
+
   testOnPosixHost(
     'another job family with an unresolvable home does not block schedule operations',
     async () => {

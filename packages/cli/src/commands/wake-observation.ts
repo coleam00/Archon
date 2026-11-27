@@ -10,6 +10,7 @@ import type {
 } from '@archon/core/workflows/source-plugins';
 import {
   inspectNativeSchedule,
+  inspectNativeScheduleTargets,
   NativeScheduleUnsupportedError,
   type NativeScheduleOptions,
   type NativeScheduleTarget,
@@ -70,7 +71,10 @@ async function observingSources(
  * check cannot tell whether one runs for this install.
  */
 export async function observingReport(host: WorkflowHost, schedules: NativeScheduleOptions) {
-  const [target] = await workflowWakeScheduleTargets(schedules);
+  const targets = await workflowWakeScheduleTargets(schedules);
+  const selected =
+    targets.length === 1 ? undefined : await inspectNativeScheduleTargets(targets, schedules);
+  const target = selected?.target ?? targets[0];
   const sources = (await observingSources(host, target)).map(source => ({
     source: source.sourceInstanceId,
     everySeconds: source.everySeconds,
@@ -81,7 +85,7 @@ export async function observingReport(host: WorkflowHost, schedules: NativeSched
   if (sources.length === 0) return undefined;
   const server = `an Archon server started with ARCHON_WEBHOOK_SOURCES runs for this install`;
   try {
-    const job = await inspectNativeSchedule(target, schedules);
+    const job = selected?.status ?? (await inspectNativeSchedule(target, schedules));
     const watcher = { installed: job !== undefined, registered: job?.registered ?? false };
     if (watcher.registered) {
       // The job discards the watcher's output; its last pass is the one sign of a watcher

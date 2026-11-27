@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -630,6 +630,35 @@ describe('reading installed jobs back', () => {
         programArguments: [...programArguments],
       }),
     ]);
+  });
+
+  itOnPosixHost('Task Scheduler filters unrelated wrappers before reading them', async () => {
+    const archonHome = await scratchDirectory();
+    const id = 'workflow-wake-source-refresh';
+    const scheduler: NativeScheduleOptions = {
+      platform: 'win32',
+      windowsUserId: 'me',
+      runCommand: recorder().runCommand,
+    };
+    await installNativeSchedule(
+      config({ id, archonHome, schedule: { intervalSeconds: 60, runAtLoad: false } }),
+      scheduler
+    );
+    const unrelated = join(
+      archonHome,
+      'schedules',
+      'com.archon.trigger.isolation-cleanup-other.cmd'
+    );
+    await writeFile(unrelated, 'unrelated wrapper');
+    await chmod(unrelated, 0);
+    try {
+      await expect(readFile(unrelated)).rejects.toMatchObject({ code: 'EACCES' });
+      expect(
+        await findNativeScheduleTargets(archonHome, () => id, scheduler, 'workflow-wake-')
+      ).toEqual([{ id, archonHome }]);
+    } finally {
+      await chmod(unrelated, 0o600);
+    }
   });
 
   itOnPosixHost('keeps a job file it cannot read, as unreadable', async () => {

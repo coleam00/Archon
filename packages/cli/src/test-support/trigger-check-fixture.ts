@@ -74,8 +74,20 @@ export function triggerCheckFixtures() {
     registerBuiltinProviders();
     setPlatformPolicies([]);
     const scheduled: string[][] = [];
+    const registered = new Set<string>();
     const runCommand: NativeScheduleOptions['runCommand'] = async (executable, args) => {
       scheduled.push([executable, ...args]);
+      const [operation, name = '', definition = ''] = args;
+      if (operation === 'bootstrap') registered.add(basename(definition, '.plist'));
+      if (operation === 'print' && !registered.has(basename(name))) {
+        throw new Error('Job is not loaded');
+      }
+      if (operation === 'bootout') registered.delete(basename(definition, '.plist'));
+      if (operation === '/Create') registered.add(definition);
+      if (operation === '/Query' && !registered.has(definition)) {
+        throw new Error('Task is not registered');
+      }
+      if (operation === '/Delete') registered.delete(definition);
     };
     // A job is validated by its scheduler's path rules, so the scheduler must be one whose
     // rules accept the host paths this fixture writes: Task Scheduler on Windows, launchd elsewhere.
@@ -168,6 +180,7 @@ export function triggerCheckFixtures() {
       installTimer,
       check,
       scheduled,
+      registered,
       schedules,
       timerPrefix,
       removeByHand,

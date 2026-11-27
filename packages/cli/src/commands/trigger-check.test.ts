@@ -6,10 +6,12 @@
  * `trigger schedule` finds the timer it installed by the same reading of `ARCHON_HOME`.
  */
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join, sep } from 'node:path';
 import { triggerCheckFixtures } from '../test-support/trigger-check-fixture';
-import { installNativeSchedule } from '../triggers/native-schedule';
+import { cliProgramArguments } from '../utils/cli-program-arguments';
+import { installNativeSchedule, scheduleLabel } from '../triggers/native-schedule';
 import {
   wakeLastPassPath,
   workflowWakeScheduleConfig,
@@ -234,7 +236,110 @@ test('names the observing sources nothing watches with the fix, and the watcher 
   expect((await check()).observing).toMatchObject({ sources: observed, unwatched: false });
 });
 
+test('finds the registered wake duplicate and its recorded sources and last pass', async () => {
+  const { root, archonHome, schedules, registered, check } = await fixture();
+  const plugin = join(root, 'duplicate-source.mjs');
+  await writeFile(
+    plugin,
+    `export default () => ({ receive: async () => ({ kind: 'ignored' }), observe: async () => ({ events: [] }) });`
+  );
+  const sources = join(root, 'duplicate-sources.json');
+  await writeFile(
+    sources,
+    JSON.stringify({
+      version: 1,
+      sources: [
+        {
+          sourceInstanceId: 'duplicate',
+          module: plugin,
+          config: {},
+          observe: { everySeconds: 60 },
+        },
+      ],
+    })
+  );
+  process.env.ARCHON_WEBHOOK_SOURCES = sources;
+  const targets = [
+    workflowWakeScheduleTarget(archonHome),
+    workflowWakeScheduleTarget(`${archonHome}${sep}`),
+  ].sort((a, b) => a.id.localeCompare(b.id));
+  const [inactive, active] = targets;
+  if (!inactive || !active) throw new Error('Expected two wake targets');
+  const interval = schedules.platform === 'win32' ? 60 : 5;
+  await installNativeSchedule(workflowWakeScheduleConfig(interval, inactive), schedules);
+  registered.clear();
+  expect((await check()).observing).toMatchObject({
+    watcher: { installed: true, registered: false },
+    unwatched: true,
+  });
+
+  await installNativeSchedule(workflowWakeScheduleConfig(interval, active), schedules);
+  const label = scheduleLabel(active.id);
+  expect([...registered]).toEqual([schedules.platform === 'win32' ? `\\Archon\\${label}` : label]);
+  const pass = { at: '2026-11-27T00:00:00.000Z', pid: 2, ok: true, parts: {}, sources };
+  await writeWakeLastPass(wakeLastPassPath(active), pass);
+  expect((await check()).observing).toMatchObject({
+    watcher: { installed: true, registered: true, lastPass: pass },
+    unwatched: false,
+  });
+
+  delete process.env.ARCHON_WEBHOOK_SOURCES;
+  const report = await check();
+  expect(report.observing).toMatchObject({
+    sources: [expect.objectContaining({ source: 'duplicate' })],
+    watcher: { installed: true, registered: true, lastPass: pass },
+    unwatched: false,
+  });
+  expect(report.error).toBeUndefined();
+});
+
 describe('schedule finds the binding timer however ARCHON_HOME is spelled', () => {
+  test('status and reinstall prefer a registered duplicate timer', async () => {
+    const { archonHome, alias, config, path, schedule, schedules, registered, scheduled } =
+      await scheduleFixture();
+    const homes = [archonHome, `${archonHome}${sep}`]
+      .map(home => ({
+        archonHome: home,
+        id: createHash('sha256')
+          .update(JSON.stringify([home, 'timer', 'timer']))
+          .digest('hex'),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const [inactive, active] = homes;
+    if (!inactive || !active) throw new Error('Expected two timer targets');
+    const definitions: string[] = [];
+    for (const target of [inactive, active]) {
+      registered.clear();
+      definitions.push(
+        (
+          await installNativeSchedule(
+            {
+              ...target,
+              workingDirectory: config({ a: 1 }).binding.launch.cwd,
+              programArguments: [...cliProgramArguments(), 'trigger', 'fire', '--config', path],
+              path: process.env.PATH ?? '',
+              schedule: { intervalSeconds: 1800, runAtLoad: false },
+              output: 'log',
+              removeCommand: `archon trigger schedule remove --config ${path}`,
+            },
+            schedules
+          )
+        ).path
+      );
+    }
+    process.env.ARCHON_HOME = alias;
+    scheduled.length = 0;
+    expect(await schedule('status')).toMatchObject({
+      installed: true,
+      registered: true,
+      path: definitions[1],
+    });
+    await schedule('install');
+    expect(
+      scheduled.some(command => command.includes('bootstrap') || command.includes('/Create'))
+    ).toBe(false);
+  });
+
   test('status and remove find a timer installed under another spelling of the home', async () => {
     const { archonHome, alias, schedule, timerFiles } = await scheduleFixture();
     process.env.ARCHON_HOME = `${archonHome}${sep}`;

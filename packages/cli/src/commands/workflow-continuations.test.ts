@@ -97,6 +97,9 @@ mock.module('../triggers/native-schedule', () => ({
   installNativeSchedule: install,
   removeNativeSchedule: remove,
   inspectNativeSchedule: inspect,
+  inspectNativeScheduleTargets: async ([target]: [
+    import('../triggers/native-schedule').NativeScheduleTarget,
+  ]) => ({ target, status: await inspect() }),
   nativeScheduleDefinition: () => wakeJobDefinition,
 }));
 

@@ -8,7 +8,7 @@ import { getArchonHome } from '@archon/paths';
 import type { TriggerConfig } from '@archon/workflows/schemas/resource-start';
 import {
   findNativeScheduleTargets,
-  inspectNativeSchedule,
+  inspectNativeScheduleTargets,
   installNativeSchedule,
   removeNativeSchedule,
   type NativeScheduleOptions,
@@ -57,19 +57,21 @@ export async function scheduleTimer(request: ScheduleRequest): Promise<void> {
     return writeJsonLine({ bindingId, schedule: operation, removed });
   }
   // An install under another spelling keeps the found job's, so it renders the same job.
-  await installTimer(request, targets[0]);
+  const target =
+    targets.length === 1
+      ? targets[0]
+      : (await inspectNativeScheduleTargets(targets, schedules)).target;
+  await installTimer(request, target);
   await writeJsonLine({ bindingId, schedule: operation });
 }
 
 /** Status needs no schedule, so a timer whose file lost its `schedule` can still be read. */
 async function timerStatus(
-  targets: NativeScheduleTarget[],
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
   schedules: NativeScheduleOptions
 ): Promise<Record<string, unknown>> {
-  for (const target of targets) {
-    const status = await inspectNativeSchedule(target, schedules);
-    if (status) return { installed: true, ...status };
-  }
+  const { status } = await inspectNativeScheduleTargets(targets, schedules);
+  if (status) return { installed: true, ...status };
   return { installed: false };
 }
 

@@ -112,10 +112,10 @@ export interface ScheduleBackend {
   /** Remove only, after the files are deleted. */
   afterRemove?(): Promise<void>;
   /**
-   * Every job under the Archon prefix whose files are on disk, read back from what `render`
-   * wrote. Reads files only; it never asks the scheduler.
+   * Jobs under the Archon prefix whose files are on disk, read back from what `render`
+   * wrote. Filters labels before opening definitions; never asks the scheduler.
    */
-  installed(): Promise<InstalledSchedule[]>;
+  installed(matchesLabel?: (label: string) => boolean): Promise<InstalledSchedule[]>;
 }
 
 /** No backend can install a timer here; the message says what to schedule by hand when it can. */
@@ -241,10 +241,12 @@ export async function readInstalled(
   labels: readonly string[],
   definition: (label: string) => string,
   read: (contents: string) => InstalledJob | undefined,
-  removeByHand: (label: string) => string
+  removeByHand: (label: string) => string,
+  matchesLabel?: (label: string) => boolean
 ): Promise<InstalledSchedule[]> {
   const installed: InstalledSchedule[] = [];
   for (const label of labels) {
+    if (matchesLabel && !matchesLabel(label)) continue;
     const path = definition(label);
     const contents = await readExisting(path);
     // Deleted between the listing and the read: nothing is installed under it any more.
@@ -398,6 +400,24 @@ export async function inspectNativeSchedule(
   return { path: paths[0], registered: await backend.isRegistered(label), log, lastRunAt };
 }
 
+/** Prefers a loaded job, then the first installed job, then the original fallback target. */
+export async function inspectNativeScheduleTargets(
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
+  options: NativeScheduleOptions = {}
+): Promise<{ target: NativeScheduleTarget; status: NativeScheduleStatus | undefined }> {
+  let selectedTarget = targets[0];
+  let selectedStatus: NativeScheduleStatus | undefined;
+  for (const target of targets) {
+    const status = await inspectNativeSchedule(target, options);
+    if (status?.registered) return { target, status };
+    if (status && !selectedStatus) {
+      selectedTarget = target;
+      selectedStatus = status;
+    }
+  }
+  return { target: selectedTarget, status: selectedStatus };
+}
+
 /**
  * The file that defines the job, whether or not it exists, without asking the scheduler;
  * `undefined` on a host Archon has no scheduler for.
@@ -427,13 +447,14 @@ export async function removeNativeSchedule(
 
 /**
  * The jobs installed for `archonHome`, read from their files, plus any Archon job file that
- * cannot be read, whose home is unknown. `matchesJob` excludes unrelated readable jobs
- * before resolving their homes. None on a platform Archon has no scheduler for.
+ * cannot be parsed, whose home is unknown. Labels are filtered before opening definitions;
+ * `matchesJob` excludes readable jobs before resolving their homes. None on an unsupported platform.
  */
 export async function listNativeSchedules(
   archonHome: string,
   options: NativeScheduleOptions = {},
-  matchesJob?: (job: InstalledJob, label: string) => boolean
+  matchesJob?: (job: InstalledJob, label: string) => boolean,
+  matchesLabel?: (label: string) => boolean
 ): Promise<InstalledSchedule[]> {
   const platform = options.platform ?? process.platform;
   const backend = backendFor(platform, archonHome, options);
@@ -452,7 +473,7 @@ export async function listNativeSchedules(
   };
   const home = await identity(archonHome);
   const installed: InstalledSchedule[] = [];
-  for (const entry of await backend.installed()) {
+  for (const entry of await backend.installed(matchesLabel)) {
     if (!('archonHome' in entry)) {
       installed.push(entry);
       continue;
@@ -472,13 +493,15 @@ export async function listNativeSchedules(
 export async function findNativeScheduleTargets(
   archonHome: string,
   idForHome: (archonHome: string) => string,
-  options: NativeScheduleOptions = {}
+  options: NativeScheduleOptions = {},
+  idPrefix?: string
 ): Promise<[NativeScheduleTarget, ...NativeScheduleTarget[]]> {
   const found: NativeScheduleTarget[] = [];
   for (const job of await listNativeSchedules(
     archonHome,
     options,
-    (entry, label) => label === scheduleLabel(idForHome(entry.archonHome))
+    (entry, label) => label === scheduleLabel(idForHome(entry.archonHome)),
+    idPrefix === undefined ? undefined : label => label.startsWith(`${LABEL_PREFIX}${idPrefix}`)
   )) {
     if (!('archonHome' in job)) continue;
     const id = idForHome(job.archonHome);

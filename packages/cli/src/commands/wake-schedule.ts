@@ -19,7 +19,7 @@ import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import {
   findNativeScheduleTargets,
-  inspectNativeSchedule,
+  inspectNativeScheduleTargets,
   installNativeSchedule,
   removeNativeSchedule,
   type NativeScheduleConfig,
@@ -28,6 +28,7 @@ import {
 } from '../triggers/native-schedule';
 
 export const WAKE_SCHEDULE_INSTALL_COMMAND = 'archon workflow wake schedule install';
+const WAKE_SCHEDULE_ID_PREFIX = 'workflow-wake-';
 
 /** Task Scheduler repeats a task in whole minutes only, from one minute. */
 export function defaultWakeIntervalSeconds(platform: NodeJS.Platform = process.platform): number {
@@ -37,7 +38,7 @@ export function defaultWakeIntervalSeconds(platform: NodeJS.Platform = process.p
 /** One job per install: the id is keyed on the Archon home. */
 export function workflowWakeScheduleTarget(archonHome = getArchonHome()): NativeScheduleTarget {
   return {
-    id: `workflow-wake-${createHash('sha256').update(archonHome).digest('hex')}`,
+    id: `${WAKE_SCHEDULE_ID_PREFIX}${createHash('sha256').update(archonHome).digest('hex')}`,
     archonHome,
   };
 }
@@ -49,7 +50,8 @@ export async function workflowWakeScheduleTargets(
   return findNativeScheduleTargets(
     archonHome,
     home => workflowWakeScheduleTarget(home).id,
-    schedules
+    schedules,
+    WAKE_SCHEDULE_ID_PREFIX
   );
 }
 
@@ -179,9 +181,15 @@ interface Outcome {
 }
 
 async function install(
-  config: NativeScheduleConfig,
+  interval: number,
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
   schedules: NativeScheduleOptions
 ): Promise<Outcome> {
+  const target =
+    targets.length === 1
+      ? targets[0]
+      : (await inspectNativeScheduleTargets(targets, schedules)).target;
+  const config = workflowWakeScheduleConfig(interval, target);
   const { path } = await installNativeSchedule(config, schedules);
   const every = String(config.schedule.intervalSeconds);
   return {
@@ -206,12 +214,11 @@ async function remove(
 }
 
 async function status(
-  targets: readonly NativeScheduleTarget[],
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
   schedules: NativeScheduleOptions
 ): Promise<Outcome> {
-  for (const target of targets) {
-    const installed = await inspectNativeSchedule(target, schedules);
-    if (!installed) continue;
+  const { target, status: installed } = await inspectNativeScheduleTargets(targets, schedules);
+  if (installed) {
     const lastPass = await readWakeLastPass(wakeLastPassPath(target));
     const result = {
       installed: true,
@@ -258,7 +265,7 @@ export async function workflowWakeScheduleCommand(
     const targets = await workflowWakeScheduleTargets(schedules);
     const { result, text } =
       operation === 'install'
-        ? await install(workflowWakeScheduleConfig(interval, targets[0]), schedules)
+        ? await install(interval, targets, schedules)
         : operation === 'remove'
           ? await remove(targets, schedules)
           : await status(targets, schedules);

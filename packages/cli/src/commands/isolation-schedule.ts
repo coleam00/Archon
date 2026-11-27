@@ -10,7 +10,7 @@ import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import {
   findNativeScheduleTargets,
-  inspectNativeSchedule,
+  inspectNativeScheduleTargets,
   installNativeSchedule,
   removeNativeSchedule,
   type NativeScheduleConfig,
@@ -20,6 +20,7 @@ import {
 
 /** Six hours. */
 export const ISOLATION_CLEANUP_INTERVAL_SECONDS = 21600;
+const ISOLATION_CLEANUP_ID_PREFIX = 'isolation-cleanup-';
 
 /**
  * One job per install: the id is keyed on the Archon home, and the job runs from it because
@@ -52,7 +53,7 @@ function isolationCleanupScheduleTarget(env: NodeJS.ProcessEnv): NativeScheduleT
 }
 
 function isolationCleanupScheduleId(archonHome: string): string {
-  return `isolation-cleanup-${createHash('sha256').update(archonHome).digest('hex')}`;
+  return `${ISOLATION_CLEANUP_ID_PREFIX}${createHash('sha256').update(archonHome).digest('hex')}`;
 }
 
 type Values = Record<string, unknown>;
@@ -84,9 +85,15 @@ interface Outcome {
 const NOT_INSTALLED = 'No merged cleanup timer is installed.';
 
 async function install(
-  config: NativeScheduleConfig,
+  interval: number,
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
   schedules: NativeScheduleOptions
 ): Promise<Outcome> {
+  const target =
+    targets.length === 1
+      ? targets[0]
+      : (await inspectNativeScheduleTargets(targets, schedules)).target;
+  const config = isolationCleanupScheduleConfig(interval, process.env, target);
   const { path, log } = await installNativeSchedule(config, schedules);
   const every = String(config.schedule.intervalSeconds);
   return {
@@ -108,12 +115,11 @@ async function remove(
 }
 
 async function status(
-  targets: readonly NativeScheduleTarget[],
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
   schedules: NativeScheduleOptions
 ): Promise<Outcome> {
-  for (const target of targets) {
-    const installed = await inspectNativeSchedule(target, schedules);
-    if (!installed) continue;
+  const { status: installed } = await inspectNativeScheduleTargets(targets, schedules);
+  if (installed) {
     const result = { installed: true, ...installed };
     if (!installed.registered)
       return {
@@ -142,11 +148,12 @@ async function runOperation(
   const targets = await findNativeScheduleTargets(
     archonHome,
     isolationCleanupScheduleId,
-    schedules
+    schedules,
+    ISOLATION_CLEANUP_ID_PREFIX
   );
   const { result, text } =
     operation === 'install'
-      ? await install(isolationCleanupScheduleConfig(interval, process.env, targets[0]), schedules)
+      ? await install(interval, targets, schedules)
       : operation === 'remove'
         ? await remove(targets, schedules)
         : await status(targets, schedules);
