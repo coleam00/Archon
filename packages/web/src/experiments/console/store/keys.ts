@@ -25,12 +25,6 @@ export const K = {
    */
   boardOrders: (projectId: string): string => `board:${projectId}:orders`,
   /**
-   * A pack's whole factory view read (`GET /api/packs/{pack}/view`: path, view, problems): the
-   * map chooses by it and board cards read their words from its view. A run never changes it.
-   */
-  packView: (projectId: string, pack: string): string =>
-    `pack-view:${projectId}:${encodeURIComponent(pack)}`,
-  /**
    * The run records a list of board cards reads, by the runs asked; under `board:`, so run and
    * attention events refetch the running step and rounds.
    */

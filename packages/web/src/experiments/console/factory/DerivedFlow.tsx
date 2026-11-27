@@ -1,11 +1,12 @@
 /**
  * The map derived from the pack graph (DESIGN.md, COMBINED direction), drawn as a graph: the
  * groups left to right (the pack document's, `groupsOf`), a card per flow stage in each, under its group's name, the hand-offs between
- * them as arrows and the send-backs, each pill worded as on the curated map (`arrowWords`). On
+ * them as arrows and the send-backs, each pill worded as on the grouped map (`arrowWords`). On
  * a project's Overview each card carries the project's counts and opens its board; on How it
  * works, which is the pack's page and names no project (DESIGN.md, owner change 1 of
- * 2026-11-23), the cards are the structure alone. Both draw it when the pack ships no curated view file, and as the curated
- * map's "Full workflow". It wears the curated map's cards, lines, legend and camera.
+ * 2026-11-23), the cards are the structure alone. The Overview draws it for a pack whose
+ * document declares no groups, and as the grouped map's "Full workflow". It wears the grouped
+ * map's cards, lines, legend and camera.
  */
 import { useMemo, type ReactElement } from 'react';
 import { Link } from 'react-router';

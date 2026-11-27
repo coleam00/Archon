@@ -3,10 +3,9 @@ import { act } from 'react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { invalidate, set } from '../store/cache';
 import { K } from '../store/keys';
-import type { PackView } from './api';
 import type { PackGraph } from '../skills/items';
 import type { PackBoardGroups } from './lib/board-numbers';
-import { testFile, testGraph } from './curated.test-fixtures';
+import { testGraph } from './curated.test-fixtures';
 import { asksOn, itemOn, MOVING_ITEMS } from './items.test-fixtures';
 import { installDom } from './test-dom.test-helpers';
 
@@ -20,14 +19,13 @@ const PACK = 'Wirasm.archon-software-factory';
 const MERGED_RECENT = [itemOn('m1', 'landed', 'done'), itemOn('m2', null, 'done')];
 /** One merged before those days: the Table lists it, the Merged column and the map do not. */
 const MERGED_EARLIER = [itemOn('m3', 'landed', 'done')];
-const PATH = '/packs/Wirasm/archon-software-factory/dd30226/.shared/factory-view.json';
 
 let unmount: (() => Promise<void>) | undefined;
 afterEach(async () => {
   await unmount?.();
   unmount = undefined;
   dom.happyDOM.settings.device.prefersReducedMotion = 'no-preference';
-  for (const prefix of ['pack-view', 'pack-graph', 'board']) invalidate(prefix);
+  for (const prefix of ['pack-graph', 'board']) invalidate(prefix);
 });
 
 /**
@@ -54,13 +52,8 @@ const BOARD: PackBoardGroups = {
 /** Open asks on the two items the map counts as needing you (b2 on build, g1 at the land gate). */
 const ASKS = asksOn(MOVING_ITEMS.filter(read => ['b2', 'g1'].includes(read.item.key)));
 
-async function mount(
-  view: PackView,
-  search = '',
-  asks = ASKS,
-  graph: PackGraph = testGraph
-): Promise<HTMLElement> {
-  set(K.packView(PROJECT, PACK), view);
+/** Mounts the map with nothing but the pack graph read: no view file exists to read. */
+async function mount(search = '', asks = ASKS, graph: PackGraph = testGraph): Promise<HTMLElement> {
   set(K.packGraph(PROJECT, PACK), graph);
   const mounted = await mountTree(
     <MemoryRouter initialEntries={[`/console/p/${PROJECT}/overview${search}`]}>
@@ -85,7 +78,6 @@ async function mount(
   return mounted.container;
 }
 
-const CURATED: PackView = { path: PATH, view: testFile, problems: [] };
 /**
  * The test graph as the engine serves it when the pack's document leaves `stage-host` out of
  * every group: the stage heads a column alone, and the document lists why.
@@ -101,39 +93,22 @@ const withoutStageHost: PackGraph = {
     stages: group.stages.filter(stage => stage !== 'stage-host'),
   })),
 };
-const NO_FILE: PackView = { path: null, view: null, problems: [] };
-/** A file the server read with two problems it worked around: the map still draws from it. */
-const DRIFTED: PackView = {
-  path: PATH,
-  view: testFile,
-  problems: [
-    {
-      kind: 'dropped',
-      path: ['stages', 'stage-check'],
-      message: 'names stage "stage-check", which pack "p" does not have',
-    },
-    {
-      kind: 'unknown',
-      path: ['stages'],
-      message: 'is not a key a view file has',
-    },
-  ],
-};
-/** A file that does not read at all. */
-const UNREADABLE: PackView = {
-  path: PATH,
-  view: null,
-  problems: [{ kind: 'unreadable', path: [], message: 'is not JSON: oops' }],
-};
+/** The test graph with no document groups: nothing to group a map by. */
+const ungrouped: PackGraph = { ...testGraph, groups: [] };
 
 const cards = (page: ParentNode): string[] =>
   [...page.querySelectorAll('[data-card]')].map(card => card.getAttribute('data-card') ?? '');
 const stageLinks = (page: ParentNode): string[] =>
   [...page.querySelectorAll('[data-stage]')].map(link => link.getAttribute('data-stage') ?? '');
 
-describe('the one check where the map is drawn', () => {
-  test('a pack shipping a clean view file draws the curated map, not the derived one', async () => {
-    const page = await mount(CURATED);
+describe('which map is drawn', () => {
+  test('a pack whose document declares groups draws the grouped map from the graph alone', async () => {
+    const page = await mount();
+    expect(
+      [...page.querySelectorAll('[aria-label="Which map"] button')].map(
+        button => button.textContent
+      )
+    ).toEqual(['Map', 'Full workflow']);
     expect(cards(page)).toEqual(['intake', 'plan-and-build', 'checks', 'landing', 'landed']);
     // Each column's stages in flow order, columns by their first stage's place, Merged last.
     expect(stageLinks(page)).toEqual([
@@ -157,7 +132,7 @@ describe('the one check where the map is drawn', () => {
   });
 
   test("its cards count the board's items and its Merged column", async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     const chip = (stage: string): string =>
       page.querySelector(`[data-stage="${stage}"]`)?.getAttribute('aria-label') ?? '';
     const numbers = (stage: string): string[] => chip(stage).match(/\d+/g) ?? [];
@@ -170,49 +145,20 @@ describe('the one check where the map is drawn', () => {
     expect(page.querySelector('[aria-label="Not on the map"]')).toBeNull();
   });
 
-  test('a pack shipping no file draws the derived map and no card', async () => {
-    const page = await mount(NO_FILE);
+  test('a pack whose document declares no groups draws the derived map, with no map choice', async () => {
+    const page = await mount('', ASKS, ungrouped);
     expect(page.querySelector('div[data-flow]')).not.toBeNull();
     expect(cards(page)).toEqual([]);
-    expect(page.querySelector('[data-map-note]')).toBeNull();
+    expect(page.querySelector('[aria-label="Which map"]')).toBeNull();
   });
 
-  test('a file with problems still draws the curated map, and one line opens to every problem', async () => {
-    const page = await mount(DRIFTED);
-    expect(cards(page)).toEqual(['intake', 'plan-and-build', 'checks', 'landing', 'landed']);
-    const line = page.querySelector('[data-view-problems]');
-    // The problems are the explainer's to fix; the map is drawn from the graph.
-    expect(line?.querySelector('summary')?.textContent).toBe(
-      "The How it works explainer in the pack's view file has 2 problems to fix"
-    );
-    expect(
-      [...(line?.querySelectorAll('li') ?? [])].map(entry =>
-        entry.getAttribute('data-view-problem')
-      )
-    ).toEqual(['dropped', 'unknown']);
-  });
-
-  test('a clean file shows no problem line', async () => {
-    const page = await mount(CURATED);
-    expect(page.querySelector('[data-view-problems]')).toBeNull();
+  test('a clean document shows no problem line', async () => {
+    const page = await mount();
     expect(page.querySelector('[data-document-problems]')).toBeNull();
   });
 
-  test('a file that does not read draws the derived map, says so, and lists why', async () => {
-    const page = await mount(UNREADABLE);
-    expect(page.querySelector('div[data-flow]')).not.toBeNull();
-    expect(cards(page)).toEqual([]);
-    expect(page.querySelector('[data-map-note]')).not.toBeNull();
-    const line = page.querySelector('[data-view-problems]');
-    expect(
-      [...(line?.querySelectorAll('li') ?? [])].map(entry =>
-        entry.getAttribute('data-view-problem')
-      )
-    ).toEqual(['unreadable']);
-  });
-
-  test('pressing Full workflow shows the derived map in place of the curated one', async () => {
-    const page = await mount(CURATED);
+  test('pressing Full workflow shows the derived map in place of the grouped one', async () => {
+    const page = await mount();
     const full = [...page.querySelectorAll('[aria-label="Which map"] button')].find(
       button => button.textContent === 'Full workflow'
     );
@@ -222,7 +168,7 @@ describe('the one check where the map is drawn', () => {
   });
 
   test("the Full workflow heads an ungrouped stage's column by its label, a group's by its name (#261)", async () => {
-    const page = await mount(CURATED, '?map=full', ASKS, withoutStageHost);
+    const page = await mount('?map=full', ASKS, withoutStageHost);
     const heading = (group: string): string | null | undefined =>
       page.querySelector(`[data-flow-group="${group}"] [data-flow-heading]`)?.textContent;
     expect(heading('stage-host')).toBe('CI and review');
@@ -238,7 +184,7 @@ describe('the one check where the map is drawn', () => {
   });
 
   test("the pack document's problems show above the map, and the groups left still draw", async () => {
-    const page = await mount(CURATED, '', ASKS, withoutStageHost);
+    const page = await mount('', ASKS, withoutStageHost);
     const listed = page.querySelector('[data-document-problems]');
     expect(listed?.querySelector('summary')?.textContent).toContain('how-it-works.md');
     expect(listed?.querySelector('li')?.textContent).toBe("stage 'stage-host' is in no group");
@@ -253,7 +199,7 @@ describe('the one check where the map is drawn', () => {
   });
 
   test("the Full workflow's Merged heading counts the Board's Merged column, not every merge", async () => {
-    const page = await mount(CURATED, '?map=full');
+    const page = await mount('?map=full');
     expect(page.querySelector('[data-flow-group="merged"] [data-count]')?.textContent).toBe('2');
   });
 });
@@ -285,7 +231,7 @@ const texts = (selector: string, attribute?: string): string[] =>
   );
 
 describe('the stage modal', () => {
-  test("clicking build on the map opens it: what it does from the file, the items standing on it, and its graph stage's steps", async () => {
+  test("clicking build on the map opens it: what it does from its display phases, the items standing on it, and its graph stage's steps", async () => {
     // The run records the board card reads for Build's items: b1's run works build__build now.
     const running = (id: string, steps: string[]) => ({
       id,
@@ -301,7 +247,7 @@ describe('the stage modal', () => {
       missing: [],
       unreadable: [],
     });
-    const page = await mount(CURATED);
+    const page = await mount();
     await click(page.querySelector('[data-stage="stage-build"]'));
     expect(dialog().querySelector('h3')?.textContent).toBe('Build');
     expect(texts('[data-drilldown-card]', 'data-drilldown-card')).toEqual([
@@ -325,7 +271,6 @@ describe('the stage modal', () => {
     // b1 runs with an open ask, b2 waits with one: both have a card's Needs you button.
     set(K.cardReads(PROJECT, ['run-b1', 'run-b2']), { records: [], missing: [], unreadable: [] });
     const page = await mount(
-      CURATED,
       '',
       asksOn(MOVING_ITEMS.filter(read => ['b1', 'b2'].includes(read.item.key)))
     );
@@ -339,7 +284,7 @@ describe('the stage modal', () => {
   });
 
   test("the landed stage lists and counts the board's Merged column", async () => {
-    await mount(CURATED, '?stage=landed');
+    await mount('?stage=landed');
     await openTab('Items here now');
     expect(texts('[data-item]', 'data-item')).toEqual(['m1', 'm2']);
     const numbersIn = (selector: string): string[] =>
@@ -382,13 +327,13 @@ describe("the map's send-backs and flow", () => {
   const CHECKS_ROUTES = ['stage-check>plan', 'stage-check>stage-build', 'stage-host>stage-build'];
 
   test('by default the map draws no send-back and no send-back pill', async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     expect(routes(page)).toEqual([]);
     expect(routePills(page)).toEqual([]);
   });
 
   test("each card's badge counts the send-back routes leaving it, one per pair of stages", async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     const badges = Object.fromEntries(
       [...page.querySelectorAll('[data-send-back-badge]')].map(badge => [
         badge.getAttribute('data-send-back-badge'),
@@ -405,7 +350,7 @@ describe("the map's send-backs and flow", () => {
   });
 
   test('hovering a card draws exactly its routes, each with its pill; leaving it hides them', async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     await pointer(card(page, 'checks'), 'mouseover');
     expect(routes(page)).toEqual(CHECKS_ROUTES);
     expect(routePills(page)).toEqual([
@@ -418,14 +363,14 @@ describe("the map's send-backs and flow", () => {
   });
 
   test("focus on a card's link shows its routes", async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     const link = card(page, 'checks').querySelector('a');
     await act(async () => (link as unknown as HTMLElement | null)?.focus());
     expect(routes(page)).toEqual(CHECKS_ROUTES);
   });
 
   test('the badge pins them; a press that starts a pan keeps the pin, a click elsewhere drops it', async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     const badge = card(page, 'checks').querySelector('[data-send-back-badge]') as Element;
     await click(badge);
     expect(badge.getAttribute('aria-pressed')).toBe('true');
@@ -454,7 +399,7 @@ describe("the map's send-backs and flow", () => {
   });
 
   test('on touch, a second press on the badge hides the routes though the tap left the card hovered', async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     const badge = card(page, 'checks').querySelector('[data-send-back-badge]') as Element;
     // A tap sends an emulated mouseover before its click.
     await pointer(badge, 'mouseover');
@@ -467,7 +412,7 @@ describe("the map's send-backs and flow", () => {
   });
 
   test('pressing a focused badge twice, as the keyboard does, hides the routes too', async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     const badge = card(page, 'checks').querySelector('[data-send-back-badge]') as HTMLElement;
     // Script focus is focus-visible in happy-dom, as Tab is in a browser.
     await act(async () => badge.focus());
@@ -478,7 +423,7 @@ describe("the map's send-backs and flow", () => {
   });
 
   test('Escape that closes the stage modal keeps the pin; with nothing else open it unpins', async () => {
-    const page = await mount(CURATED, '?stage=stage-check');
+    const page = await mount('?stage=stage-check');
     const badge = card(page, 'checks').querySelector('[data-send-back-badge]') as Element;
     await click(badge);
     expect(routes(page)).toEqual(CHECKS_ROUTES);
@@ -499,7 +444,7 @@ describe("the map's send-backs and flow", () => {
   });
 
   test('the frame hugs the cards and grows under them while a card shows its send-backs', async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     const frame = page.querySelector('.factory-canvas') as HTMLElement;
     const hugged = Number.parseFloat(frame.style.height);
     await pointer(card(page, 'checks'), 'mouseover');
@@ -509,19 +454,19 @@ describe("the map's send-backs and flow", () => {
   });
 
   test('the Full workflow legend names no hover, badge or moving dot: that view has none', async () => {
-    const full = await mount(CURATED, '?map=full');
+    const full = await mount('?map=full');
     const lines = full.querySelector('[aria-label="Lines"]');
     expect(lines).not.toBeNull();
     const legend = lines?.textContent ?? '';
     expect(legend).not.toContain('↺');
     expect(legend).not.toContain('dot');
     await unmount?.();
-    const curated = await mount(CURATED);
-    expect(curated.querySelector('[aria-label="Lines"]')?.textContent).toContain('↺');
+    const grouped = await mount();
+    expect(grouped.querySelector('[aria-label="Lines"]')?.textContent).toContain('↺');
   });
 
   test('with motion allowed, a dot follows the forward flow and one leaves along each shown route', async () => {
-    const page = await mount(CURATED);
+    const page = await mount();
     // The fixture has a run working on build: its running dot is drawn.
     expect(page.querySelector('.map-flow-dot')).not.toBeNull();
     expect(page.querySelectorAll('[data-map-flow] [data-map-flow-move]')).toHaveLength(
@@ -537,7 +482,7 @@ describe("the map's send-backs and flow", () => {
 
   test('under reduced motion no dot is drawn, even while a card shows its routes', async () => {
     dom.happyDOM.settings.device.prefersReducedMotion = 'reduce';
-    const page = await mount(CURATED);
+    const page = await mount();
     await pointer(card(page, 'checks'), 'mouseover');
     expect(routes(page)).toEqual(CHECKS_ROUTES);
     expect(page.querySelector('[data-map-flow]')).toBeNull();

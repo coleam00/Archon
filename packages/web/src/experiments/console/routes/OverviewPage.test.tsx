@@ -9,7 +9,7 @@ import { K } from '../store/keys';
 import { NeedsYouLine, OverviewPage, PackOverview } from './OverviewPage';
 
 afterEach(() => {
-  for (const prefix of ['pack-graph', 'pack-view', 'projects', 'runs', 'board']) invalidate(prefix);
+  for (const prefix of ['pack-graph', 'projects', 'runs', 'board']) invalidate(prefix);
 });
 
 /** An item merged today, so the pack has something on its board. */
@@ -37,7 +37,6 @@ function seedPack(): void {
     document: null,
     metricViews: null,
   } as unknown as PackGraph);
-  set(K.packView('p1', 'flow'), { path: null, view: null, problems: [] });
 }
 
 const ask = (ref: string, message: string, project = 'p1'): ItemAsk => ({

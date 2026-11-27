@@ -3,7 +3,8 @@
  * the pack graph alone: one card per flow stage, stacked in a column per document group (Intake,
  * Plan and build, Checks, Landing), the columns left to right in the document's order, then a
  * Merged card. An arrow into a later column runs forward, card to card; one into the same or an
- * earlier column is a send-back, drawn in the lanes under the cards. Every pill reads the pack's
+ * earlier column is a send-back, drawn in the lanes under the cards (one up its own column rises
+ * at the column's left, `routeLane`). Every pill reads the pack's
  * words for what the arrow carries, as the curated map's do (`arrowWords`).
  *
  * Pure.
@@ -11,8 +12,7 @@
 import type { PackGraph } from '../../skills/items';
 import type { StageGroup } from '../../routes/BoardPage';
 import { rounded } from '../canvas-lines';
-import { PILL_LINE } from './map-sizes';
-import { PILL_H, pillWidth } from './overview-layout';
+import { PILL_H, PILL_LINE, pillWidth } from './map-sizes';
 import type { Box, Point } from './map-layout';
 import { arrowWords, outcomeWords, type ArrowLabels } from './graph-structure';
 
@@ -29,6 +29,12 @@ const LANE_STEP = 14;
 /** How far right of its column the first hop to a card further down runs, and the next. */
 const SIDE_FIRST = 40;
 const SIDE_STEP = 16;
+/**
+ * How far left of its column a send-back to a card above it rises, and how far under the target's
+ * middle it enters, clear of the hand-off from the column before, which enters at the middle.
+ */
+const GUTTER = 40;
+const BACK_ENTRY = 24;
 /** How far a forward pill moves along its line at a time to clear what is placed. */
 const PLACE_STEP = 4;
 const PAD = 16;
@@ -122,10 +128,14 @@ function placePill(lines: readonly string[], along: [Point, Point], taken: reado
   return middle;
 }
 
-/** The columns (the groups, then Merged) and a card per stage, each column centred on the tallest. */
+/**
+ * The columns (the groups, then Merged) and a card per stage, each column centred on the tallest,
+ * the first `left` in.
+ */
 function placeColumns(
   groups: readonly StageGroup[],
-  gap: number
+  gap: number,
+  left: number
 ): { columns: FullColumn[]; cards: FullCard[] } {
   const names: StageGroup[] = [...groups, { name: 'Merged', stages: [MERGED] }];
   const tallest = Math.max(1, ...names.map(group => group.stages.length));
@@ -133,7 +143,7 @@ function placeColumns(
   const columns: FullColumn[] = [];
   const cards: FullCard[] = [];
   names.forEach((group, column) => {
-    const x = PAD + column * (FW_CARD_W + gap);
+    const x = left + column * (FW_CARD_W + gap);
     const height = group.stages.length * FW_CARD_H + (group.stages.length - 1) * FW_ROW_GAP;
     const top = FW_HEAD + (colHeight - height) / 2;
     columns.push({
@@ -223,17 +233,27 @@ function routeNextColumn(from: FullCard, to: FullCard): ForwardRoute {
 /**
  * A send-back, or a hand-off that skips a column: routed in the `lane`th lane under the cards,
  * at `laneY`, so it crosses no card. Each lane is one pill tall, so no two lanes' pills meet.
+ * A send-back to a card above it in its own column cannot rise back at the column's centre,
+ * through the cards between: from its lane it turns left past the column, rises there and
+ * enters the target's left edge (#292).
  */
 function routeLane(entry: Pair, from: FullCard, to: FullCard, lane: number, laneY: number) {
   const spread = (lane % 3) * 12 - 12;
   const lines = linesOf(entry.labels);
   const h = pillHeight(lines);
   const a: Point = { x: from.box.x + from.box.w / 2 + spread, y: from.box.y + from.box.h };
-  const b: Point = { x: to.box.x + to.box.w / 2 + spread, y: to.box.y + to.box.h };
   const y = laneY + h / 2;
-  const points = [a, { x: a.x, y }, { x: b.x, y }, b];
+  let points: Point[];
+  if (from.column === to.column) {
+    const x = from.box.x - GUTTER + spread;
+    const b: Point = { x: to.box.x, y: to.box.y + to.box.h / 2 + BACK_ENTRY + spread / 2 };
+    points = [a, { x: a.x, y }, { x, y }, { x, y: b.y }, b];
+  } else {
+    const b: Point = { x: to.box.x + to.box.w / 2 + spread, y: to.box.y + to.box.h };
+    points = [a, { x: a.x, y }, { x: b.x, y }, b];
+  }
   return {
-    pillBox: pillAt(lines, { x: (a.x + b.x) / 2, y }),
+    pillBox: pillAt(lines, { x: (a.x + (points[2] as Point).x) / 2, y }),
     points,
     lines,
     nextLaneY: laneY + h + LANE_STEP,
@@ -310,11 +330,21 @@ export function fullWorkflowLayout(
   const pairs = stagePairs(graph, drawn, labels);
   // A pill sits in the gap between two columns, so the gap is never narrower than the widest.
   const widest = Math.max(0, ...pairs.flatMap(pair => linesOf(pair.labels).map(pillWidth)));
-  const { columns, cards } = placeColumns(groups, Math.max(FW_COL_GAP, widest + 16));
-  const byId = new Map(cards.map(card => [card.id, card]));
-  const bottom = Math.max(...cards.map(card => card.box.y + card.box.h));
-  const { lanes, forward } = routePairs(pairs, byId, bottom);
-  const taken = [...cards.map(card => card.box), ...lanes.map(arrow => arrow.pillBox)];
-  const arrows = [...lanes, ...placeForwardPills(forward, taken)];
-  return { columns, cards, arrows, bounds: boundsOf(cards, arrows, bottom) };
+  const gap = Math.max(FW_COL_GAP, widest + 16);
+  const laidOut = (left: number): FullLayout => {
+    const { columns, cards } = placeColumns(groups, gap, left);
+    const byId = new Map(cards.map(card => [card.id, card]));
+    const bottom = Math.max(...cards.map(card => card.box.y + card.box.h));
+    const { lanes, forward } = routePairs(pairs, byId, bottom);
+    const taken = [...cards.map(card => card.box), ...lanes.map(arrow => arrow.pillBox)];
+    const arrows = [...lanes, ...placeForwardPills(forward, taken)];
+    return { columns, cards, arrows, bounds: boundsOf(cards, arrows, bottom) };
+  };
+  const layout = laidOut(PAD);
+  // A send-back up the first column rises left of it: the whole layout moves right to keep it,
+  // and its pill, inside the margin.
+  const least = Math.min(
+    ...layout.arrows.flatMap(arrow => [arrow.pillBox.x, ...arrow.points.map(point => point.x)])
+  );
+  return least < PAD ? laidOut(2 * PAD - least) : layout;
 }

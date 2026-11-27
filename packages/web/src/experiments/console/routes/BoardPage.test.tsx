@@ -576,7 +576,7 @@ const untitled = (key: string, stage: string): ItemRead => {
   return { ...read, item: { ...read.item, title: null } };
 };
 
-/** What a mounted board reads apart from its pack graph and view, seeded so nothing is fetched. */
+/** What a mounted board reads apart from its pack graph, seeded so nothing is fetched. */
 function seedBoard(reads: ItemRead[]): void {
   set(K.projects, [project('web', ['flow'])]);
   set(K.boardOrders('web'), reads);
@@ -641,7 +641,7 @@ async function mountBoard(
       for (const [key, descriptor] of saved)
         if (descriptor) Object.defineProperty(globalThis, key, descriptor);
         else Reflect.deleteProperty(globalThis, key);
-      for (const prefix of ['forge-titles', 'pack-view']) invalidate(prefix);
+      invalidate('forge-titles');
     },
   };
 }
@@ -867,7 +867,7 @@ test('the board filter finds a card by the issue title and the key the card prin
   }
 });
 
-test('the graph and the titles are asked for at once, and no view file; the columns draw when the graph answers', async () => {
+test('the graph and the titles are asked for at once; the columns draw when the graph answers', async () => {
   // Untitled issue-keyed items, whose cards ask the forge for their titles: one in a column,
   // and one in the decision strip.
   const failed = item('issue-3', 'check', 'failed');
@@ -889,7 +889,7 @@ test('the graph and the titles are asked for at once, and no view file; the colu
   });
   try {
     // While the graph read is out, the strip's card asks for its title, which needs only its
-    // item read. The board reads its words from the graph: it never asks for the view file.
+    // item read. The board reads its words from the graph.
     expect([...asked].sort()).toEqual(['/api/forge/subjects', '/api/packs/flow/graph']);
     expect(board.container.querySelectorAll('[data-stage]').length).toBe(0);
     await board.act(async () => {
@@ -954,8 +954,7 @@ test('the Overview tiles and the Board count the same items: in flight, merged a
   ];
   seedBoard(reads);
   set(K.packGraph('web', 'flow'), graph);
-  // The pack ships no curated view file, so the Overview draws the derived flow it counts in.
-  set(K.packView('web', 'flow'), { path: null, view: null, problems: [] });
+  // The pack's document declares no groups, so the Overview draws the derived flow it counts in.
   const board = render('/console/p/web/board', <BoardPage />);
   const overview = render('/console/p/web', <OverviewPage />);
   const tile = (name: string): string | null | undefined =>

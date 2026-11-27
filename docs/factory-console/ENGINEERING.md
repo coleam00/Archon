@@ -13,8 +13,7 @@ reference for anything v1 showed is `main`'s history (tag `console-v1-full`) and
 `title` migration is part of the base; add no new migration.
 
 `combined` also carries Archon `dev` (https://github.com/coleam00/Archon, last merged at
-e7a12daf7, #293), so it can go upstream. It reads the pack's dev branch (dd30226, the revision
-`docs/factory-console/pack-view/` is written for; the pack now lives at
+e7a12daf7, #293), so it can go upstream. It reads the pack's dev branch (the pack now lives at
 https://github.com/dynamous-community/archon-software-factory): the pack's dev tracks Archon
 `dev` and its main the released Archon, and Archon `dev` no longer loads the pack's main (`returns.final` is
 gone). `dev` is brought in as a merge
@@ -39,16 +38,15 @@ The factory building this repository runs Archon from another checkout, on the h
   real asks to look at. Use it only for looking: never confirm an answer on the copy, because settling an
   item's asks there can start a real agent run.
 - The pack the live home installs is older than the one the console is written for: its
-  workflows carry no `display:` blocks and it ships no view file, so on the copy the board cards
-  show titles, asks, PR links and the running step (named by its id in words) but no check
-  rounds or returns, and the map reads stage ids in words. To see the pack's words and its
-  rounds and returns, replace the copy's installed pack folder
-  (`.console-home/plugins/packs/<owner>/<name>/<commit>/`) with the pack's dev tree at dd30226
-  (`fc-runtime/spike/pack-dev-dd30226`), copy the overlay `docs/factory-console/pack-spike/`
-  over it (the words, the declarations and the document's front matter), and copy
-  `docs/factory-console/pack-view/factory-view.json` into its `.shared/`, as
-  `fc-runtime/gate_combined.sh` does with `PACK_TREE` set to that tree (`pack-view/README.md`). On the older tree
-  the Overview lists document problems for the stages it lacks.
+  workflows carry no `display:` blocks and its document no groups, so on the copy the board
+  cards show titles, asks, PR links and the running step (named by its id in words) but no
+  check rounds or returns, and the map is the derived one, reading stage ids in words. To see
+  the pack's words, groups, rounds and returns, replace the copy's installed pack folder
+  (`.console-home/plugins/packs/<owner>/<name>/<commit>/`) with the pack PR branch's tree
+  (`fc-runtime/spike/pack-fc69-repo`, d51851d), which carries the `display:` blocks, the
+  `document` key and the document's front matter, as `fc-runtime/gate_combined.sh` does with
+  `PACK_TREE` set to that tree. The overlay `docs/factory-console/pack-spike/` is the same
+  files, for an older tree. No view file is copied: the console reads none.
 - Pick a free port (not 3090, 3190 or 8864, which are in use); check it first.
 - Stop every server and browser you start before you finish. Kill by the PID you started, never by
   process name: other factories run on this machine.
@@ -61,8 +59,8 @@ The factory building this repository runs Archon from another checkout, on the h
   older code its own issue does not cover (DESIGN.md, "While main is being slimmed").
 - No database migrations and no change to engine tables. New server code only reads.
 - The engine reads only generic things: items, runs and outcomes, asks with the options their
-  workflow declares, item links, the pack graph (`GET /api/packs/{pack}/graph`, with the
-  workflows' `display:` blocks served as written) and the view file. No new pack-specific read
+  workflow declares, item links and the pack graph (`GET /api/packs/{pack}/graph`, with the
+  workflows' `display:` blocks and the pack's document served as written). No new pack-specific read
   model in `packages/workflows`, `packages/core` or
   `packages/server`: nothing there knows rounds, returns, shadows, parked items, discoveries,
   work orders, item stories or stage groups. The web composes those.
@@ -90,40 +88,32 @@ The factory building this repository runs Archon from another checkout, on the h
   the flow, and the graph serves them with each stale stage dropped and the problems in
   `document.problems`. `lib/view-groups.ts` `groupsOf(graph)` is the one place the map, Full
   workflow and the board take their groups from, and maps `kind` to the console's colours.
-- The view file is one file a pack ships, `<pack>/.shared/factory-view.json`, holding the How it
-  works explainer only: a `summary` and the hand-laid How it works picture (schema
-  `packages/workflows/src/schemas/factory-view.ts`, the picture in
-  `factory-view-how-it-works.ts`). It is read through the generic `pack-declarations.ts` reader
-  from the copy of the pack the graph was read from (`packages/core/src/workflows/pack-view.ts`)
-  and served by `GET /api/packs/{pack}/view`. One path reads it, `servedFactoryView`
-  (`factory-view-read.ts`), when the file is read and in `bun run check:factory-view <pack dir>`:
-  a key the file does not have (an older file's `stages` or `rounds`) is reported `unknown` and
-  left out, and `reconcileFactoryView` (`factory-view-check.ts`) drops a picture card's stage or
-  an edge the graph lacks. Every problem is a typed error (`kind`): the console shows them all
-  and draws what is left, and the check exits 1 on any. The Wirasm pack's file is kept at
-  `docs/factory-console/pack-view/` until the owner's pack ships it, and the YAML lines the
-  console needs from the pack (its `display:` blocks, its `document` key and its document's
-  front matter) in the overlay `docs/factory-console/pack-spike/` (`pack-view/README.md`).
+- How it works is the pack's own document (`graph.document.text`: the markdown below its front
+  matter, `factory/PackDocument.tsx`), then the pack's whole workflow derived from its graph;
+  the Overview's summary is the document's first paragraph (`factory/lib/pack-document.ts`,
+  parsed with `mdast-util-from-markdown`, never split by pattern). There is no view file: no
+  side file a pack ships is read for the console.
 - Factory web code stays under `packages/web/src/experiments/console/factory/` (components, pure
   `lib/`, the page routes). On `combined` it holds the curated map, How it works and the stage
   modal, the board card's layer and the board furniture (work orders, Merged, Set aside, the
   Table and the number tiles). It is mounted from Rasmus's pages, and only these files outside
   the folder import from it, tests included: `ConsoleApp.tsx` (the How it works routes and
   `factory.css`), `routes/OverviewPage.tsx` (the number tiles and the map, through
-  `factory/PackMap.tsx`, and the placement's words, through `factory/lib/graph-view.ts`), Rasmus's board, `routes/BoardPage.tsx` and its test,
+  `factory/PackMap.tsx`, the placement's words, through `factory/lib/graph-view.ts`, the
+  document's summary, through `factory/PackDocument.tsx` and `factory/lib/pack-document.ts`,
+  How it works' path, through `factory/lib/views.ts`, and the empty state,
+  `factory/ui/EmptyNote.tsx`), Rasmus's board, `routes/BoardPage.tsx` and its test,
   `routes/board/ItemCard.tsx` and its test, and the project's Needs you tab,
   `routes/ProjectNeedsYouPage.tsx` (the board read, and the board's item key, title and option
   words) and its mounted test, `routes/ProjectNeedsYouPage.dom.test.tsx` (the folder's
   mounted-DOM helper), and the project tab row, `components/ProjectViewTabs.tsx` (the Needs you
   tab's count, through `factory/lib/item-asks.ts`). `ProjectRail.tsx` carries the sidebar
   Factory entry without importing the folder. No lint checks this on `combined` (`scripts/check-factory-imports.ts`
-  is not ported); keep the list true when a change adds a mount point. The curated map, How it
-  works and the stage modal are drawn whenever the pack ships a view file the server could
-  read, with its problems listed above them (`ViewProblems.tsx`); `factory/lib/map-source.ts` is
-  the one place that decides, and a pack with no file, or one that does not read, draws the map
-  derived from the pack graph.
-- Server code is the view-file read (`GET /api/packs/{pack}/view` in `api.packs.ts`, beside the
-  graph route; the two share one graph read while it runs, `shareWhileRunning`), and two generic reads with no pack words that the web cannot get from older routes:
+  is not ported); keep the list true when a change adds a mount point. The grouped map and its stage modal
+  are drawn whenever the pack's document declares groups, with the document's problems listed
+  above them (`DocumentProblems.tsx`); `factory/PackMap.tsx` decides, and a pack with no
+  groups draws the map derived from the pack graph.
+- Server code is two generic reads with no pack words that the web cannot get from older routes:
   `GET /api/workflows/runs/records` (`api.run-records.ts`, run records without events) and
   `GET /api/forge/subjects` (`api.forge.ts`, issue titles and change merge state).
   Speed is a requirement (DESIGN.md, COMBINED direction), so two things are kept between

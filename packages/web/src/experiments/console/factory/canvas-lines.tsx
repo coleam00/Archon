@@ -1,16 +1,14 @@
 /**
- * The Visual standard's lines (rule 4), shared by the canvases that draw them: the live map
- * and How it works. 8 px rounded bends, 6 px heads; a forward line 2 px, solid, brightening
+ * The Visual standard's lines (rule 4), shared by the canvases that draw them: the grouped map
+ * and the full workflow. 8 px rounded bends, 6 px heads; a forward line 2 px, solid, brightening
  * along the flow (`FlowGradient`); send-backs 1.5 px, dashed `6 4` in the approval colour and a
  * little quieter; asks 1.5 px dotted in the tertiary text colour; and each label on a pill set
  * off its line.
  */
 import type { ReactElement } from 'react';
 import type { Box, Point } from './lib/map-layout';
-import { PILL_LINE } from './lib/map-sizes';
-import { OVERVIEW_SMALL_TEXT } from './lib/overview-layout';
+import { PILL_LINE, PILL_TEXT } from './lib/map-sizes';
 
-export const LINE = 'var(--text-tertiary)';
 /** A forward line's ends: dim where it leaves, brighter where it arrives (its head's colour). */
 const LINE_FROM = 'var(--border-bright)';
 export const LINE_TO = 'var(--text-secondary)';
@@ -102,7 +100,7 @@ export function HeadMarker({ id, colour }: { id: string; colour: string }): Reac
 export function LinePill({ pill, lines }: { pill: Box; lines: readonly string[] }): ReactElement {
   const first = pill.y + pill.h / 2 - (PILL_LINE * (lines.length - 1)) / 2;
   return (
-    <g data-pill={lines.join(' ')} className={OVERVIEW_SMALL_TEXT}>
+    <g data-pill={lines.join(' ')} className={PILL_TEXT}>
       <rect
         x={pill.x}
         y={pill.y}

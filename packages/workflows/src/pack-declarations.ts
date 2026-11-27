@@ -1,7 +1,6 @@
 /**
  * Read one display declaration file, such as `.shared/metric-views.json`, from every place a
- * pack lives. Metric views and factory views both find their files this way, so they agree
- * on which packs exist and which copy wins.
+ * pack lives, agreeing with workflow discovery on which packs exist and which copy wins.
  *
  * A pack folder's file at a higher scope replaces a same-named folder's at a lower one
  * (bundled < global < project), as same-named workflow files do, even when the higher one

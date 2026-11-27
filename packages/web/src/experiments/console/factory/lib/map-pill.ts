@@ -3,8 +3,7 @@
  * hand-offs (`map-layout.ts`) and the send-backs (`map-send-backs.ts`) both word their pills by
  * it, and the layout imports the send-backs.
  */
-import { PILL_LINE } from './map-sizes';
-import { pillWidth, PILL_H } from './overview-layout';
+import { PILL_H, PILL_LINE, pillWidth } from './map-sizes';
 
 /** The most lines a forward hand-off's pill holds (issue #146). */
 export const PILL_MAX_LINES = 2;

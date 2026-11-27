@@ -3,8 +3,7 @@ import type { PackGraph } from '../../skills/items';
 /*
  * A small pack graph, written by hand for the factory console's tests: the Wirasm factory's
  * shape in 16 stages, with its stage ids and words, holding only what the tests read. It is not
- * a copy of a real pack; `scripts/check-factory-view.ts` checks the real pack's view file
- * against a real pack tree. It has:
+ * a copy of a real pack. It has:
  *
  * - four document groups with blurbs and kinds, an exit stage (`landed`) and count words;
  * - an entry stage (`order`) whose work orders loop back to it over a `part_of` link, an event

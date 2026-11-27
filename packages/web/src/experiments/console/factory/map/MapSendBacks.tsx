@@ -11,8 +11,8 @@ import {
 import { branchFlow } from '../lib/map-flow';
 import type { MapLayout } from '../lib/map-layout';
 import type { CardSendBacks } from '../lib/map-send-backs';
-import { FlowDot } from '../overview/OverviewFlow';
-import { useReducedMotion } from '../overview/useReducedMotion';
+import { FlowDot } from './FlowDot';
+import { useReducedMotion } from './useReducedMotion';
 
 /** A branch dot's radius and its halo's: smaller than the forward flow's dot. */
 const BRANCH_R = 2.5;

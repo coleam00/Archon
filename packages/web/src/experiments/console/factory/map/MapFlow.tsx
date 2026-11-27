@@ -2,10 +2,10 @@ import { memo, useMemo, type ReactElement } from 'react';
 import { LINE_TO } from '../canvas-lines';
 import { mapFlow } from '../lib/map-flow';
 import type { ArrowPath, Box, PlacedCard } from '../lib/map-layout';
-import { FlowDot } from '../overview/OverviewFlow';
-import { useReducedMotion } from '../overview/useReducedMotion';
+import { FlowDot } from './FlowDot';
+import { useReducedMotion } from './useReducedMotion';
 
-/** The forward flow's dot: quieter than the running dot (10 px) and How it works' own. */
+/** The forward flow's dot: quieter than the running dot (10 px). */
 const AMBIENT_R = 3;
 const AMBIENT_HALO_R = 6;
 const AMBIENT_PEAK = 0.9;
@@ -15,7 +15,7 @@ const AMBIENT_PEAK = 0.9;
  *
  * - Always, one faint dot travels every forward hand-off in turn, from the first card to the
  *   last, on one SVG timeline (`mapFlow`), so the map reads as one flow end to end. Only
- *   position and opacity animate, as on How it works.
+ *   position and opacity animate.
  * - While a run works an item on a card, a brighter 10 px dot in the running colour travels the
  *   hand-off into that card, over and over (`.map-flow-dot` in factory.css). Its arrival is held
  *   by the running chip's pulsing dot on the card (rule 7). A card no hand-off runs into (the

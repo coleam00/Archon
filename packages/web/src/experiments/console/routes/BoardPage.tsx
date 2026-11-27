@@ -5,7 +5,7 @@
  *
  * It decides nothing. Whether an item is open is the item read's `standing`, the stages and
  * their order are the pack graph's, and the stage an item stands at is `placeFor`'s: its run's
- * stage, or the one the factory view maps a retired workflow's runs to. An open item at no stage
+ * stage, or the one whose `display.replaces` names a retired workflow its runs ran. An open item at no stage
  * of the flow is set aside with that reason; there is no column for it. How stages are grouped
  * into columns is the pack's to say, in its own document: the graph read carries the groups and
  * the board names none itself. Which items go in which group, and the numbers the Overview

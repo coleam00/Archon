@@ -1,8 +1,9 @@
 /**
- * The Overview mounted with the attention list failing and nothing read before (#258): the
+ * The Overview mounted. With the attention list failing and nothing read before (#258), the
  * need-you tile shows "?" rather than a skeleton that never resolves, and the page says once
- * that the asks could not be read. The static renders in `OverviewPage.test.tsx` cover the
- * tile while the asks are still read.
+ * that the asks could not be read; the static renders in `OverviewPage.test.tsx` cover the tile
+ * while the asks are still read. An Overview is never blank (#295), and a pack's summary is its
+ * document's first paragraph.
  */
 import { afterEach, expect, test } from 'bun:test';
 import { act } from 'react';
@@ -23,7 +24,7 @@ afterEach(async () => {
   await unmount?.();
   unmount = undefined;
   // Once nothing subscribes, invalidating also clears the failed read's error.
-  for (const prefix of ['projects', 'board', 'pack-graph', 'pack-view', 'runs']) invalidate(prefix);
+  for (const prefix of ['projects', 'board', 'pack-graph', 'runs']) invalidate(prefix);
 });
 
 /** An item merged today, so the pack has something on its board. */
@@ -43,7 +44,7 @@ const merged = {
   merged: { at: new Date().toISOString() },
 } as unknown as ItemRead;
 
-/** Seeds the project, its one pack's board, graph and view; not the attention list. */
+/** Seeds the project, its one pack's board and graph; not the attention list. */
 function seedPack(): void {
   set(K.projects, [{ id: 'p1', name: 'p', itemPacks: ['flow'] } as unknown as Project]);
   set(K.boardOrders('p1'), [merged]);
@@ -54,7 +55,6 @@ function seedPack(): void {
     document: null,
     metricViews: null,
   } as unknown as PackGraph);
-  set(K.packView('p1', 'flow'), { path: null, view: null, problems: [] });
 }
 
 async function mountOverview(): Promise<HTMLElement> {
@@ -127,4 +127,63 @@ test('a failed re-read of the asks keeps the asks read before on the Overview, w
   expect(page.querySelector('[data-asks-unread]')).toBeNull();
   expect(page.querySelector('[data-number="need-you"] [data-value]')?.textContent).toBe('1');
   expect(page.querySelector('[data-needs-you]')).not.toBeNull();
+});
+
+/** Seeds an empty attention list, so the page asks nothing of the network. */
+function noAsks(): void {
+  set(K.runsAttention, {
+    runs: [],
+    ownerLost: [],
+    asks: [],
+    answerRefusals: {},
+    itemIds: new Set<string>(),
+    refs: new Set<string>(),
+    degraded: [],
+  });
+}
+
+test('a project where no work has started says so rather than drawing nothing', async () => {
+  set(K.projects, [{ id: 'p1', name: 'p', itemPacks: [] } as unknown as Project]);
+  set(K.boardOrders('p1'), []);
+  noAsks();
+  const page = await mountOverview();
+  expect(page.querySelector('[data-empty-overview]')?.textContent).toContain('No work has started');
+  expect(page.querySelector('[data-pack]')).toBeNull();
+});
+
+test('a pack with nothing on its board still shows its tiles and map, and says nothing is on a stage', async () => {
+  seedPack();
+  set(K.boardOrders('p1'), []);
+  noAsks();
+  const page = await mountOverview();
+  expect(page.querySelector('[data-pack="flow"]')).not.toBeNull();
+  expect(page.querySelector('[data-number="in-flight"] [data-value]')?.textContent).toBe('0');
+  expect(page.querySelector('[data-empty-board]')).not.toBeNull();
+  expect(page.querySelector('[data-pack-map]')).not.toBeNull();
+  expect(page.querySelector('[data-empty-overview]')).toBeNull();
+});
+
+test("the pack's summary is its document's first paragraph, linking to How it works", async () => {
+  seedPack();
+  set(K.packGraph('p1', 'flow'), {
+    stages: [],
+    groups: [],
+    arrows: [],
+    document: {
+      path: 'how-it-works.md',
+      problems: [],
+      text: '# How the flow works\n\nWork comes in **once**.\n\n## Later\n\nNot the summary.',
+    },
+    metricViews: null,
+  } as unknown as PackGraph);
+  noAsks();
+  const page = await mountOverview();
+  const summary = page.querySelector('[data-summary]');
+  expect(summary?.textContent).toBe('Work comes in once.');
+  expect(summary?.querySelector('strong')?.textContent).toBe('once');
+  expect(page.textContent).not.toContain('Not the summary');
+  expect(page.textContent).not.toContain('How the flow works');
+  const link = [...page.querySelectorAll('a')].find(a => a.textContent === 'How it works');
+  expect(link?.getAttribute('href')).toBe('/console/factory/flow/how-it-works');
+  expect(page.querySelector('[data-empty-board]')).toBeNull();
 });

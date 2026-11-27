@@ -6,7 +6,7 @@ import { LIVE_FITTING } from '../map/useMapCamera';
 import { fullWorkflowLayout, MERGED } from './full-workflow-layout';
 import { mapArrows, type StructureView } from './graph-structure';
 import { fitCamera } from './map-camera';
-import { boxesMeet } from './map-geometry.test-fixtures';
+import { boxesMeet, enters } from './map-geometry.test-fixtures';
 import { groupsOf } from './view-groups';
 
 describe("a pack's full workflow", () => {
@@ -141,5 +141,87 @@ describe('the full workflow words its pills as the curated map does', () => {
       ['w', 'c'],
     ] as const)
       expect(pill(from, to)).toEqual(mapWords(from, to));
+  });
+});
+
+describe('a send-back between two stages of one group (#292)', () => {
+  // i hands to a, a to b under it in the same group, b sends back up to a or on to c.
+  const graph = {
+    pack: 'o.p',
+    stages: [stage('i'), stage('a'), stage('b'), stage('c', ['land'])],
+    arrows: [
+      outcome('i', 'a', 'go'),
+      outcome('a', 'b', 'go'),
+      answer('b', 'a', 'send-back'),
+      outcome('b', 'c', 'go'),
+    ],
+  } as unknown as PackGraph;
+  const view: StructureView = {
+    stages: ['i', 'a', 'b', 'c'].map(id => ({ id, label: id, workflows: [id] })),
+    runNames: Object.fromEntries(graph.stages.map(entry => [entry.workflow, entry.name])),
+    outcomeLabels: {},
+    answerLabels: { 'b:send-back': 'sent back' },
+  };
+  const groups: StageGroup[] = [
+    { name: 'In', stages: ['i'] },
+    { name: 'Make', stages: ['a', 'b'] },
+    { name: 'Ship', stages: ['c'] },
+  ];
+  const layout = fullWorkflowLayout(graph, groups, view);
+  const arrow = (from: string, to: string) => {
+    const found = layout.arrows.find(entry => entry.from === from && entry.to === to);
+    if (found === undefined) throw new Error(`no arrow ${from}>${to}`);
+    return found;
+  };
+  const card = (id: string) => {
+    const found = layout.cards.find(entry => entry.id === id);
+    if (found === undefined) throw new Error(`no card ${id}`);
+    return found.box;
+  };
+  const back = arrow('b', 'a');
+
+  test("every arrow's path is finite numbers, with no zero-length run to round", () => {
+    for (const { d, points } of layout.arrows) {
+      const numbers = d.match(/-?[\d.]+(e[+-]?\d+)?|NaN|Infinity/g) ?? [];
+      expect(numbers.length).toBeGreaterThan(0);
+      for (const number of numbers) expect(Number.isFinite(Number(number))).toBe(true);
+      points.slice(1).forEach((point, i) => {
+        const prev = points[i];
+        expect(point.x === prev?.x && point.y === prev.y).toBe(false);
+      });
+    }
+  });
+
+  test('it is a send-back that ends on the target card, apart from the hand-off into it', () => {
+    expect(back.back).toBe(true);
+    const end = back.points.at(-1);
+    const a = card('a');
+    expect(end?.x).toBe(a.x);
+    expect(end?.y).toBeGreaterThan(a.y);
+    expect(end?.y).toBeLessThan(a.y + a.h);
+    const forwardEnd = arrow('i', 'a').points.at(-1);
+    expect(end?.y === forwardEnd?.y && end?.x === forwardEnd?.x).toBe(false);
+  });
+
+  test('it runs in a lane under the cards and crosses no card', () => {
+    const bottom = Math.max(...layout.cards.map(entry => entry.box.y + entry.box.h));
+    expect(Math.max(...back.points.map(point => point.y))).toBeGreaterThan(bottom);
+    const faults = back.points.slice(1).flatMap((point, i) => {
+      const prev = back.points[i] as (typeof back.points)[number];
+      const segment = { x1: prev.x, y1: prev.y, x2: point.x, y2: point.y };
+      return layout.cards.filter(entry => enters(entry.box, segment)).map(entry => entry.id);
+    });
+    expect(faults).toEqual([]);
+  });
+
+  test('its pill meets no card and no other pill, and everything sits inside the bounds', () => {
+    for (const entry of layout.cards) expect(boxesMeet(back.pillBox, entry.box)).toBe(false);
+    for (const other of layout.arrows)
+      if (other !== back) expect(boxesMeet(back.pillBox, other.pillBox)).toBe(false);
+    const { bounds } = layout;
+    for (const { points, pillBox } of layout.arrows) {
+      expect(pillBox.x).toBeGreaterThanOrEqual(bounds.x);
+      for (const point of points) expect(point.x).toBeGreaterThanOrEqual(bounds.x);
+    }
   });
 });

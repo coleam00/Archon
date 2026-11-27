@@ -1,6 +1,9 @@
 /**
- * A project's staged packs at a glance: what the pack says it is, how much is moving, how many
- * asks wait on the operator, and where the items sit in the pack's flow.
+ * A project's staged packs at a glance: what the pack says it is (its document's first
+ * paragraph, linking to its How it works), how much is moving, how many asks wait on the
+ * operator, and where the items sit in the pack's flow. A pack with nothing on its board still
+ * shows its map, with a line saying nothing is on a stage; a project where no work has started
+ * stages no pack yet, and says so.
  *
  * The page decides nothing and names no pack. The pack's name, document, groups and arrows come
  * from the pack graph read; where an item is comes from the item read's `standing` and
@@ -9,11 +12,10 @@
  * link to the project's Needs you tab: Needs you is drawn on that tab and on Archon's
  * platform-wide Needs you page, nowhere else (#218).
  *
- * The map is `factory/PackMap.tsx`'s: the pack's curated map when it ships a view file, else the
- * flow derived from the graph.
+ * The map is `factory/PackMap.tsx`'s: the grouped map when the pack's document declares groups,
+ * else the flow derived from the graph.
  */
 import type { ReactElement, ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
 import { Link, useParams } from 'react-router';
 import { useItemAsks } from '../components/ItemAsksSection';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
@@ -22,7 +24,11 @@ import { FactoryNumbers, type NeedYou } from '../factory/FactoryNumbers';
 import { askReadOf, type AskRead } from '../factory/lib/item-asks';
 import { packBoard, placeFor } from '../factory/lib/board-numbers';
 import { graphWords } from '../factory/lib/graph-view';
+import { firstParagraph } from '../factory/lib/pack-document';
+import { factoryPackPath } from '../factory/lib/views';
+import { DocumentSummary } from '../factory/PackDocument';
 import { PackMap } from '../factory/PackMap';
+import { EmptyNote } from '../factory/ui/EmptyNote';
 import { useBoardItems } from '../factory/useBoardItems';
 import type { Project } from '../primitives/project';
 import * as skill from '../skills';
@@ -88,8 +94,7 @@ export function PackOverview({
   const place = graph === undefined ? undefined : placeFor(graph.stages, graphWords(graph));
   const board = items === undefined ? undefined : packBoard(items, pack, new Date(), place);
   const heading = 'text-sm font-medium text-text-primary';
-  // As on the board: a pack with nothing on its board has nothing to show.
-  if (board !== undefined && board.onBoard.length === 0) return <></>;
+  const summary = graph?.document == null ? null : firstParagraph(graph.document.text);
   return (
     <section data-pack={pack} className="mb-10 flex flex-col gap-6">
       <div>
@@ -97,17 +102,25 @@ export function PackOverview({
         {error !== undefined ? (
           <p className="mt-1 text-console-12 text-error">{error.message}</p>
         ) : null}
-        {graph?.document != null && graph.document.text !== '' ? (
-          <div
-            data-document
-            className="mt-2 line-clamp-4 max-w-3xl text-console-12 text-text-secondary [&_h1]:font-medium [&_h1]:text-text-primary"
-          >
-            <ReactMarkdown>{graph.document.text}</ReactMarkdown>
+        {summary === null ? null : (
+          <div className="mt-2 flex flex-col gap-1">
+            <DocumentSummary markdown={summary} />
+            <Link
+              to={factoryPackPath(pack)}
+              className="text-console-13 text-accent-bright underline"
+            >
+              How it works
+            </Link>
           </div>
-        ) : null}
+        )}
       </div>
 
       <FactoryNumbers numbers={board?.numbers} needYou={needYou} error={itemsError} />
+      {board !== undefined && board.onBoard.length === 0 ? (
+        <p data-empty-board className="text-console-13 text-text-tertiary">
+          Nothing is on a stage now. Items show on the map as they move.
+        </p>
+      ) : null}
       {children}
       <PackMap
         projectId={projectId}
@@ -125,6 +138,9 @@ export function OverviewPage(): ReactElement {
   const { data: projects } = useEntity<Project[]>(K.projects, () => skill.listProjects());
   const project = projects?.find(candidate => candidate.id === projectId);
   const packs = project?.itemPacks ?? [];
+  // A project's packs are the ones its items ran (`itemPacks`), so one where no work has started
+  // has none to draw: it says so, once the project is read, rather than showing nothing.
+  const noWork = project !== undefined && packs.length === 0;
   const {
     data: attention,
     error: attentionError,
@@ -157,6 +173,11 @@ export function OverviewPage(): ReactElement {
         <ProjectViewTabs projectId={projectId} active="overview" />
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8 pt-5 md:px-6">
+        {noWork ? (
+          <div data-empty-overview>
+            <EmptyNote sentence="No work has started in this project yet. Its factory map shows here once the first item runs." />
+          </div>
+        ) : null}
         {packs.map((pack, index) => (
           <PackOverview
             key={pack}

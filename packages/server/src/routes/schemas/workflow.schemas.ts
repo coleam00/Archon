@@ -23,10 +23,6 @@ import { RUN_RECORDS_MAX, runRecordSchema } from '@archon/workflows/run-records'
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import { ITEM_STANDING_STATES } from '@archon/workflows/item-standing';
 import { packGraphSchema } from '@archon/workflows/pack-graph';
-import {
-  factoryViewProblemSchema,
-  factoryViewSchema,
-} from '@archon/workflows/schemas/factory-view';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { itemEndBlockerSchema, itemEndSchema } from '@archon/workflows/schemas/item-end';
 import {
@@ -521,19 +517,6 @@ export const itemReadQuerySchema = z.object({
 
 /** GET /api/packs/{pack}/graph response: the pack's stages and run-ended arrows. */
 export const packGraphResponseSchema = packGraphSchema.meta({ id: 'PackGraph' });
-
-/**
- * GET /api/packs/{pack}/view response: the factory view the pack ships, or null with a null
- * `path` when it ships none, and what is wrong with it. A file that does not read or validate
- * has a `path`, a null `view` and its errors; one that does is checked against the pack graph.
- */
-export const packViewResponseSchema = z
-  .object({
-    path: z.string().nullable(),
-    view: factoryViewSchema.nullable(),
-    problems: z.array(factoryViewProblemSchema),
-  })
-  .meta({ id: 'PackView' });
 
 /** GET /api/items response: the item, its runs, open questions and answers. */
 export const itemReadResponseSchema = itemReadSchema.meta({ id: 'ItemRead' });

@@ -36,7 +36,7 @@ type PackReadResult = CardPack | 'error';
 /**
  * One pack's graph, reported to the provider with the words it gives (`graphWords`). The graph
  * is read through the board's own `K.packGraph` entry, so the stage columns and the cards share
- * one read; the pack's view file is not a card's to read.
+ * one read.
  */
 function PackRead({
   projectId,

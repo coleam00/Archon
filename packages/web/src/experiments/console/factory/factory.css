@@ -33,7 +33,7 @@
 }
 
 /*
- * The canvases' identity (DESIGN.md, "Visual identity, 2026-11-19"): the map, How it works and
+ * The canvases' identity (DESIGN.md, "Visual identity, 2026-11-19"): the map, the full workflow and
  * the stage drill-down's cards, and the two canvas viewports. Every value is static: no filter,
  * no animation, nothing a pan repaints. Named "depth", never "shadow": a shadow is a step that
  * does nothing (Visual standard, rule 10).

@@ -5,12 +5,11 @@
  * the projects read's order, that stages it: the server reads a pack as a project has it
  * installed.
  *
- * What it draws is `mapSource`'s choice, as on the Overview: the pack's curated How it works
- * picture whenever the server could read its view file, with what the file gets wrong listed
- * above it, else the pack's document and the map derived from its graph.
+ * It draws the pack's own document (`PackDocument`), then the pack's whole workflow derived from
+ * its graph, with the document's problems listed above them. A pack with no document gets no
+ * How it works section, only the workflow.
  */
 import type { ReactElement, ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
 import { Navigate, useParams } from 'react-router';
 import type { Project } from '../../primitives/project';
 import * as skill from '../../skills';
@@ -19,14 +18,12 @@ import { K } from '../../store/keys';
 import { DerivedStructure } from '../DerivedFlow';
 import { packDisplayName, packIdOfKey } from '../lib/pack-name';
 import { GraphSkeleton } from '../GraphSkeleton';
-import { mapSource } from '../lib/map-source';
 import { factoryPackPath } from '../lib/views';
 import { usePackGraph } from '../map-structure';
-import { OverviewBody } from '../overview/OverviewPage';
 import { graphWords } from '../lib/graph-view';
-import { useFullWorkflow, usePackView } from '../PackMap';
-import { SegmentedControl } from '../ui/SegmentedControl';
-import { DocumentProblems, ViewProblems } from '../ViewProblems';
+import { DocumentProblems } from '../DocumentProblems';
+import { PackDocument } from '../PackDocument';
+import { ReadFailure } from '../ReadFailure';
 import { PackFrame } from './PackFrame';
 
 /** Every pack some project stages, in the projects read's order, each with that first project. */
@@ -67,8 +64,7 @@ export function FactoryHome(): ReactElement {
 
 /**
  * The page's header: the pack's name as a person reads it ("Archon software factory"), the raw
- * key on hover (DESIGN.md, Where it lives). The view file's own title heads the map, as the root
- * of its breadcrumb.
+ * key on hover (DESIGN.md, Where it lives).
  */
 function heading(pack: string): { title: string; titleHint: string } {
   return { title: packDisplayName(packIdOfKey(pack)), titleHint: pack };
@@ -101,69 +97,42 @@ export function HowItWorksPage(): ReactElement {
   return <HowItWorks projectId={staged.project.id} pack={pack} />;
 }
 
+const LABEL = 'text-console-12 font-medium uppercase tracking-console-label text-text-tertiary';
+
 function HowItWorks({ projectId, pack }: { projectId: string; pack: string }): ReactElement {
-  const source = mapSource(usePackView(projectId, pack));
   const graph = usePackGraph(projectId, pack);
-  const words = graph.data === undefined ? undefined : graphWords(graph.data);
-  const [full, choose] = useFullWorkflow();
-  if (source.kind === 'loading')
+  if (graph.data === undefined)
     return (
       <PackFrame {...heading(pack)}>
-        <GraphSkeleton label="Loading How it works" />
-      </PackFrame>
-    );
-  if (source.kind === 'derived') {
-    const document = graph.data?.document;
-    return (
-      <PackFrame {...heading(pack)}>
-        {source.note === null ? null : (
-          <p data-map-note className="text-console-12 text-warning">
-            {source.note}
-          </p>
-        )}
-        <ViewProblems problems={source.problems} drawn={false} />
-        <DocumentProblems graph={graph.data} />
-        <DerivedStructure projectId={projectId} pack={pack} view={words} />
-        {document == null || document.text === '' ? null : (
-          <div
-            data-document
-            className="max-w-3xl text-console-14 leading-relaxed text-text-secondary [&_h1]:text-console-17 [&_h1]:font-semibold [&_h1]:text-text-primary [&_h2]:mt-5 [&_h2]:text-console-15 [&_h2]:font-semibold [&_h2]:text-text-primary [&_h3]:mt-3 [&_h3]:font-medium [&_h3]:text-text-primary [&_p]:mt-2"
-          >
-            <ReactMarkdown>{document.text}</ReactMarkdown>
-          </div>
+        {graph.error === undefined ? (
+          <GraphSkeleton label="Loading How it works" />
+        ) : (
+          <ReadFailure retry={graph.refetch}>
+            The pack's graph could not be read: {graph.error.message}
+          </ReadFailure>
         )}
       </PackFrame>
     );
-  }
+  const { document } = graph.data;
   return (
     <PackFrame
       {...heading(pack)}
       source={
-        <>
-          Read from the pack's factory view file{' '}
-          <span className="font-mono" title={source.path}>
-            ({source.path.split(/[\\/]/).at(-1)})
-          </span>
-        </>
-      }
-      actions={
-        <SegmentedControl
-          label="Which map"
-          active={full ? 'full' : 'map'}
-          segments={[
-            { key: 'map', label: 'How it works', onSelect: choose(false) },
-            { key: 'full', label: 'Full workflow', onSelect: choose(true) },
-          ]}
-        />
+        document == null ? undefined : (
+          <>
+            Read from the pack's document <span className="font-mono">{document.path}</span>
+          </>
+        )
       }
     >
-      <ViewProblems problems={source.problems} drawn />
       <DocumentProblems graph={graph.data} />
-      {full ? (
-        <DerivedStructure projectId={projectId} pack={pack} view={words} />
-      ) : (
-        <OverviewBody overview={source.view.howItWorks} />
+      {document == null || document.text.trim() === '' ? null : (
+        <PackDocument text={document.text} />
       )}
+      <section aria-label="The full workflow" className="flex flex-col gap-3">
+        <h2 className={LABEL}>The full workflow</h2>
+        <DerivedStructure projectId={projectId} pack={pack} view={graphWords(graph.data)} />
+      </section>
     </PackFrame>
   );
 }

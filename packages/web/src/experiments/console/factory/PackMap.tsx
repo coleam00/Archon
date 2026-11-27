@@ -1,23 +1,21 @@
 /**
- * A pack's map on the project Overview: the curated map, laid out and worded from the pack graph
- * (`graph-view.ts`), whenever the server could read the pack's view file, with what the file
- * gets wrong listed above it; else the map derived from the pack graph (`mapSource`, the one
- * place that chooses). The curated map offers the derived one as "Full workflow"
- * (`?map=full`). The routes import the factory's map through this file only.
+ * A pack's map on the project Overview, drawn from the pack graph alone. A pack whose document
+ * declares groups (`groupsOf`) gets the grouped map, laid out and worded from the graph
+ * (`curatedView`, `graph-view.ts`), with its stage modal, and offers the flow derived from the
+ * graph as "Full workflow" (`?map=full`). A pack with no groups gets the derived flow. The
+ * document's problems are listed above either. The routes import the factory's map through this
+ * file only.
  */
 import { useMemo, type ReactElement, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { columnsOf } from '../routes/BoardPage';
 import type { PackGraph } from '../skills/items';
-import { useEntity, type EntityView } from '../store/cache';
-import { K } from '../store/keys';
-import { getPackViewRead, type PackView, type ViewFile } from './api';
+import type { EntityView } from '../store/cache';
 import { DerivedFlow, flowCounts, stageCounts } from './DerivedFlow';
 import { FactoryCardsProvider } from './FactoryCards';
 import { GraphSkeleton } from './GraphSkeleton';
 import { curatedView } from './lib/curated-view';
 import { graphWords } from './lib/graph-view';
-import { mapSource } from './lib/map-source';
 import { groupsOf } from './lib/view-groups';
 import type { PackBoardGroups } from './lib/board-numbers';
 import type { AskRead } from './lib/item-asks';
@@ -26,17 +24,17 @@ import { CuratedMap } from './map/CuratedMap';
 import { useMapStructure, usePackGraph } from './map-structure';
 import { ReadFailure } from './ReadFailure';
 import { SegmentedControl } from './ui/SegmentedControl';
-import { DocumentProblems, ViewProblems } from './ViewProblems';
+import { DocumentProblems } from './DocumentProblems';
 
-/** The search param that shows the derived map in place of the curated one. */
+/** The search param that shows the derived map in place of the grouped one. */
 const MAP_PARAM = 'map';
 const FULL = 'full';
 
 /**
- * Whether the page shows the derived map as "Full workflow" (`?map=full`), and the handler a
- * segment calls to choose it or the curated map. The Overview and How it works share it.
+ * Whether the Overview shows the derived map as "Full workflow" (`?map=full`), and the handler a
+ * segment calls to choose it or the grouped map.
  */
-export function useFullWorkflow(): [boolean, (next: boolean) => () => void] {
+function useFullWorkflow(): [boolean, (next: boolean) => () => void] {
   const [params, setParams] = useSearchParams();
   const choose = (next: boolean) => (): void =>
     setParams(current => {
@@ -46,11 +44,6 @@ export function useFullWorkflow(): [boolean, (next: boolean) => () => void] {
       return kept;
     });
   return [params.get(MAP_PARAM) === FULL, choose];
-}
-
-/** The view read of a pack, under its one cache key. */
-export function usePackView(projectId: string, pack: string): EntityView<PackView> {
-  return useEntity(K.packView(projectId, pack), () => getPackViewRead(projectId, pack));
 }
 
 interface PackMapProps {
@@ -70,14 +63,25 @@ interface PackMapProps {
 const HEADING = 'text-console-12 font-medium uppercase tracking-console-label text-text-tertiary';
 
 export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapProps): ReactElement {
-  const viewRead = usePackView(projectId, pack);
-  const source = mapSource(viewRead);
   const graph = usePackGraph(projectId, pack);
-  const words = graph.data === undefined ? null : graphWords(graph.data);
-  const retired = words?.retired ?? [];
   const [full, choose] = useFullWorkflow();
+  // Until the graph answers the map's loading shape shows: never one map first and the other
+  // after it.
+  if (graph.data === undefined)
+    return (
+      <MapSection>
+        {graph.error === undefined ? (
+          <GraphSkeleton label="Loading the map" />
+        ) : (
+          <ReadFailure retry={graph.refetch}>
+            The map could not read the pack's graph: {graph.error.message}
+          </ReadFailure>
+        )}
+      </MapSection>
+    );
+  const words = graphWords(graph.data);
   const boardPath = `/console/p/${encodeURIComponent(projectId)}/board`;
-  // The derived map's columns are the same groups the curated map draws, so a card's heading
+  // The derived map's columns are the same groups the grouped map draws, so a card's heading
   // is its group's on both.
   const groups = groupsOf(graph.data);
   const derived = (
@@ -85,33 +89,21 @@ export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapPro
       flow={flowCounts(
         columnsOf(graph.data, groups, words),
         board?.moving ?? [],
-        graph.data?.stages,
+        graph.data.stages,
         asks,
-        retired
+        words.retired
       )}
       graph={graph.data}
       view={words}
-      counts={stageCounts(board?.moving ?? [], graph.data?.stages, asks, retired)}
+      counts={stageCounts(board?.moving ?? [], graph.data.stages, asks, words.retired)}
       live={{ board: boardPath, numbers: board?.numbers, failed: itemsError !== undefined }}
     />
   );
-  if (source.kind === 'loading')
-    return (
-      <MapSection>
-        <GraphSkeleton label="Loading the map" />
-      </MapSection>
-    );
-  // Without a curated file the Overview draws the derived map as it always has, under its own
-  // heading, with the reason a broken file is not drawn above it.
-  if (source.kind === 'derived')
+  // A pack whose document declares no groups has nothing to group a map by: the derived map,
+  // under its own heading.
+  if (groups.length === 0)
     return (
       <div data-pack-map className="flex flex-col gap-2.5">
-        {source.note === null ? null : (
-          <p data-map-note className="text-console-12 text-warning">
-            {source.note}
-          </p>
-        )}
-        <ViewProblems problems={source.problems} drawn={false} />
         <DocumentProblems graph={graph.data} />
         {derived}
       </div>
@@ -129,16 +121,15 @@ export function PackMap({ projectId, pack, board, itemsError, asks }: PackMapPro
         />
       }
     >
-      <ViewProblems problems={source.problems} drawn />
       <DocumentProblems graph={graph.data} />
       {full ? (
         derived
       ) : (
-        <Curated
+        <Grouped
           projectId={projectId}
           pack={pack}
-          file={source.view}
           graph={graph}
+          data={graph.data}
           board={board}
           itemsError={itemsError}
           boardPath={boardPath}
@@ -167,12 +158,12 @@ function MapSection({
   );
 }
 
-/** The curated map, once the graph its columns and arrows come from is read. */
-function Curated({
+/** The grouped map, from the graph its columns, cards and arrows come from. */
+function Grouped({
   projectId,
   pack,
-  file,
   graph,
+  data,
   board,
   itemsError,
   boardPath,
@@ -180,39 +171,28 @@ function Curated({
 }: {
   projectId: string;
   pack: string;
-  file: ViewFile;
   graph: EntityView<PackGraph>;
+  /** The graph as read: `graph.data`, once it answered. */
+  data: PackGraph;
   board: PackBoardGroups | undefined;
   itemsError: Error | undefined;
   boardPath: string;
   asks: AskRead;
 }): ReactElement {
-  const view = useMemo(
-    () => (graph.data === undefined ? undefined : curatedView(file, graph.data)),
-    [file, graph.data]
-  );
+  const view = useMemo(() => curatedView(data), [data]);
   const structure = useMapStructure(graph, view);
   const live: MapLive | Unread = useMemo(() => {
-    if (view === undefined || board === undefined)
-      return itemsError === undefined ? 'loading' : 'failed';
+    if (board === undefined) return itemsError === undefined ? 'loading' : 'failed';
     // The Merged card is the Board's Merged column: the items it lists, so the same count.
     return stageLive(
       view,
       board.moving,
       board.merged.recent,
-      graph.data?.stages,
+      data.stages,
       asks,
-      graph.data === undefined ? [] : graphWords(graph.data).retired
+      graphWords(data).retired
     );
-  }, [view, board, itemsError, graph.data, asks]);
-  if (view === undefined)
-    return graph.error === undefined ? (
-      <GraphSkeleton label="Loading the map" />
-    ) : (
-      <ReadFailure retry={graph.refetch}>
-        The map could not read the pack's graph: {graph.error.message}
-      </ReadFailure>
-    );
+  }, [view, board, itemsError, data, asks]);
   // The board cards' reads, under the board's keys: an item's title, the step its run works now
   // and whether it has open asks come from the same place the Board's card takes them
   // (`useCardList` in StageItems).

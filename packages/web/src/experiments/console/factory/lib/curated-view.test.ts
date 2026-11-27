@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { testArrows, testFile, testGraph, testView } from '../curated.test-fixtures';
+import { testArrows, testGraph, testView } from '../curated.test-fixtures';
 import { curatedView } from './curated-view';
 import { mapColumns } from './map-columns';
 import { documentProblems } from './view-groups';
@@ -54,7 +54,7 @@ describe('the slim file over a pack graph', () => {
 
   test("a group's colour is its document kind, so dropping a group moves no other's", () => {
     const groups = testGraph.groups.filter(group => group.name !== 'Plan and build');
-    const tones = mapColumns(curatedView(testFile, { ...testGraph, groups })).map(column => [
+    const tones = mapColumns(curatedView({ ...testGraph, groups })).map(column => [
       column.label,
       column.tone,
     ]);
@@ -66,7 +66,7 @@ describe('the slim file over a pack graph', () => {
     const groups = testGraph.groups.map(({ kind: _kind, ...group }, index) =>
       index === 0 ? { ...group, kind: 'intake-ish' } : group
     );
-    const columns = mapColumns(curatedView(testFile, { ...testGraph, groups }));
+    const columns = mapColumns(curatedView({ ...testGraph, groups }));
     expect(columns.filter(column => column.tone !== 'merged').map(column => column.tone)).toEqual([
       'other',
       'other',
@@ -84,7 +84,7 @@ describe('the slim file over a pack graph', () => {
       ...group,
       stages: group.stages.filter(stage => stage !== 'stage-host'),
     }));
-    const columns = mapColumns(curatedView(testFile, { ...testGraph, groups }));
+    const columns = mapColumns(curatedView({ ...testGraph, groups }));
     expect(columns.map(column => [column.label, column.tone])).toEqual([
       ['Intake', 'intake'],
       ['Plan and build', 'build'],
@@ -96,7 +96,7 @@ describe('the slim file over a pack graph', () => {
   });
 
   test('with no groups, every stage is a column of its own, never a group it is not in', () => {
-    const columns = mapColumns(curatedView(testFile, { ...testGraph, groups: [] }));
+    const columns = mapColumns(curatedView({ ...testGraph, groups: [] }));
     expect(columns.map(column => column.stages)).toEqual([
       ...FLOW.filter(id => id !== 'landed').map(id => [id]),
       ['landed'],
@@ -108,7 +108,7 @@ describe('the slim file over a pack graph', () => {
 
   test('a document that names no exit stage leaves the last in-flow stage there', () => {
     const { exit: _named, ...document } = testGraph.document!;
-    const view = curatedView(testFile, { ...testGraph, document });
+    const view = curatedView({ ...testGraph, document });
     expect([view.landed.stage, view.columns.at(-1)?.stages]).toEqual([
       'order-done',
       ['order-done'],
@@ -119,7 +119,7 @@ describe('the slim file over a pack graph', () => {
     const stages = testGraph.stages.map(({ display, ...stage }) =>
       stage.workflow === 'stage-host' ? stage : { ...stage, display }
     );
-    const view = curatedView(testFile, { ...testGraph, stages });
+    const view = curatedView({ ...testGraph, stages });
     expect(view.stages.find(entry => entry.id === 'stage-host')?.label).toBe('Stage host');
   });
 });

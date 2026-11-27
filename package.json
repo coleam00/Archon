@@ -53,7 +53,6 @@
     "check:cli-import-boundary": "bun run scripts/check-cli-import-boundary.ts",
     "check:package-edges": "bun run scripts/check-package-edges.ts",
     "check:ratchet": "bun run scripts/check-ratchet.ts",
-    "check:factory-view": "bun run scripts/check-factory-view.ts",
     "check:changed": "bun run scripts/check-changed.ts",
     "check:mock-modules": "bun run scripts/check-mock-modules.ts",
     "generate:chat-contract-schema": "bun run --cwd=packages/chat-contract generate:schema",

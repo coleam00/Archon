@@ -1,7 +1,7 @@
 /**
- * The curated map's model: the pack graph and its words (`graphWords`), with the summary of the
- * pack's view file, in the shape the map, its stage modal and their libs draw. Pure. Every card,
- * row, column and word comes from the graph; the file gives only the summary.
+ * The grouped map's model: the pack graph and its words (`graphWords`), in the shape the map, its
+ * stage modal and their libs draw. Pure. Every card, row, column and word comes from the graph.
+ * The map draws it for a pack whose document declares groups (`PackMap`).
  *
  * - A map **stage** is one in-flow stage of the graph, in the graph's order (its flow order),
  *   with its words from its `display` (its label by `stageLabel`). Its id is the
@@ -17,7 +17,6 @@
  * - A stage's **drill-down** is its `display.phases`, each card covering steps of that stage.
  */
 import type { PackGraph } from '../../skills/items';
-import type { ViewFile } from '../api';
 import { graphWords, type FactoryWords } from './graph-view';
 import { stageLabel } from './stage-words';
 import type { ArrowLabels } from './graph-structure';
@@ -57,7 +56,6 @@ export interface CuratedColumn {
 export type FactoryDrilldown = NonNullable<CuratedStage['drilldown']>;
 
 export interface CuratedView {
-  summary: string;
   /** One per in-flow graph stage, in flow order. */
   stages: CuratedStage[];
   columns: CuratedColumn[];
@@ -162,14 +160,13 @@ export function arrowLabels(view: Pick<FactoryWords, 'outcomes' | 'answers'> | n
   };
 }
 
-export function curatedView(file: ViewFile, graph: PackGraph): CuratedView {
+export function curatedView(graph: PackGraph): CuratedView {
   const view = graphWords(graph);
   const stages = graph.stages.filter(stage => stage.inFlow).map(stage => stageOf(view, stage));
   const merged = stages.find(stage => stage.id === view.merged)?.id ?? stages.at(-1)?.id;
   const steps: Record<string, Record<string, string>> = {};
   for (const [workflow, stage] of Object.entries(view.stages)) steps[workflow] = stage.steps;
   return {
-    summary: file.summary,
     stages,
     columns: columnsFor(groupsOf(graph), stages, merged),
     landed: { stage: merged ?? '' },

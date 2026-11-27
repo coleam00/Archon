@@ -15,6 +15,22 @@ repository's `main` (tag `console-v1-full` is the full v1 reference; screenshots
 page are in `C:/Users/colem/OpenSource/fc-runtime/baseline-v1/`; v1 is served at
 http://127.0.0.1:3195/console). Rules:
 
+- **No view file; How it works is the pack's document (owner, 2026-11-27, #295, after Rasmus's
+  review of Archon PR #6438; wins over every rule below that names the view file).** No pack
+  ships `.shared/factory-view.json`, and the console reads none: there is no view route, no
+  view-file schema, read or check in the engine, and no hand-drawn How it works picture.
+  - **The grouped map, its stage modal and the Full workflow tab come from the graph.** A pack
+    whose document declares groups gets the grouped map (`factory/PackMap.tsx`: one card per
+    group, its words and the modal's phases from each workflow's `display:`), with Full workflow
+    as a tab. A pack with no groups gets the derived Full workflow alone.
+  - **How it works is the pack's own document**: the markdown body below the front matter of the
+    file the manifest's `document` names, else `how-it-works.md` (Archon issue #6198), then the
+    pack's whole workflow derived from its graph. A pack with no document has no How it works
+    section.
+  - **The Overview's summary is the document's first paragraph**, linking to How it works.
+  - **No blank Overview.** A project where no work has started says so (Visual standard, rule
+    6); a pack with nothing on its board still shows its tiles and map, with a line saying
+    nothing is on a stage.
 - **Keep Rasmus's pages and engine reads working.** Board, Needs you, Setup, Settings and the
   Overview tab stay; build on them, do not replace them with a second copy. His
   `itemStanding` is the one placement on the server; extend and correct it, do not add a
@@ -23,10 +39,10 @@ http://127.0.0.1:3195/console). Rules:
   - **Groups** come from the pack's document front matter (`groups:` in the file the manifest's `document` key names). The engine reads the `document` key (Archon issue #6198) and `archon validate` refuses a group naming a stage the pack lacks and an in-flow stage that is in no group. The console reads groups from the graph only; the view file carries no groups.
   - **Words** live in the workflow YAML in an optional, generic `display:` block (spike-a, PR #229): a workflow's `label`, `short`, `blurb` (and its group's words come from the document); a node's `label` (served under its expanded id for included nodes); a `returns` outcome's `label` and `story`; ask options keep their own `label`/`does`. The graph serves them; the console reads them; a missing word falls back to a humanised id and `archon validate` warns.
   - **Meaning** the console needs (which outcome sends an item back or approves, where rounds and the PR live in a run's result, retired workflows) is declared generically in the YAML too (on `returns`/`display`), not in a side file.
-  - **The view file shrinks to the How it works explainer** (prose and its hand-laid picture, which Rasmus accepts as an explainer), or goes entirely if the explainer moves.
-- **The Overview map is drawn from the pack graph; the view file carries words and meaning only (owner, 11/26, after the JSON spike #226-#233).** The map's cards, their stages and their edges come from the graph (`GET /api/packs/{pack}/graph`): one card per group, stages in flow order, forward edges from `arrows`, a send-back lane for every arrow that goes backward in flow order (*on `combined` since #289: each send-back is its own route, drawn only while its card is hovered, focused or pinned; "The map"*). The pack-shipped view file (`<pack>/.shared/factory-view.json`, read through `packages/workflows/src/pack-declarations.ts`) has no `map` and no hand positions. It carries words (stage, step and outcome words, answers, summary), meaning (`retired`, `rounds`, `returns`, `approves`, `change`) and the How it works explainer, and no groups (#276): the groups, their names, blurbs, order and stages come from the pack's document through the graph (the rule above). Each group may declare a `kind` in the document's front matter, an opaque slug the engine serves as written; the console draws intake, build, check and merge, and a group card's colour and kind label come from it, never from the card's position. A group without one, `neutral`, or a kind the console does not draw reads neutral (owner ruling on #237); the last is listed as a problem on the Overview. The board's columns are the same groups as the map's. The engine drops a stale stage from its group, and the console lists the document's problems above the map and on How it works. *Superseded on `combined` by the rule above (#277): the words and the meaning are in each workflow's `display:` block and the document's front matter (`words`, `exit`), served by the graph; the view file holds only the summary and the How it works explainer.*
-- **A stale entry drops only itself, and says so (owner, 11/26).** A view-file entry naming a stage, step, outcome or group the graph lacks is dropped on its own; the rest of the file still draws. Meaning entries (`rounds`, `returns`, `approves`, `change`) that name a workflow the graph lacks are KEPT, treated as retired (old runs carry the old name, and board cards read their rounds from them). Every dropped entry, and every in-flow stage, step or outcome the file gives no words, is (a) shown as a visible warning on the project Overview and the factory's How it works page, and (b) an ERROR from `check:factory-view` so CI fails. The console never refuses the whole file for one entry; a file that does not parse at all falls back to the graph-drawn map with plain names and a visible warning. *Superseded on `combined` (#277): the view file holds only the explainer, so only a key it does not have and a stage or edge its picture names that the graph lacks drop alone (shown, and an error for `check:factory-view`). A stage, step, outcome or settled option with no words is a warning from `archon validate`, and the console shows its id in words. A renamed stage's old runs keep their rounds through a `display.replaces` entry naming the old workflow.*
-- **Speed is a requirement (owner, 11/26).** The board's columns, cards, titles and round progress, the Overview and the Needs you tab must be complete within 3 s on a warm server and 10 s on a freshly started server, measured in the browser at 1440x900 on a live-DB copy. No page waits on another page's read; the pack graph is read once per pack copy and cached; the view file is not re-read through a second graph read.
+  - **The view file shrinks to the How it works explainer** (prose and its hand-laid picture, which Rasmus accepts as an explainer), or goes entirely if the explainer moves. *Superseded on `combined` (#295): the explainer moved into the pack's document, and the view file is gone.*
+- **The Overview map is drawn from the pack graph; the view file carries words and meaning only (owner, 11/26, after the JSON spike #226-#233).** The map's cards, their stages and their edges come from the graph (`GET /api/packs/{pack}/graph`): one card per group, stages in flow order, forward edges from `arrows`, a send-back lane for every arrow that goes backward in flow order (*on `combined` since #289: each send-back is its own route, drawn only while its card is hovered, focused or pinned; "The map"*). The pack-shipped view file (`<pack>/.shared/factory-view.json`, read through `packages/workflows/src/pack-declarations.ts`) has no `map` and no hand positions. It carries words (stage, step and outcome words, answers, summary), meaning (`retired`, `rounds`, `returns`, `approves`, `change`) and the How it works explainer, and no groups (#276): the groups, their names, blurbs, order and stages come from the pack's document through the graph (the rule above). Each group may declare a `kind` in the document's front matter, an opaque slug the engine serves as written; the console draws intake, build, check and merge, and a group card's colour and kind label come from it, never from the card's position. A group without one, `neutral`, or a kind the console does not draw reads neutral (owner ruling on #237); the last is listed as a problem on the Overview. The board's columns are the same groups as the map's. The engine drops a stale stage from its group, and the console lists the document's problems above the map and on How it works. *Superseded on `combined` by the rule above (#277): the words and the meaning are in each workflow's `display:` block and the document's front matter (`words`, `exit`), served by the graph; the view file holds only the summary and the How it works explainer.* *Superseded on `combined` (#295): there is no view file; the summary is the document's first paragraph.*
+- **A stale entry drops only itself, and says so (owner, 11/26).** A view-file entry naming a stage, step, outcome or group the graph lacks is dropped on its own; the rest of the file still draws. Meaning entries (`rounds`, `returns`, `approves`, `change`) that name a workflow the graph lacks are KEPT, treated as retired (old runs carry the old name, and board cards read their rounds from them). Every dropped entry, and every in-flow stage, step or outcome the file gives no words, is (a) shown as a visible warning on the project Overview and the factory's How it works page, and (b) an ERROR from `check:factory-view` so CI fails. The console never refuses the whole file for one entry; a file that does not parse at all falls back to the graph-drawn map with plain names and a visible warning. *Superseded on `combined` (#277): the view file holds only the explainer, so only a key it does not have and a stage or edge its picture names that the graph lacks drop alone (shown, and an error for `check:factory-view`). A stage, step, outcome or settled option with no words is a warning from `archon validate`, and the console shows its id in words. A renamed stage's old runs keep their rounds through a `display.replaces` entry naming the old workflow.* *Superseded on `combined` (#295): there is no view file and no `check:factory-view`; the document's own problems (`document.problems`) are what the Overview and How it works list.*
+- **Speed is a requirement (owner, 11/26).** The board's columns, cards, titles and round progress, the Overview and the Needs you tab must be complete within 3 s on a warm server and 10 s on a freshly started server, measured in the browser at 1440x900 on a live-DB copy. No page waits on another page's read; the pack graph is read once per pack copy and cached. *(#295: the view file, and the clause about re-reading it, are gone.)*
 - **Board (owner, 11/26):** all pipeline columns are the same width. There is no "Not on a stage" column: every item stands at a stage (deliver-era and retired-workflow items map to their stage through the `display.replaces` of the stage that replaced their workflow), and an item that truly has no stage goes to Set aside. The pack's Setup and Settings links are not on the board. A card's actions are buttons at the bottom of the card, beside the PR link (which is a button too): "Needs you · N" is a clearly clickable button there; the top-right chip is a status LABEL only (Running, Merged, Stopped), styled so it does not look clickable.
 - **Needs you tab (owner, 11/26):** the console's accent (Archon's pink/purple) is used for the suggested answer and the active filter, never success-green and never all-white. Rows show a pointer cursor and hover state. Opening a row shows the ask section as that row's CHILD (indented or attached under it, with an expand/collapse chevron on the row), so it is obvious which row it belongs to. A filter (`?item=`) is a prominent filter bar at the top of the tab (the item's number and title, a clear "Show all" control), not a tiny chip.
 - **No item page.** A board card opens the item's run log (Rasmus's behaviour). The CARD carries
@@ -81,14 +97,17 @@ otherwise, this section wins.
 **What stays.** The curated factory view, as beautiful as it is now (the Visual identity and the
 Visual standard below still bind everything a person sees):
 
-- **How it works**, in the sidebar Factory entry.
+- **How it works**, in the sidebar Factory entry. *On `combined` (#295) it is the pack's
+  own document and its derived workflow, not a hand-drawn picture.*
 - The project's **Factory** tab: the **Overview** with its map and the stage modal, and the
   **Board** (with its strips under the board, its work orders section and its Table view).
 - The **item page**, as the item's ONE history: story, rounds and asks in one account.
 - The **view JSON** (the factory view and overview files), hand-written and curated per pack,
   as **presentation only**: labels, blurbs, grouping, order, layout, captions, edge labels and
   story wording. It moves into the owner's own copy of the pack later; until then it lives in
-  this repository.
+  this repository. *Superseded on `combined` (#277, #295): words and phases are in each
+  workflow's `display:`, groups and count words in the pack document's front matter, and How
+  it works is the document itself. There is no view JSON.*
 
 **What goes.**
 
@@ -858,6 +877,7 @@ validate` (#276). Uncovered drill-down steps and unlabelled arrows are not repor
 pin file exists: the check reads an installed pack at its install path, or any pack folder with
 `--repo <owner/name>`, at the folder's own git HEAD or an unknown commit, which it says.*
 *Superseded again on `combined` (#277): the file is the How it works explainer only (`version`, `summary`, `howItWorks`). Words, drill-downs, story wording, answers, `retired`, `rounds`, `returns`, `approves`, `change` and `merged` moved into the pack's YAML (each workflow's `display:` block and the document's `words` and `exit`), served by the graph. The check's kinds are `unreadable`, `unknown` (a key the file does not have, an older file's `stages` among them) and `dropped` (a stage or edge the picture names that the graph lacks); words a stage lacks are `archon validate` warnings.*
+*Superseded on `combined` (#295): the view file, its schema and `check:factory-view` are gone. How it works is the pack's document.*
 
 ## Data
 
@@ -953,6 +973,8 @@ panel). Port the logic and ideas, not the styling: Mission Control used its own 
 ## Overview page
 
 1. Title (Page title role) and the declaration's summary, clamped to two lines with More.
+   *On `combined` (#295): the summary is the pack document's first paragraph, with a How it
+   works link.*
 2. **Numbers strip:** items in flight (in a board column, not merged; the items set aside are
    not, see The board, Set aside), need you (the open asks and waits on the project's items and Archon's attention read's asks for
    the project, each once, and the items waiting on you with no ask open), merged today, merged in total ("N of

@@ -21,7 +21,7 @@
 import type { Box, Point } from './map-layout';
 import { oneLineOf, pillSize } from './map-pill';
 import { LANE, PILL_LINE, TRACK } from './map-sizes';
-import { PILL_H } from './overview-layout';
+import { PILL_H } from './map-sizes';
 
 /** Where a card's legs meet its bottom edge, as fractions of its width. */
 const TARGET_FROM = 0.1;

@@ -50,3 +50,10 @@ export const PILL_LINE = 16;
 export const LANE = 24;
 /** From one send-back track of a card to the next one down. */
 export const TRACK = 10;
+/** A pill's height, and the type every pill's text is set in. */
+export const PILL_H = 20;
+export const PILL_TEXT = 'text-console-12';
+/** A pill's width for `text`: `PILL_TEXT`'s 12 px text and 6 px padding. */
+export function pillWidth(text: string): number {
+  return Math.ceil(text.length * 7 + 14);
+}

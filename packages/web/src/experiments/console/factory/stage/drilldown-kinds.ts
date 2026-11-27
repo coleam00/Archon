@@ -30,7 +30,7 @@ import type { ToneColor } from '../tones';
  * pack writes in its `display.phases` and the engine serves as written, so the console's own
  * vocabulary is this map: a kind it does not draw reads as `kindOf`'s neutral one. The colours
  * are the console's node and status tokens, none purple or pink (owner change 1 of
- * 2026-11-19); an agent takes the teal How it works gives a stage.
+ * 2026-11-19); an agent takes teal.
  */
 export const KINDS: Readonly<Record<string, { color: ToneColor; label: string }>> = {
   agent: { color: 'var(--node-wait)', label: 'Agent' },

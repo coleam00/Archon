@@ -49,7 +49,7 @@ if (live && !existsSync(db)) {
       "UPDATE remote_agent_isolation_environments SET status = 'destroyed' WHERE status = 'active'"
     );
     // Projects read their `.archon/` from their checkout. Pointing them at this one makes the
-    // console show this branch's files (a factory view a change adds, for example), not main's.
+    // console show this branch's files (a pack overlay a change adds, for example), not main's.
     copy.run('UPDATE remote_agent_codebases SET default_cwd = ?', [root]);
     copy.close();
     console.log(`Seeded ${db} from a read-only copy of the live factory database.`);

@@ -4,11 +4,10 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
-import { readPackView } from '@archon/core/workflows/pack-view';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
-import { registerPackGraphRoute, registerPackViewRoute, shareWhileRunning } from './api.packs';
-import { packGraphResponseSchema, packViewResponseSchema } from './schemas/workflow.schemas';
+import { registerPackGraphRoute } from './api.packs';
+import { packGraphResponseSchema } from './schemas/workflow.schemas';
 
 const track = trackTempRoots();
 
@@ -48,10 +47,6 @@ async function graphApp(
   registerPackGraphRoute(app, {
     codebaseCwd,
     readPackGraph: (cwd, pack) => readPackGraph(cwd, pack, deps),
-  });
-  registerPackViewRoute(app, {
-    codebaseCwd,
-    readPackView: (cwd, pack) => readPackView(cwd, pack, deps),
   });
   return app;
 }
@@ -107,57 +102,5 @@ describe('GET /api/packs/{pack}/graph', () => {
     const app = await graphApp();
     expect((await app.request('/api/packs/chain/graph?codebaseId=missing')).status).toBe(404);
     expect((await app.request('/api/packs/nope/graph?codebaseId=cb-1')).status).toBe(404);
-  });
-});
-
-describe('GET /api/packs/{pack}/view', () => {
-  test('a pack that ships no view is 200 with a null view, a null path and no problems', async () => {
-    const response = await (await graphApp()).request('/api/packs/chain/view?codebaseId=cb-1');
-    expect(response.status).toBe(200);
-    expect(packViewResponseSchema.parse(await response.json())).toEqual({
-      path: null,
-      view: null,
-      problems: [],
-    });
-  });
-
-  test('an unknown pack is 404 and a relative workflowSource is 400, as for the graph', async () => {
-    const app = await graphApp();
-    expect((await app.request('/api/packs/nope/view?codebaseId=cb-1')).status).toBe(404);
-    const relative = await app.request('/api/packs/chain/view?codebaseId=cb-1&workflowSource=src');
-    expect(relative.status).toBe(400);
-  });
-});
-
-describe('shareWhileRunning', () => {
-  test('calls for the same arguments while one runs share it; a later call reads again', async () => {
-    let reads = 0;
-    let finish: (value: string) => void = () => undefined;
-    const read = shareWhileRunning((pack: string) =>
-      new Promise<string>(resolve => {
-        reads += 1;
-        finish = resolve;
-      }).then(value => `${pack}:${value}`)
-    );
-    const first = read('flow');
-    const second = read('flow');
-    expect(reads).toBe(1);
-    finish('graph');
-    expect(await Promise.all([first, second])).toEqual(['flow:graph', 'flow:graph']);
-    void read('flow');
-    expect(reads).toBe(2);
-  });
-
-  test('different arguments read apart, and a failure is not kept', async () => {
-    let reads = 0;
-    const read = shareWhileRunning(async (pack: string) => {
-      reads += 1;
-      if (pack === 'broken') throw new Error('no such pack');
-      return pack;
-    });
-    expect(await Promise.all([read('a'), read('b')])).toEqual(['a', 'b']);
-    await expect(read('broken')).rejects.toThrow('no such pack');
-    await expect(read('broken')).rejects.toThrow('no such pack');
-    expect(reads).toBe(4);
   });
 });

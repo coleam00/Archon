@@ -61,8 +61,8 @@ export function outcomeLabel(
 
 /**
  * What an outcome of `workflow` says: its label (`outcomeLabel`), else its value in words
- * (`send-back` reads "Send back"), as `stageWords` words a stage; `check:factory-view` reports
- * an in-flow outcome the file does not word. `workflow` null (a run no pack places) has no label.
+ * (`send-back` reads "Send back"), as `stageWords` words a stage; `archon validate` warns of
+ * an in-flow outcome the pack does not word. `workflow` null (a run no pack places) has no label.
  */
 export function outcomeWords(
   labels: OutcomeLabels,

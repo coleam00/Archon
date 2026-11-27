@@ -40,8 +40,8 @@ export function standingRun(read: ItemRead): ItemRead['runs'][number] | undefine
 
 /**
  * A workflow the pack no longer has whose runs still count, and the stage (by workflow name)
- * an item standing on one of its runs is placed at; null places it nowhere. The factory view's
- * `retired`, as `retiredOf` (`factory/lib/item-card.ts`) reads it.
+ * an item standing on one of its runs is placed at; null places it nowhere. The graph words'
+ * `retired`, from each stage's `display.replaces` (`factory/lib/graph-view.ts`).
  */
 export interface Retired {
   workflow: string;

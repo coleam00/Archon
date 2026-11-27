@@ -236,7 +236,7 @@ for (const r of results) {
 }
 if (results.some(r => r.page === 'board' && r.final !== null && r.final.rounds === 0))
   console.log(
-    "\nRounds 'not seen': no card drew round progress, so its time was not measured. Cards read rounds from the pack's factory view; for a pack that ships none, copy docs/factory-console/pack-view/factory-view.json into the installed pack first (ENGINEERING.md)."
+    "\nRounds 'not seen': no card drew round progress, so its time was not measured. Cards read rounds from the pack graph's display: words; for an installed pack without them, install a pack tree that has them first (ENGINEERING.md)."
   );
 console.log('\nWhat each page drew when complete (the same data must draw the same counts):\n');
 console.log('| page | run | columns | cards | titled | with rounds | tiles | map cards | rows |');

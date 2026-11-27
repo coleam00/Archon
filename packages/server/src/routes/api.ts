@@ -21,7 +21,6 @@ import {
 import { createDiscoveryCache } from '@archon/core/workflows/discovery-cache';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { packViewOf } from '@archon/core/workflows/pack-view';
 import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
 import { providerRegistry } from '@archon/providers';
 import type { WebAdapter } from '../adapters/web';
@@ -46,7 +45,7 @@ import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
 import { registerObservingRoute } from './api.observing';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
-import { registerPackGraphRoute, registerPackViewRoute, shareWhileRunning } from './api.packs';
+import { registerPackGraphRoute } from './api.packs';
 import { registerProviderKeyRoutes } from './api.provider-keys';
 import { registerProviderRoutes } from './api.providers';
 import { registerAttentionStreamRoute, registerRunAttentionRoutes } from './api.run-attention';
@@ -199,18 +198,15 @@ export function registerApiRoutes(
     // Discovery is kept while the files it reads are unchanged (discovery-cache.ts).
     discover: packDiscovery,
   };
-  const packSource = (workflowSource?: string) =>
-    workflowSource === undefined ? {} : { workflowSource };
-  // One graph read for a page that asks for the graph and the view together (api.packs.ts);
-  // its discovery is the cached one above, so each read after the first is cheap.
-  const packGraphRead = shareWhileRunning((cwd: string, pack: string, workflowSource?: string) =>
-    readPackGraph(cwd, pack, packGraphDeps, packSource(workflowSource))
-  );
-  registerPackGraphRoute(app, { codebaseCwd: packCodebaseCwd, readPackGraph: packGraphRead });
-  registerPackViewRoute(app, {
+  registerPackGraphRoute(app, {
     codebaseCwd: packCodebaseCwd,
-    readPackView: async (cwd, pack, workflowSource) =>
-      packViewOf(await packGraphRead(cwd, pack, workflowSource), cwd, packSource(workflowSource)),
+    readPackGraph: (cwd: string, pack: string, workflowSource?: string) =>
+      readPackGraph(
+        cwd,
+        pack,
+        packGraphDeps,
+        workflowSource === undefined ? {} : { workflowSource }
+      ),
   });
   registerWorkflowDefinitionRoutes(app);
   registerArtifactRoutes(app);

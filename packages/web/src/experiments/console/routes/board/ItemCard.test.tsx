@@ -265,7 +265,7 @@ test('a failed card keeps its label top right and its PR as a button at its bott
   }
 });
 
-test("a failed card's reason names its stage by the view file's label, not its workflow id (#261)", async () => {
+test("a failed card's reason names its stage by its display label, not its workflow id (#261)", async () => {
   const base = READS[0]!;
   const failed: ItemRead = {
     ...base,
@@ -335,7 +335,7 @@ const cardOf =
   (key: string): Element | null =>
     container.querySelector(`[data-item="${key}"]`);
 
-test("a card words its run's outcome by the view file's label in its meta, Done chip and reason (#270)", async () => {
+test("a card words its run's outcome by its display label in its meta, Done chip and reason (#270)", async () => {
   const reads = [
     ended('issue-10', 'done', 'ask'),
     ended('issue-11', 'stopped', 'ask'),
