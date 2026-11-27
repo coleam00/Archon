@@ -42,6 +42,7 @@ import {
   dryRunIterationStubsSchema,
   type DryRunIterationStubs,
   dryRunWorkflow,
+  DryRunProbeTreeSurvivedError,
   formatDryRunTraceLine,
   summarizeTraceEntry,
   type DryRunResult,
@@ -461,10 +462,14 @@ async function withExecWorkspace<T>(
       `Exec-code fixture could not create an isolated execution workspace from HEAD: ${(error as Error).message}`
     );
   }
+  let treeSurvived = false;
   try {
     return await fn(workspace);
+  } catch (error) {
+    treeSurvived = error instanceof DryRunProbeTreeSurvivedError;
+    throw error;
   } finally {
-    await disposeExecWorkspace(cwd, workspace);
+    if (!treeSurvived) await disposeExecWorkspace(cwd, workspace);
   }
 }
 
@@ -723,9 +728,6 @@ async function checkFixture(
       fixtureReachedFailure(result, parsed.declaration) ??
       fixtureResolvedTextFailure(result, parsed.declaration) ??
       fixtureWaitLabelsFailure(result, parsed.declaration);
-    // A `trigger_rule: all_done` join tolerates its own missing stub (#2869) — it never
-    // blocked this simulated outcome, so it must not block the fixture either. Only the
-    // untolerated remainder still means "this fixture never verified a reached node."
     const blockingMissingStubs = result.missingStubs.filter(
       nodeId => !result.toleratedMissingStubs.includes(nodeId)
     );

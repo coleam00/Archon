@@ -5,7 +5,7 @@ import {
 } from '@archon/paths/credential-redaction';
 import { bashInvocation } from '../bash-invocation';
 import { loopPrevRefToken, type LoopBodyScope } from '../dag/loop-scope';
-import { inputEnvVars, nodeOutputRefToken } from '../dag/references';
+import { inputEnvVars, nodeOutputRefToken, type RequiredOutputRefContext } from '../dag/references';
 import { readComposedMeta } from '../compiled-command';
 import {
   parseWholeOutputRef,
@@ -71,9 +71,15 @@ export async function evaluateLoopCompletion(
       { ...bindingShellContext(ctx, outputs), loopBodyScopes },
       ctx.inputs
     );
-    assertProbeOutputs(node, control.until_bash, outputs, loopBodyScopes, previous, ctx);
-    const previousText = previous?.output ?? '';
-    const listings = await writeDryRunInvocationListings(ctx);
+    const { listings, previousText, requiredContext } = await prepareProbeData(
+      node,
+      hydrated,
+      outputs,
+      ctx,
+      previous,
+      loopBodyScopes,
+      control.until_bash
+    );
     const { env, credentialValues: preparedCredentials } = await prepareCodeExecution(
       ctx,
       inputEnv,
@@ -83,28 +89,52 @@ export async function evaluateLoopCompletion(
     credentialValues = preparedCredentials;
     const code = resolveText(control.until_bash, ctx, outputs, 'shell', previousText, ctx.inputs, {
       listings,
-      requiredContext: {
-        consumerId: node.id,
-        field: node.kind === 'loop' ? 'loop.until_bash' : 'loop_group.until_bash',
-      },
+      requiredContext,
       loopBodyScopes,
     });
     const command = resolveBashPath();
     const invocation = bashInvocation(code);
-    return await executeProbe(
-      command,
-      invocation,
-      ctx.execWorkspace,
-      env,
-      timeout,
-      label,
-      credentialValues
-    );
+    return await executeProbe(command, invocation, ctx, env, timeout, label, credentialValues);
   } catch (error) {
     throw new Error(
       `${label} failed: ${redactCredentialValues(error instanceof Error ? error.message : String(error), credentialValues)}`
     );
   }
+}
+
+async function prepareProbeData(
+  node: LoopNode | LoopGroupNode,
+  hydrated: NodeOutput,
+  outputs: Map<string, NodeOutput>,
+  ctx: DryRunContext,
+  previous: NodeOutput | undefined,
+  loopBodyScopes: readonly LoopBodyScope[],
+  code: string
+) {
+  const requiredContext: RequiredOutputRefContext = {
+    consumerId: node.id,
+    field: node.kind === 'loop' ? 'loop.until_bash' : 'loop_group.until_bash',
+  };
+  const observationsAvailable = [hydrated, ...outputs.values()].every(
+    output => !ctx.generatedOutputs.has(output)
+  );
+  assertProbeOutputs(
+    node,
+    code,
+    outputs,
+    loopBodyScopes,
+    previous,
+    ctx,
+    requiredContext,
+    observationsAvailable
+  );
+  // Shell and child-process environment reads are independent of template spelling.
+  const previousText =
+    previous !== undefined && !ctx.generatedOutputs.has(previous) ? previous.output : '';
+  const listings = observationsAvailable
+    ? await writeDryRunInvocationListings(ctx)
+    : { typedArtifactsFile: '', nodeOutcomesFile: '' };
+  return { listings, previousText, requiredContext };
 }
 
 function assertProbeOutputs(
@@ -113,7 +143,9 @@ function assertProbeOutputs(
   outputs: Map<string, NodeOutput>,
   scopes: readonly LoopBodyScope[],
   previous: NodeOutput | undefined,
-  ctx: DryRunContext
+  ctx: DryRunContext,
+  requiredContext: RequiredOutputRefContext,
+  observationsAvailable: boolean
 ): void {
   const requireAuthored = (output: NodeOutput | undefined): void => {
     if (output !== undefined && ctx.generatedOutputs.has(output))
@@ -135,7 +167,10 @@ function assertProbeOutputs(
   const priorReferences = scopes.map(scope =>
     guarded(loopPrevRefToken(scope, false), scope.loopPrevOutputs)
   );
-  const references = [...priorReferences, guarded(nodeOutputRefToken(outputs, false), outputs)];
+  const references = [
+    ...priorReferences,
+    guarded(nodeOutputRefToken(outputs, false, undefined, requiredContext), outputs),
+  ];
   for (const value of Object.values(readComposedMeta(node)?.inputs ?? {})) {
     const reference = probeInputReference(value, outputs);
     if (reference !== undefined)
@@ -153,7 +188,8 @@ function assertProbeOutputs(
     templateToken(
       String.raw`\$(?:(?:TYPED_ARTIFACTS_FILE|NODE_OUTCOMES_FILE)\b|\{(?:TYPED_ARTIFACTS_FILE|NODE_OUTCOMES_FILE)\})`,
       () => {
-        for (const output of outputs.values()) requireAuthored(output);
+        if (!observationsAvailable)
+          throw new Error('Completion probe observations require authored or executed outputs');
         return '';
       }
     ),
@@ -178,7 +214,7 @@ function probeInputReference(
 async function executeProbe(
   command: string,
   invocation: ReturnType<typeof bashInvocation>,
-  cwd: string,
+  ctx: DryRunContext,
   env: NodeJS.ProcessEnv,
   timeout: number,
   label: string,
@@ -187,14 +223,14 @@ async function executeProbe(
   try {
     await execOwnedProcessGroup(command, invocation.args, {
       input: invocation.input,
-      cwd,
+      cwd: ctx.execWorkspace,
       env,
       timeout,
-      node: { recorder: undefined, endTreeOnTimeout: true },
     });
     return { kind: 'bash' };
   } catch (error) {
     const failure = redactSubprocessError(error as RawSubprocessRejection, credentialValues);
+    if (failure.treeSurvived) ctx.survivingProbeTree = true;
     if (isSubprocessTimeout(failure))
       throw new Error(`${label} timed out after ${String(timeout)}ms`);
     const spawnMessage = formatHostSpawnFailure(

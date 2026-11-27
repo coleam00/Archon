@@ -12,6 +12,7 @@ import { bashInvocation } from './bash-invocation';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   buildSubprocessDockerArgs,
+  execOwnedProcessGroup,
   containerCommandName,
   isSubprocessTimeout,
   recordNodeProcessTrees,
@@ -21,6 +22,33 @@ import {
 
 const trackTempRoot = trackTempRoots();
 const posixOnly = process.platform === 'win32' ? test.skip : test;
+
+posixOnly('an owned probe group reports a surviving tree even after root success', async () => {
+  const child = Object.defineProperties(new childProcess.ChildProcess(), {
+    pid: { value: 424242 },
+    stdin: { value: null },
+    stdout: { value: null },
+    stderr: { value: null },
+  });
+  const spawn = spyOn(childProcess, 'spawn').mockReturnValue(child);
+  const kill = spyOn(process, 'kill').mockImplementation(() => {
+    throw Object.assign(new Error('cannot confirm process group stopped'), { code: 'EIO' });
+  });
+  try {
+    const pending = execOwnedProcessGroup('mock-probe', [], { cwd: import.meta.dir, env: {} }).then(
+      () => undefined,
+      (error: unknown) => error as RawSubprocessRejection
+    );
+    child.emit('exit', 0, null);
+    child.emit('close', 0, null);
+    const failure = await pending;
+    expect(failure?.treeSurvived).toBe(true);
+    expect(failure && isSubprocessTimeout(failure)).toBe(false);
+  } finally {
+    kill.mockRestore();
+    spawn.mockRestore();
+  }
+});
 
 test.each([
   { exit: 'running', terminationFails: false },

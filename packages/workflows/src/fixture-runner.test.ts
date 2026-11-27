@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { readBundleIndex } from './defaults/bundle-inventory';
 import { dryRunIterationStubsSchema } from './dry-run/stubs';
@@ -39,6 +39,7 @@ mock.module('@archon/paths', () => ({
 
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import * as gitModule from '@archon/git';
+import * as subprocess from './subprocess';
 import { parseWorkflow } from './loader';
 import { discoverWorkflows } from './workflow-discovery';
 import { expandWorkflowIncludes } from './include-expander';
@@ -374,6 +375,109 @@ describe('runFixtures', () => {
       expect(existsSync(join(cwd, 'docs', 'probe-only'))).toBe(false);
     }
   );
+  it('a fixture cannot pass on generated text read from the native probe environment', async () => {
+    const { cwd } = writeTempProject({
+      workflowName: 'native-verdict',
+      body: 'fixture:\n  expect: completed\nexec-code: true\n',
+      workflowYaml: Bun.YAML.stringify({
+        name: 'native-verdict',
+        description: 'Generated data cannot stand in for a review',
+        nodes: [
+          {
+            id: 'review',
+            trigger_rule: 'all_done',
+            loop: {
+              prompt: 'review',
+              max_iterations: 2,
+              until_bash: 'test -n "${LOOP_PREV_OUTPUT:-}"',
+            },
+          },
+        ],
+      }),
+    });
+    await execFileAsync('git', ['init', '-q'], { cwd });
+    await execFileAsync(
+      'git',
+      [
+        '-c',
+        'user.name=fixture',
+        '-c',
+        'user.email=fixture@test',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'init',
+      ],
+      { cwd }
+    );
+    const report = await runFixtures({ cwd, workflows: workflowsOnDisk(cwd, ['native-verdict']) });
+    expect(report.failed).toBe(1);
+    expect(report.passed).toBe(0);
+    expect(report.results[0]?.outcome).toBe('failed');
+  });
+
+  it('a surviving probe tree retains invocation scratch, run storage and its fixture checkout', async () => {
+    const { cwd } = writeTempProject({
+      workflowName: 'surviving-probe',
+      body: 'fixture:\n  expect: completed\nexec-code: true\nreview: authored\nlater: authored\n',
+      workflowYaml: Bun.YAML.stringify({
+        name: 'surviving-probe',
+        description: 'Preserve writable storage when termination cannot be proved',
+        nodes: [
+          { id: 'review', loop: { prompt: 'review', max_iterations: 1, until_bash: 'exit 0' } },
+        ],
+      }),
+    });
+    await execFileAsync('git', ['init', '-q'], { cwd });
+    await execFileAsync(
+      'git',
+      [
+        '-c',
+        'user.name=fixture',
+        '-c',
+        'user.email=fixture@test',
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        'init',
+      ],
+      { cwd }
+    );
+    let workspace: string | undefined;
+    let artifacts: string | undefined;
+    let scratch: string | undefined;
+    const execute = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
+      async (_command, _args, options) => {
+        workspace = options.cwd;
+        artifacts = options.env?.ARTIFACTS_DIR;
+        scratch = options.env?.NODE_SCRATCH_DIR;
+        throw Object.assign(new Error('process group still alive'), {
+          code: 0,
+          treeSurvived: true,
+        });
+      }
+    );
+    try {
+      const report = await runFixtures({
+        cwd,
+        workflows: workflowsOnDisk(cwd, ['surviving-probe']),
+      });
+      expect(report.failed).toBe(1);
+      expect(report.passed).toBe(0);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(workspace && existsSync(workspace)).toBe(true);
+      expect(artifacts && existsSync(artifacts)).toBe(true);
+      expect(scratch && existsSync(scratch)).toBe(true);
+    } finally {
+      execute.mockRestore();
+      if (workspace)
+        await execFileAsync('git', ['worktree', 'remove', '--force', workspace], { cwd });
+      if (artifacts) await removeTempTree(dirname(artifacts));
+    }
+  });
+
   const passingBody = ['fixture:', '  expect: completed', 'node-a: "stub output"', ''].join('\n');
 
   it('contains environment lookup failures in executable fixtures and continues stub fixtures', async () => {

@@ -214,6 +214,16 @@ function createDryRunContext(
   };
 }
 
+export class DryRunProbeTreeSurvivedError extends Error {
+  constructor(tempRoot: string, workspace: string, cause: Error) {
+    super(
+      `Dry-run probe tree could not be stopped; retained scratch at '${tempRoot}' and execution checkout '${workspace}': ${cause.message}`,
+      { cause }
+    );
+    this.name = 'DryRunProbeTreeSurvivedError';
+  }
+}
+
 export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResult> {
   const iterationStubs = dryRunIterationStubsSchema.parse(options.iterationStubs ?? {});
   assertDisjointStubs(options.stubs ?? {}, iterationStubs);
@@ -233,15 +243,7 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
   try {
     await simulateNodes(options.workflow.plan, outputs, ctx);
   } finally {
-    // Simulations are throwaway: whatever exec'd nodes wrote is discarded with the
-    // per-run root (`force: true` makes the nothing-executed case a no-op). A cleanup
-    // failure must not fail a finished simulation, so it is logged, not thrown.
-    await rm(tempRoot, { recursive: true, force: true }).catch((error: unknown) => {
-      getLog().warn(
-        { tempRoot, error: error instanceof Error ? error.message : String(error) },
-        'dry_run.temp_cleanup_failed'
-      );
-    });
+    await releaseSimulationScratch(ctx, tempRoot);
   }
 
   const summary = options.workflow.plan.sinks
@@ -273,6 +275,27 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
       .filter(id => !ctx.consumedStubs.has(id))
       .sort(),
     ...(summary ? { summary } : {}),
+  });
+}
+
+async function releaseSimulationScratch(ctx: DryRunContext, tempRoot: string): Promise<void> {
+  if (ctx.survivingProbeTree)
+    throw new DryRunProbeTreeSurvivedError(
+      tempRoot,
+      ctx.execWorkspace,
+      new Error(
+        ctx.trace
+          .filter(entry => entry.state === 'failed')
+          .map(entry => entry.reason)
+          .join('\n')
+      )
+    );
+  // Cleanup I/O must not replace a finished simulation's verdict.
+  await rm(tempRoot, { recursive: true, force: true }).catch((error: unknown) => {
+    getLog().warn(
+      { tempRoot, error: error instanceof Error ? error.message : String(error) },
+      'dry_run.temp_cleanup_failed'
+    );
   });
 }
 

@@ -316,7 +316,9 @@ loop:
 ended, so a loop declaring more than one never pays for a redundant check.
 
 The check uses the node's `timeout`: a positive, finite number of milliseconds,
-with no limit when omitted. This applies to `loop:` and `loop_group:`, including the
+with no limit when omitted in live runs. Executed dry-run and fixture probes default
+to 300000 ms (five minutes); set `timeout` explicitly for a longer check. This applies
+to `loop:` and `loop_group:`, including the
 completion recheck after a group continues past a terminal pause. It limits each check,
 not the AI iteration or the group's body nodes. To bound a check, declare the budget on
 the node:
@@ -557,7 +559,7 @@ Place the [two-entry fixture](/reference/cli/#workflow-test) beside this workflo
 
 False or omitted `exec-code` never runs probes and retains the first-iteration assumption. Enabled probes short-circuit when an output field or legacy signal already completes the loop. A short sequence repeats its last value; a never-true condition fails at `max_iterations`, or completes with the last output when `on_exhausted: complete` is declared. Body/probe failures never become exhaustion success. Static stubs still repeat verbatim, and an ordinary array remains one output.
 
-Fixture probes and unstubbed executable bodies run in a scratch checkout, including reads and writes through `$DOCS_DIR`; they are trusted host code, not sandboxed code. Enabled probes require authored or executed verdicts and refuse generated placeholders, including tolerated missing stubs. A deadline remains fatal even when a shell cleanup handler exits successfully. The [CLI reference](/reference/cli/#workflow-test) covers local indexing, nesting, schema validation, strict probe references and observation files.
+Fixture probes and unstubbed executable bodies run in a scratch checkout, including reads and writes through `$DOCS_DIR`. Dry runs currently use `docs/` under that checkout regardless of configured `docs.path` (see the [variable reference](/reference/variables/#workflow-variables)); they are trusted host code, not sandboxed code. Enabled probes require authored or executed verdicts and refuse generated placeholders, including tolerated missing stubs. A deadline remains fatal even when a shell cleanup handler exits successfully. The [CLI reference](/reference/cli/#workflow-test) covers local indexing, nesting, schema validation, strict probe references and observation files.
 
 Combine LLM work with a deterministic completion check:
 

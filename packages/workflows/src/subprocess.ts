@@ -58,7 +58,7 @@ export type RawSubprocessRejection = Omit<ExecFileException, 'signal'> & {
   /** The owned group deadline expired, independent of the eventual exit code. */
   timedOut?: boolean;
   /**
-   * A node's deadline expired but its process tree could not be ended. That is a failure,
+   * An owned process tree could not be confirmed stopped. That is a failure,
    * never a timeout `on_timeout: skip` could pass over while the tree may still run.
    */
   treeSurvived?: true;
@@ -435,6 +435,9 @@ function execHostSubprocess(
 // Only the owner holds the write end; EOF covers even SIGKILL, without signal handlers.
 const SETUP_LIFELINE =
   '{ while IFS= read -r; do :; done; kill -KILL 0; } <&0 >/dev/null 2>&1 &\n"$@" </dev/null';
+// A payload uses a separate pipe; exec preserves the authored shell's exit/signal identity.
+const INPUT_LIFELINE =
+  '{ while IFS= read -r; do :; done; kill -KILL 0; } <&3 >/dev/null 2>&1 &\nexec "$@"';
 const TERMINATION_CONFIRM_MS = 1000;
 
 async function confirmGroupGone(pid: number): Promise<void> {
@@ -483,7 +486,9 @@ type OwnedProcessGroupOptions = {
   cwd: string;
   timeout?: number;
   env: NodeJS.ProcessEnv;
-} & ({ node?: NodeProcessOptions; input?: never } | { node: NodeProcessOptions; input?: string });
+  input?: string;
+  node?: NodeProcessOptions;
+};
 
 /** One spawned group, and the evidence its handlers record until it settles. */
 interface OwnedGroup {
@@ -510,7 +515,6 @@ interface OwnedGroup {
 
 const OUTPUT_MAX_BUFFER = 1024 * 1024;
 
-/** Exported for tests, which mock it where a Windows bash or script node runs through it. */
 export async function execOwnedProcessGroup(
   cmd: string,
   args: string[],
@@ -541,13 +545,22 @@ function spawnOwnedGroup(
   const { node } = options;
   const posix = process.platform !== 'win32';
   const lifeline = posix && !node;
-  const child = spawn(cmd, lifeline ? ['-c', SETUP_LIFELINE, 'archon-setup', cmd, ...args] : args, {
-    cwd: options.cwd,
-    env: options.env,
-    windowsHide: true,
-    detached: posix,
-    stdio: [lifeline || node ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-  });
+  const inputLifeline = lifeline && options.input !== undefined;
+  const child = spawn(
+    cmd,
+    lifeline
+      ? ['-c', inputLifeline ? INPUT_LIFELINE : SETUP_LIFELINE, 'archon-setup', cmd, ...args]
+      : args,
+    {
+      cwd: options.cwd,
+      env: options.env,
+      windowsHide: true,
+      detached: posix,
+      stdio: inputLifeline
+        ? ['pipe', 'pipe', 'pipe', 'pipe']
+        : [lifeline || node || options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+    }
+  );
   return {
     cmd,
     args,
@@ -654,6 +667,7 @@ function watchChild(group: OwnedGroup, input: string | undefined): void {
     group.exited = true;
     // The watcher ends leftovers from inside its group, without a stale-PID signal.
     child.stdin?.destroy();
+    if (group.lifeline) child.stdio[3]?.destroy();
   });
   if (input !== undefined) {
     child.stdin?.on('error', error => {
@@ -675,6 +689,7 @@ function waitForClose(
 async function releaseGroup(group: OwnedGroup): Promise<void> {
   const { child, recorder } = group;
   child.stdin?.destroy();
+  if (group.lifeline) child.stdio[3]?.destroy();
   await group.termination;
   if (recorder?.mode === 'detached-posix') {
     await recorder.waitForRelease();
@@ -736,7 +751,7 @@ function ownedGroupRejection(
       ...(!failure ? { code: exit.code } : {}),
       signal: exit.signal,
       timedOut,
-      ...(group.node && group.terminationError ? { treeSurvived: true as const } : {}),
+      ...(group.terminationError ? { treeSurvived: true as const } : {}),
       ...(cancelled ? { cancelled: true as const } : {}),
       cmd: `${cmd} ${args.join(' ')}`,
       spawnargs: args,

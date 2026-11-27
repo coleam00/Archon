@@ -159,13 +159,14 @@ async function simulateNode(
         )
       );
     } finally {
-      await releaseNodeScratch({
-        artifactsDir: ctx.artifactsDir,
-        invocationId,
-        repoPath: ctx.execWorkspace,
-        execContext: { kind: 'host' },
-        logContext: { workflowRunId: 'dry-run', nodeId: node.id, invocationId },
-      });
+      if (!ctx.survivingProbeTree)
+        await releaseNodeScratch({
+          artifactsDir: ctx.artifactsDir,
+          invocationId,
+          repoPath: ctx.execWorkspace,
+          execContext: { kind: 'host' },
+          logContext: { workflowRunId: 'dry-run', nodeId: node.id, invocationId },
+        });
     }
   } catch (error) {
     recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
@@ -183,7 +184,7 @@ export async function simulateNodes(
       ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
       : [layer];
     for (const phase of phases) {
-      if (ctx.halted) return;
+      if (ctx.halted || ctx.survivingProbeTree) return;
       await simulatePhase(phase, outputs, ctx, iteration);
     }
   }
@@ -203,6 +204,7 @@ async function simulatePhase(
         try {
           await simulateLayerNode(node, outputs, nodeCtx, iteration);
           if (nodeCtx.halted) ctx.halted = nodeCtx.halted;
+          if (nodeCtx.survivingProbeTree) ctx.survivingProbeTree = true;
         } finally {
           peers[index].finished();
         }
@@ -210,7 +212,7 @@ async function simulatePhase(
     );
   } else {
     for (const node of phase) {
-      if (ctx.halted) return;
+      if (ctx.halted || ctx.survivingProbeTree) return;
       await simulateLayerNode(node, outputs, ctx, iteration);
     }
   }
@@ -231,7 +233,8 @@ async function simulateLayerNode(
     recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
     result = outputs.get(node.id);
   }
-  if (ctx.execCode && result !== undefined) recordNodeOutcome(node, result, ctx);
+  if (ctx.execCode && result !== undefined && !ctx.generatedOutputs.has(result))
+    recordNodeOutcome(node, result, ctx);
   if (result?.state === 'failed') ctx.interactionAdmission?.failed(node.id);
   if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
     const observed = { ...result, execution };
@@ -269,7 +272,6 @@ function recordNodeOutcome(node: DagNode, result: NodeOutput, ctx: DryRunContext
     ...(result.state === 'failed' ? { error: result.error } : {}),
     ...(result.state === 'skipped' ? { cause: result.cause } : {}),
     ...(result.state === 'completed' &&
-    !ctx.generatedOutputs.has(result) &&
     node.output_format !== undefined &&
     'structuredOutput' in result
       ? { output: result.structuredOutput }

@@ -539,7 +539,7 @@ worktree:
 2. If omitted: Uses the project's stored explicit branch, if present; otherwise resolves the default from the remote's live HEAD advertisement. Renames are followed even when local remote HEAD is stale. A reachable remote with a known symbolic HEAD is required; no branch name is guessed.
 3. If a workflow references `$BASE_BRANCH` while its base is unresolved, the node fails. See [`$BASE_BRANCH` fail-fast](/reference/variables/#base_branch-fail-fast) for causes and recovery.
 
-**Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
+**Docs path behavior:** In live runs, the `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`). Dry runs currently resolve `$DOCS_DIR` to `docs/` regardless of `docs.path`; executable fixtures use their scratch checkout. See the [variable reference](/reference/variables/#workflow-variables).
 
 ### Recommended workflows (`recommendedWorkflows`)
 

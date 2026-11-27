@@ -108,11 +108,13 @@ export interface DryRunContext
   nodeOutcomes: NodeOutcome[];
   /** Placeholders remain visible in previews but cannot decide executed completion. */
   generatedOutputs: WeakSet<NodeOutput>;
+  /** A probe tree could not be stopped; its writable scratch must remain available. */
+  survivingProbeTree?: true;
   /**
    * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
-   * only (#2619). Created lazily before the first `--exec-code` execution (#2617) and
-   * removed when the simulation ends; a pure-stub dry run creates nothing.
+   * only (#2619). Created for enabled code execution or authored typed-output publication,
+   * and removed when the simulation ends. Disabled execution creates nothing.
    */
   artifactsDir: string;
   stateDir: string;
