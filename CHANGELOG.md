@@ -11,7 +11,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Commands no longer print `[archon] stripped N keys from <cwd> …` on every run in a repository with a `.env`. The keys are still stripped. `archon doctor` now names them ("N keys from <repo>/.env are kept out of runs …"), and every command that loads its env logs them as `env.cwd_keys_stripped` at debug, shown with `LOG_LEVEL=debug`. (#6362)
 - A start a run's end or settled asks caused follows its trigger file while it waits. Registering the file again with another mapping rebuilds a start not yet prepared with the new inputs, and a queued one leaves its queue and is prepared again; a file that no longer binds the start refuses it on its item. A queued start whose workflow alone changed runs as prepared. Re-registering bindings no longer needs the install hold. (#6225)
-- The embedded Pi SDK is 1.6. An OpenAI-compatible endpoint whose provider id is not `openai` and whose base URL is not OpenAI's now receives a `system` message instead of `developer`, because the SDK derives that role from `isOpenAI`; a local model server whose chat template rejected the role works without a `compat.supportsDeveloperRole: false` override, and an explicit `compat` entry still wins. `Type` and `TSchema` come from the `typebox` package now, as the SDK stopped re-exporting them, and `undici` matches the version the SDK pins so the CLI, the server and the SDK resolve one `pi-ai` instance rather than two, which splits their module-level registries.
 
 ## [0.15.0] - 2026-11-25
 
