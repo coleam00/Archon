@@ -124,7 +124,7 @@ function buildDashboardWhereClauses(
 type JoinedWorkflowRunRow = WorkflowRunRow &
   Pick<
     DashboardWorkflowRun,
-    'codebase_name' | 'platform_type' | 'worker_platform_id' | 'parent_platform_id'
+    'codebase_name' | 'platform_type' | 'worker_platform_id' | 'parent_platform_id' | 'item_key'
   >;
 
 type DashboardRunRow = JoinedWorkflowRunRow & {
@@ -178,6 +178,7 @@ export async function listDashboardRuns(
                 c.platform_conversation_id AS worker_platform_id,
                 pc.platform_conversation_id AS parent_platform_id,
                 cb.name AS codebase_name,
+                i.key AS item_key,
                 (SELECT COUNT(*) FROM remote_agent_workflow_events e
                  WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_completed') AS agents_completed,
                 (SELECT COUNT(*) FROM remote_agent_workflow_events e
@@ -190,6 +191,7 @@ export async function listDashboardRuns(
          LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
          LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
          LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
+         LEFT JOIN remote_agent_items i ON i.id = r.item_id
          ${whereStr}
          ORDER BY r.started_at DESC
          LIMIT ${limitParam} OFFSET ${offsetParam}`,
@@ -271,11 +273,13 @@ async function listPausedRuns(
             c.platform_type,
             c.platform_conversation_id AS worker_platform_id,
             pc.platform_conversation_id AS parent_platform_id,
-            cb.name AS codebase_name
+            cb.name AS codebase_name,
+            i.key AS item_key
      FROM remote_agent_workflow_runs r
      LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
      LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
      LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
+     LEFT JOIN remote_agent_items i ON i.id = r.item_id
      WHERE r.status = 'paused'
      ORDER BY r.started_at DESC`
   );

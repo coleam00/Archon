@@ -583,6 +583,53 @@ interface RunsOptions {
   verbose?: boolean;
 }
 
+/** An item a run is on: the key it reads as, and the project that key belongs to. */
+interface RunItemRef {
+  project: string;
+  key: string;
+}
+
+/**
+ * The item each of `runs` is on, by run id. A run stores only `item_id`, so the key is
+ * one read per run that has one — the list is already bounded by `--limit`. A run on no
+ * item is absent from the map: `workflow:` sub-runs carry no `item_id` of their own, and
+ * read as runs on none here as they do in the dashboard's joined `item_key`.
+ */
+async function runItemsOf(
+  host: WorkflowHost,
+  runs: readonly WorkflowRun[]
+): Promise<Map<string, RunItemRef>> {
+  const refs = new Map<string, RunItemRef>();
+  const reads = await Promise.all(
+    runs.map(async run => {
+      if (!run.item_id) return null;
+      try {
+        const item = await host.deps.store.getItem(run.item_id);
+        return item === null
+          ? null
+          : ([run.id, { project: item.projectKey, key: item.key }] as const);
+      } catch (error) {
+        // One unreadable item must not cost the operator the whole list.
+        getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_runs_item_read_failed');
+        return null;
+      }
+    })
+  );
+  for (const read of reads) if (read !== null) refs.set(read[0], read[1]);
+  return refs;
+}
+
+/**
+ * The row's item cell: the key, padded to the widest in the listing so the columns after
+ * it line up, and empty for a run on none. Empty when no run in the listing is on an item,
+ * which leaves the row as it printed before items were shown.
+ */
+function itemCell(items: Map<string, RunItemRef>): (runId: string) => string {
+  const width = Math.max(0, ...[...items.values()].map(item => item.key.length));
+  if (width === 0) return () => '';
+  return runId => `${(items.get(runId)?.key ?? '').padEnd(width)}  `;
+}
+
 /** --json never throws — emit one parseable {ok:false} line (write-command contract). */
 async function refuseRuns(
   opts: RunsOptions,
@@ -686,10 +733,13 @@ async function listOpenWorkRuns(
     limit: opts.limit ?? 20,
   });
   const report = await listedRunThroughput(host, runs, opts);
+  const items = await runItemsOf(host, runs);
   if (opts.json) {
     await writeJsonLine({
       ...(report ? { throughput: report.throughput } : {}),
-      runs: report?.runs ?? (opts.verbose ? await withRunDetail(host, runs) : runs),
+      runs: (report?.runs ?? (opts.verbose ? await withRunDetail(host, runs) : runs)).map(run =>
+        withRunItem(run, items)
+      ),
       total: runs.length,
       scopeFallback: !opts.all && !codebase,
     });
@@ -701,10 +751,11 @@ async function listOpenWorkRuns(
     return 0;
   }
   console.log(`\nOpen work (${String(runs.length)}):\n`);
+  const item = itemCell(items);
   for (const run of runs) {
     printListedRunThroughput(run.id, report?.runs);
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
+      `  ${run.id.slice(0, 8)}  ${item(run.id)}${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
     );
   }
   printModelThroughput(report?.throughput);
@@ -742,6 +793,8 @@ async function listRecentRuns(
 
   const report = await listedRunThroughput(host, result.runs, opts);
 
+  const items = await runItemsOf(host, result.runs);
+
   if (opts.json) {
     // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
     // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
@@ -749,7 +802,7 @@ async function listRecentRuns(
       report?.runs ?? (opts.verbose ? await withRunDetail(host, result.runs) : result.runs);
     await writeJsonLine({
       ...result,
-      runs,
+      runs: runs.map(run => withRunItem(run, items)),
       scopeFallback,
       ...(report ? { throughput: report.throughput } : {}),
     });
@@ -764,17 +817,27 @@ async function listRecentRuns(
   }
 
   console.log(`\nRecent runs (${result.runs.length} of ${result.total}):\n`);
+  const item = itemCell(items);
   for (const run of result.runs) {
     printListedRunThroughput(run.id, report?.runs);
     const activeNodes =
       run.active_nodes.length > 0 ? ` · active node(s): ${run.active_nodes.join(', ')}` : '';
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${operatorPauseMark(run)}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${item(run.id)}${run.workflow_name}${activeNodes}${operatorPauseMark(run)}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
     );
   }
   printModelThroughput(report?.throughput);
   console.log('');
   return 0;
+}
+
+/** A listed run with the item it is on; `item` is absent for a run on none. */
+function withRunItem<T extends WorkflowRun>(
+  run: T,
+  items: Map<string, RunItemRef>
+): T | (T & { item: RunItemRef }) {
+  const item = items.get(run.id);
+  return item === undefined ? run : { ...run, item };
 }
 
 function operatorPauseMark(run: Pick<WorkflowRun, 'status' | 'metadata'>): string {

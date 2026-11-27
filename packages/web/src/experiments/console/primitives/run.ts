@@ -24,6 +24,13 @@ export interface Run {
   id: WorkflowRun['id'];
   projectId: WorkflowRun['codebase_id'];
   projectName: components['schemas']['DashboardWorkflowRun']['codebase_name'];
+  /**
+   * The item this run is on, as its key reads in that item's project
+   * (`owner/repo#123`). Null or absent for a run on none, including a `workflow:`
+   * sub-run, which belongs to its item through its parent, and for a run this
+   * client assembled rather than read from a dashboard payload.
+   */
+  itemKey?: components['schemas']['DashboardWorkflowRun']['item_key'];
   /** Total USD cost from the agent SDK. Populated for completed Claude runs;
    *  Pi/Codex runs may not report cost. Null when the run hasn't recorded any. */
   costUsd: number | null;
@@ -156,6 +163,7 @@ type RawWorkflowRun = Pick<
     Pick<
       DashboardWorkflowRun,
       | 'codebase_name'
+      | 'item_key'
       | 'platform_type'
       | 'active_nodes'
       | 'worker_platform_id'
@@ -283,6 +291,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     id: raw.id,
     costUsd: readCost(raw.metadata),
     workflow: raw.workflow_name,
+    itemKey: raw.item_key ?? null,
     status: normalizeStatus(raw.status),
     ownerObservation: raw.owner_observation,
     attention: raw.attention ?? null,

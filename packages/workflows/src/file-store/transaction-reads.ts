@@ -333,6 +333,8 @@ export function createTransactionReads(
         listed.push({
           ...structuredClone(run),
           codebase_name: codebase?.name ?? null,
+          // This store holds no items, so no run in it is on one.
+          item_key: null,
           platform_type: null,
           worker_platform_id: null,
           parent_platform_id: null,

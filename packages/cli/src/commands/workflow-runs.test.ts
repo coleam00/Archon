@@ -490,6 +490,120 @@ describe('workflowRunsCommand', () => {
     expect(output).toContain('active node(s): parallel-a, parallel-b');
   });
 
+  it('names the item a listed run is on, and prints nothing there for a run on none', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-proj',
+      name: 'owner/repo',
+      default_cwd: '/test/path',
+    });
+    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      runs: [
+        {
+          id: 'r1-item',
+          workflow_name: 'review',
+          status: 'running',
+          item_id: 'item-1',
+          active_nodes: [],
+          started_at: new Date(),
+        },
+        {
+          id: 'r2-none',
+          workflow_name: 'assist',
+          status: 'running',
+          item_id: null,
+          active_nodes: [],
+          started_at: new Date(),
+        },
+      ],
+      total: 2,
+      counts: { ...EMPTY_COUNTS, all: 2, running: 2 },
+    });
+    const host = createTestWorkflowHost();
+    const item = {
+      id: 'item-1',
+      projectKey: 'crusader/crusader-engine',
+      key: 'crusader/crusader-engine#138',
+    };
+    const read = spyOn(host.deps.store, 'getItem').mockImplementation(async id =>
+      id === 'item-1' ? item : null
+    );
+    try {
+      await workflowRunsCommand(host, '/test/path');
+      // One read for the one run that has an item; the run on none asks for nothing.
+      // Asserted before the restore, which clears the recorded calls.
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read).toHaveBeenCalledWith('item-1');
+    } finally {
+      read.mockRestore();
+    }
+
+    const rows = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    const onItem = rows.find(row => row.includes('review'));
+    const onNone = rows.find(row => row.includes('assist'));
+    expect(onItem).toContain('crusader/crusader-engine#138  review');
+    // The column stays, empty, so the rows after it still line up.
+    expect(onNone).toMatch(/^ {2}r2-none {2}running {2,}assist {2}\(/);
+    expect(onNone).not.toContain('#138');
+  });
+
+  it('carries the item on the run in --json, and leaves it out of a run on none', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-proj',
+      name: 'owner/repo',
+      default_cwd: '/test/path',
+    });
+    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      runs: [
+        {
+          id: 'r1-item',
+          workflow_name: 'review',
+          status: 'running',
+          item_id: 'item-1',
+          active_nodes: [],
+          started_at: new Date(),
+        },
+        {
+          id: 'r2-none',
+          workflow_name: 'assist',
+          status: 'running',
+          item_id: null,
+          active_nodes: [],
+          started_at: new Date(),
+        },
+      ],
+      total: 2,
+      counts: { ...EMPTY_COUNTS, all: 2, running: 2 },
+    });
+    const host = createTestWorkflowHost();
+    const read = spyOn(host.deps.store, 'getItem').mockImplementation(async id =>
+      id === 'item-1'
+        ? {
+            id: 'item-1',
+            projectKey: 'crusader/crusader-engine',
+            key: 'crusader/crusader-engine#138',
+          }
+        : null
+    );
+    try {
+      await workflowRunsCommand(host, '/test/path', { json: true });
+    } finally {
+      read.mockRestore();
+    }
+
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      runs: Array<{ id: string; item?: { project: string; key: string } }>;
+    };
+    expect(parsed.runs[0]?.item).toEqual({
+      project: 'crusader/crusader-engine',
+      key: 'crusader/crusader-engine#138',
+    });
+    expect(parsed.runs[1]).not.toHaveProperty('item');
+  });
+
   it('passes --all (no codebase scope) plus --status/--limit through to listDashboardRuns', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');

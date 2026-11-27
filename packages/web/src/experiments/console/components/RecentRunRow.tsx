@@ -84,6 +84,16 @@ export function RecentRunRow({
   const renderRunSummary = (): ReactElement => (
     <>
       <span className="flex min-w-0 flex-1 basis-72 items-baseline gap-2.5">
+        {/* Which item this run is for. Rendered whole: an item key is the run's subject,
+            and half of one identifies nothing. Absent for a run on no item. */}
+        {run.itemKey != null ? (
+          <span
+            className="shrink-0 font-mono text-console-11 text-text-tertiary"
+            title={`On item ${run.itemKey}`}
+          >
+            {run.itemKey}
+          </span>
+        ) : null}
         <span className="max-w-[60%] shrink-0 truncate font-mono text-console-13 font-bold text-text-primary">
           {run.workflow}
         </span>
