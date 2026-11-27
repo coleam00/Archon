@@ -187,7 +187,7 @@ files nothing; `archon-discoveries` decides and files them (see `queues.md`).
 ## Continuing finished work
 
 ```bash
-archon workflow runs --open                                 # find the prior run id
+archon workflow runs --item <key>                           # find prior runs, including on ended items
 archon workflow run docs --adopt <run-id> "Now also update the docs"  # new run on the adopted worktree/branch
 archon complete fix/issue-42                                # remove worktree + local branch; keeps the remote branch
 archon isolation cleanup                                    # prune stale environments (7d)

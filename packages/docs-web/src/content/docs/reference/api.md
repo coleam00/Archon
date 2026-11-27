@@ -353,6 +353,11 @@ affected failed runs eligible; server logs record `open_work_ancestry_unreadable
 `workflowRunId` and `ancestorRunId`. These diagnostics omit stored contents and parser errors.
 Database query failures still return HTTP 500.
 
+For `open=true`, a supplied `limit` must convert to a positive finite integer;
+otherwise the request returns HTTP 400 (`Limit must be a positive integer`).
+Omitting `limit` uses 50, and accepted limits above 200 are capped at 200.
+Ordinary listing without `open=true` retains its existing fallback and clamping.
+
 Run responses expose `status` and `outcome` as separate fields. `status` is the execution
 lifecycle. `outcome` is the workflow-authored verdict (`"succeeded"`, `"failed"`, or `null`) and
 is never derived by the API from status or output text. Contradictory combinations are valid: for
