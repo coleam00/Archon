@@ -162,11 +162,7 @@ function MapCanvas({
               }
             />
             <MapPillTips
-              pills={shortPills(
-                layout,
-                show.shown === show.pinned ? show.pinned : null,
-                id => view.stages.find(stage => stage.id === id)?.label ?? id
-              )}
+              pills={shortPills(layout, show.shown === show.pinned ? show.pinned : null)}
             />
           </div>
           <MapControls zoomIn={camera.zoomIn} zoomOut={camera.zoomOut} fit={camera.fit} />

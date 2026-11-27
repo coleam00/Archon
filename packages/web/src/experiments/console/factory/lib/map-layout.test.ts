@@ -202,17 +202,21 @@ describe('a pack map', () => {
     }
   });
 
-  test('every send-back is its own route, one per pair of stages, under its own card', () => {
+  test('the send-backs are one route per pair of cards, into an earlier card, under the row', () => {
     const pairs = [...layout.sendBacks].flatMap(([card, { routes }]) =>
       routes.map(route => `${card}:${route.from}>${route.to}`)
     );
     expect(pairs).toEqual([...new Set(pairs)]);
-    // Checks holds stage-check and stage-host, which both send back to stage-build: two routes,
-    // each with its own words, and the stages they join on the pill's second line.
-    const checks = routesOf(layout, 'checks');
-    const intoBuild = checks.filter(route => route.to === 'stage-build');
-    expect(intoBuild.map(route => route.from).sort()).toEqual(['stage-check', 'stage-host']);
-    for (const route of intoBuild) expect(route.pill?.lines).toHaveLength(2);
+    // Checks' two stages both send back into Plan and build: one route, its words merged.
+    // Inside a card (Intake's own retries, Plan and build's build back to plan) nothing is drawn.
+    expect(routesOf(layout, 'checks').map(route => route.to)).toEqual(['plan-and-build']);
+    expect(layout.sendBacks.has('intake')).toBe(false);
+    expect(layout.sendBacks.has('plan-and-build')).toBe(false);
+    for (const { routes } of layout.sendBacks.values())
+      for (const route of routes) {
+        expect(route.to).not.toBe(route.from);
+        expect(route.pill?.lines[0]).toMatch(/^Back to /);
+      }
     const bottom = Math.max(...layout.cards.map(card => card.box.y + card.box.h));
     for (const { routes } of layout.sendBacks.values())
       for (const route of routes)
@@ -267,18 +271,20 @@ describe('the rules for arrows between card groups', () => {
     expect(layout.arrows.some(arrow => arrow.from === 'b' && arrow.to === 'd')).toBe(false);
   });
 
-  test('send-backs go by card order, one route per pair of stages; one inside a card into its own stage too', () => {
-    // s4 and s5, both on card c, return to s3: two routes. Sorted by target leg, left to right.
-    const pairs = (card: string): string[][] =>
-      (layout.sendBacks.get(card)?.routes ?? []).map(route => [route.from, route.to]);
-    expect(pairs('c')).toEqual([
-      ['s5', 's1'],
-      ['s4', 's2'],
-      ['s4', 's3'],
-      ['s5', 's3'],
+  test('send-backs go by card order, one route per pair of cards; none inside a card', () => {
+    // s4 and s5, both on card c, return to s3 (card b) and to s1 and s2 (card a): two routes,
+    // their words merged, each once. Sorted by target leg, left to right. s2 into itself, inside
+    // card a, is a retry: not drawn, so card a has no send-backs.
+    const routes = layout.sendBacks.get('c')?.routes ?? [];
+    expect(routes.map(route => [route.from, route.to, route.words])).toEqual([
+      ['c', 'a', ['redo', 'rework']],
+      ['c', 'b', ['returned']],
     ]);
-    expect(pairs('a')).toEqual([['s2', 's2']]);
-    expect([...layout.sendBacks.keys()].sort()).toEqual(['a', 'c']);
+    expect(routes.map(route => route.pill?.lines)).toEqual([
+      ['Back to A:', 'redo, rework'],
+      ['Back to B:', 'C sent it back'],
+    ]);
+    expect([...layout.sendBacks.keys()]).toEqual(['c']);
   });
 });
 

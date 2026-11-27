@@ -323,8 +323,8 @@ describe("the map's send-backs and flow", () => {
     });
   };
 
-  // Checks holds stage-check and stage-host, which both send back to stage-build: two routes.
-  const CHECKS_ROUTES = ['stage-check>plan', 'stage-check>stage-build', 'stage-host>stage-build'];
+  // Checks' stages send back to plan and to build, both in Plan and build: one route, card to card.
+  const CHECKS_ROUTES = ['checks>plan-and-build'];
 
   test('by default the map draws no send-back and no send-back pill', async () => {
     const page = await mount();
@@ -332,7 +332,7 @@ describe("the map's send-backs and flow", () => {
     expect(routePills(page)).toEqual([]);
   });
 
-  test("each card's badge counts the send-back routes leaving it, one per pair of stages", async () => {
+  test("each card's badge counts the routes leaving it, one per earlier card; none for a card's own retries", async () => {
     const page = await mount();
     const badges = Object.fromEntries(
       [...page.querySelectorAll('[data-send-back-badge]')].map(badge => [
@@ -340,13 +340,17 @@ describe("the map's send-backs and flow", () => {
         badge.textContent,
       ])
     );
+    // Intake and Plan and build only send work back inside themselves: no badge.
     expect(badges).toEqual({
-      intake: '↺ 5',
-      'plan-and-build': '↺ 3',
-      checks: '↺ 3',
-      landing: '↺ 4',
+      checks: '↺ 1',
+      landing: '↺ 1',
       landed: '↺ 1',
     });
+    for (const id of ['checks', 'landing', 'landed']) {
+      await pointer(card(page, id), 'mouseover');
+      expect(routes(page)).toHaveLength(1);
+      await pointer(card(page, id), 'mouseout');
+    }
   });
 
   test('hovering a card draws exactly its routes, each with its pill; leaving it hides them', async () => {
@@ -354,11 +358,17 @@ describe("the map's send-backs and flow", () => {
     await pointer(card(page, 'checks'), 'mouseover');
     expect(routes(page)).toEqual(CHECKS_ROUTES);
     expect(routePills(page)).toEqual([
-      'plan again Checks → Plan',
-      'returned +3 Checks → Build',
-      'returned CI and review → Build',
+      'Back to Plan and build: Checks sent it back, one more round +2',
     ]);
     await pointer(card(page, 'checks'), 'mouseout');
+    await pointer(card(page, 'landing'), 'mouseover');
+    expect(routePills(page)).toEqual([
+      'Back to Plan and build: Landing sent it back, behind its branch',
+    ]);
+    await pointer(card(page, 'landing'), 'mouseout');
+    await pointer(card(page, 'landed'), 'mouseover');
+    expect(routePills(page)).toEqual(['Back to Intake: broke the branch, fix ordered']);
+    await pointer(card(page, 'landed'), 'mouseout');
     expect(routes(page)).toEqual([]);
   });
 
@@ -383,12 +393,12 @@ describe("the map's send-backs and flow", () => {
       );
     });
     expect(routes(page)).toEqual(CHECKS_ROUTES);
-    // Only the pinned card's shortened pill ("returned +3") gets a tip: no other route pill.
+    // Only the pinned card's shortened pill ("one more round +2") gets a tip: no other route pill.
     const routeTips = [...page.querySelectorAll('[data-pill-tip]')].filter(button =>
       button.getAttribute('aria-label')?.includes(' back to ')
     );
     expect(routeTips.map(button => button.getAttribute('aria-label')?.split(':')[0])).toEqual([
-      'Checks back to Build',
+      'Checks back to Plan and build',
     ]);
     const tip = routeTips[0];
     // A click on the tip keeps the pin.

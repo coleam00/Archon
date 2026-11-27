@@ -11,8 +11,10 @@
  * - An arrow between two cards takes its direction from card order: into an earlier card, it
  *   is a send-back; into a later one, a forward hand-off. Stages order does not decide it,
  *   since a column need not hold neighbouring stages.
- * - Inside one card, an arrow to a later stage of the card is not drawn: the card's rows show
- *   that order. One into its own stage or an earlier one of the card is a send-back.
+ * - Inside one card, no arrow is drawn: one to a later stage of the card, since the card's
+ *   rows show that order, nor one into its own stage or an earlier one of the card, since that
+ *   is the card's own retry, not a way back (the owner's ruling: the map says where an item
+ *   goes back to and why, card to card, not which little stage).
  * - A forward hand-off runs straight between neighbouring cards, its label on a pill above
  *   the line, at most `PILL_MAX_LINES` lines: one outcome per line up to that, and past it the
  *   first outcome and how many more ("built +2"), every outcome kept in `outcomes` for the
@@ -20,9 +22,9 @@
  *   outcomes join the label of the hand-off from its source card to the next, as
  *   "<outcome> → <target card>", and when there is no such hand-off, one is drawn for it.
  * - Forward hand-offs between one pair of cards are one line, their outcomes joined, each once.
- * - Every send-back is its own route, one per pair of stages (`mapArrows` gives one arrow per
- *   pair), laid out under the row card by card (`map-send-backs.ts`): two stages of a card that
- *   return to the same stage are two routes. The map draws a card's routes only while the card
+ * - A send-back into an earlier card is drawn as one route per pair of cards, the outcomes of
+ *   every send-back between them merged, each once, laid out under the row card by card
+ *   (`map-send-backs.ts`). The map draws a card's routes only while the card
  *   is hovered, focused or pinned (`MapSendBacks`). The bounds hug the cards and forward pills
  *   (the owner's ruling on #289): a card's routes lie under them, within the row's span, and
  *   the frame grows under the cards to hold them while they show (`useMapCamera`'s `below`).
@@ -130,20 +132,25 @@ function sortArrows(
     card.stages.forEach((stage, row) => seats.set(stage, { card: i, row }));
   });
   const forward = new Map<number, Forward>();
-  const sendBacks: SendBackArrow[] = [];
+  const sendBacks = new Map<string, SendBackArrow>();
   arrows.forEach((arrow, index) => {
     const a = seats.get(arrow.from);
     const b = seats.get(arrow.to);
     if (a === undefined || b === undefined) return;
     const id = `decl:${index.toString()}`;
     if (isSendBack(a, b)) {
-      sendBacks.push({
+      // Inside one card it is the card's own retry, not a way back: not drawn.
+      if (a.card === b.card) return;
+      const key = `${a.card.toString()}>${b.card.toString()}`;
+      const into = sendBacks.get(key) ?? {
         id,
-        card: cards[a.card]?.id ?? '',
-        from: arrow.from,
-        to: arrow.to,
-        words: wordsOf(arrow.label),
-      });
+        from: cards[a.card]?.id ?? '',
+        to: cards[b.card]?.id ?? '',
+        words: [],
+      };
+      for (const word of wordsOf(arrow.label))
+        if (!into.words.includes(word)) into.words.push(word);
+      sendBacks.set(key, into);
       return;
     }
     if (a.card === b.card) return;
@@ -154,7 +161,7 @@ function sortArrows(
   });
   return {
     forward: [...forward.values()].sort((p, q) => p.left - q.left),
-    sendBacks,
+    sendBacks: [...sendBacks.values()],
   };
 }
 
@@ -220,10 +227,9 @@ export function layoutMap(view: Declaration, drawn: readonly MapArrow[]): MapLay
     ];
   });
   const routeCards = new Map(
-    cards.map((card): [string, RouteCard] => [card.id, { box: card.box, stages: card.stages }])
+    cards.map((card): [string, RouteCard] => [card.id, { box: card.box, label: card.label }])
   );
-  const labels = new Map(view.stages.map(stage => [stage.id, stage.label]));
-  const routes = sendBackRoutes(routeCards, sendBacks, stage => labels.get(stage) ?? stage);
+  const routes = sendBackRoutes(routeCards, sendBacks);
   return {
     cards,
     arrows,

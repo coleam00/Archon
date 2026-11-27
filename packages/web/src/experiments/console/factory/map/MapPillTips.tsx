@@ -19,8 +19,7 @@ export interface ShortPill {
  */
 export function shortPills(
   layout: Pick<MapLayout, 'cards' | 'arrows' | 'sendBacks'>,
-  pinned: string | null,
-  stageLabel: (stage: string) => string
+  pinned: string | null
 ): ShortPill[] {
   const label = (id: string): string => layout.cards.find(card => card.id === id)?.label ?? id;
   const forward = layout.arrows.flatMap(arrow =>
@@ -43,8 +42,8 @@ export function shortPills(
           {
             id: route.id,
             pill: route.pill.box,
-            name: `${stageLabel(route.from)} back to ${stageLabel(route.to)}`,
-            outcomes: route.words,
+            name: `${label(route.from)} back to ${label(route.to)}`,
+            outcomes: route.reasons,
           },
         ]
   );

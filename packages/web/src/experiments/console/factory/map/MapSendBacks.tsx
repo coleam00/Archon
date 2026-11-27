@@ -20,9 +20,10 @@ const BRANCH_HALO_R = 5;
 
 /**
  * The send-backs of the card that shows them (hovered, focused or pinned, `useShownSendBacks`),
- * in rule 4: each route on its own dashed line in the send-back colour, from the stage it leaves
- * to the stage it returns to, its pill under the routes. While motion is allowed, a small dot
- * leaves the card along each route at once, on one timeline, over and over, so the ways back
+ * in rule 4: each route on its own dashed line in the send-back colour, from the card it leaves
+ * to the earlier card it returns to, its pill (where and why) under the routes. While motion
+ * is allowed, a small dot leaves the card along each route at once, on one timeline, over and
+ * over, so the ways back
  * read as branches of the flow. The caller keys it by card, so a newly shown card's dots start
  * at the card.
  */

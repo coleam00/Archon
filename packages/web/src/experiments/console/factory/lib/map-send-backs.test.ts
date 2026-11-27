@@ -2,53 +2,53 @@ import { describe, expect, test } from 'bun:test';
 import { sendBackRoutes, type RouteCard, type SendBackArrow } from './map-send-backs';
 import { boxesMeet, crosses, enters, overlaps, segments } from './map-geometry.test-fixtures';
 
-/** Four cards in a row; the second and third hold two stages each. */
+/** Four cards in a row. */
 const [CARD_W, CARD_H] = [184, 168];
 const PITCH = CARD_W + 64;
+const LABELS = ['Intake', 'Plan and build', 'Checks', 'Landing'];
 const cards = new Map<string, RouteCard>(
-  [['a'], ['b1', 'b2'], ['c1', 'c2'], ['d']].map((stages, i): [string, RouteCard] => [
+  LABELS.map((label, i): [string, RouteCard] => [
     `card${i.toString()}`,
-    { box: { x: i * PITCH, y: 0, w: CARD_W, h: CARD_H }, stages },
+    { box: { x: i * PITCH, y: 0, w: CARD_W, h: CARD_H }, label },
   ])
 );
-const cardOf = (stage: string): string =>
-  [...cards].find(([, card]) => card.stages.includes(stage))?.[0] ?? '';
 
-const sendBack = (from: string, to: string, words: string[]): SendBackArrow => ({
-  id: `${from}>${to}`,
-  card: cardOf(from),
-  from,
-  to,
+const sendBack = (from: number, to: number, words: string[]): SendBackArrow => ({
+  id: `card${from.toString()}>card${to.toString()}`,
+  from: `card${from.toString()}`,
+  to: `card${to.toString()}`,
   words,
 });
 const SEND_BACKS: SendBackArrow[] = [
-  // Two stages of one card return to the same stage: two routes.
-  sendBack('c1', 'b2', ['returned']),
-  sendBack('c2', 'b2', ['returned', 'one more round', 'behind']),
-  sendBack('c2', 'a', ['start over']),
-  // Inside one card, into its own stage.
-  sendBack('c1', 'c1', ['again']),
-  sendBack('d', 'b1', ['replan', 'asked']),
-  sendBack('d', 'd', []),
-  sendBack('b2', 'b1', ['answers']),
-  sendBack('a', 'a', ['something else']),
+  // Checks goes back to two cards: two routes.
+  sendBack(2, 1, ['returned', 'plan again', 'sent back', 'Other', 'one more round']),
+  sendBack(2, 0, ['start over']),
+  // Landing goes back to three.
+  sendBack(3, 1, ['sent back', 'behind its branch']),
+  sendBack(3, 0, []),
+  sendBack(3, 2, ['Other']),
+  // Into its own card: a retry, never drawn.
+  sendBack(1, 1, ['answered']),
 ];
-const label = (stage: string): string => stage.toUpperCase();
-const routes = sendBackRoutes(cards, SEND_BACKS, label);
+const routes = sendBackRoutes(cards, SEND_BACKS);
 const all = [...routes.values()].flatMap(card => card.routes);
 
 describe("each card's send-backs", () => {
-  test('one route per pair of stages, nothing merged, counted per card', () => {
-    expect(all.map(route => route.id).sort()).toEqual(SEND_BACKS.map(entry => entry.id).sort());
+  test('one route per pair of cards, none into its own card; a card with none has no entry', () => {
+    expect(all.map(route => route.id).sort()).toEqual(
+      SEND_BACKS.filter(entry => entry.from !== entry.to)
+        .map(entry => entry.id)
+        .sort()
+    );
     expect(
       Object.fromEntries([...routes].map(([card, { routes: mine }]) => [card, mine.length]))
-    ).toEqual({ card0: 1, card1: 1, card2: 4, card3: 2 });
+    ).toEqual({ card2: 2, card3: 3 });
   });
 
   test("each starts on its card's bottom edge and ends on its target stage's card's", () => {
     for (const route of all) {
-      const source = cards.get(route.card)?.box;
-      const target = cards.get(cardOf(route.to))?.box;
+      const source = cards.get(route.from)?.box;
+      const target = cards.get(route.to)?.box;
       const first = route.points[0];
       const last = route.points.at(-1);
       if (source === undefined || target === undefined || !first || !last)
@@ -112,16 +112,32 @@ describe("each card's send-backs", () => {
     }
   });
 
-  test('a pill names its words, and which stages it joins where a card holds several', () => {
+  test('a pill says where it goes back to and why, in plain words', () => {
     const pill = (id: string): string[] | undefined =>
       all.find(route => route.id === id)?.pill?.lines;
-    expect(pill('c1>b2')).toEqual(['returned', 'C1 → B2']);
-    expect(pill('c2>b2')).toEqual(['returned +2', 'C2 → B2']);
-    expect(pill('c2>a')).toEqual(['start over', 'C2 → A']);
-    expect(pill('d>b1')).toEqual(['replan, asked', 'D → B1']);
-    // Both ends on cards of one stage: the words say it all.
-    expect(pill('a>a')).toEqual(['something else']);
-    // Nothing to say, nothing drawn.
-    expect(all.find(route => route.id === 'd>d')?.pill).toBeUndefined();
+    // "returned" and "sent back" only say the card sent it back: said once, by its name, first;
+    // "Other" names no reason, so it goes last, into the "+N".
+    expect(pill('card2>card1')).toEqual([
+      'Back to Plan and build:',
+      'Checks sent it back, plan again +2',
+    ]);
+    expect(all.find(route => route.id === 'card2>card1')?.reasons).toEqual([
+      'Checks sent it back',
+      'plan again',
+      'one more round',
+      'Other',
+    ]);
+    expect(pill('card2>card0')).toEqual(['Back to Intake:', 'start over']);
+    expect(pill('card3>card1')).toEqual([
+      'Back to Plan and build:',
+      'Landing sent it back, behind its branch',
+    ]);
+    // No words: only where.
+    expect(pill('card3>card0')).toEqual(['Back to Intake']);
+    for (const route of all)
+      for (const line of route.pill?.lines ?? []) {
+        expect(line).not.toContain('→');
+        expect(line).not.toMatch(/card\d/);
+      }
   });
 });
