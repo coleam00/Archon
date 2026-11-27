@@ -25,7 +25,9 @@ describe("a pack graph's words and declarations", () => {
       label: 'returned',
       story: 'The checks sent it back',
     });
-    expect(words.answers['stage-check:other']).toEqual({ label: 'something else' });
+    // An ask option's words are its label in returns.options; the reserved `other` is the engine's.
+    expect(words.answers['stage-check:one-more-round']).toEqual({ label: 'one more round' });
+    expect(words.answers['stage-check:other']).toEqual({ label: 'Other' });
     // A stage's own story covers its runs whose outcome tells none.
     expect(words.outcomes['discoveries:*']).toEqual({
       story: 'The factory looked for other work it noticed',

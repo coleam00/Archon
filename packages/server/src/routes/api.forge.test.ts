@@ -11,7 +11,7 @@ import {
   type DeliveredRun,
   type ForgeRouteDeps,
 } from './api.forge';
-import { forgeAnswerFile } from './forge-answer-file';
+import { CHANGES_KEPT, forgeAnswerFile, keepBounded, type Kept } from './forge-answer-file';
 
 const track = trackTempRoots();
 
@@ -153,6 +153,30 @@ describe('GET /api/forge/subjects', () => {
     expect(asked.changes).toBe(1);
   });
 
+  test('a change URL is looked up in the project remote, and an unknown answer says why', async () => {
+    const seen: ChangeLookup[] = [];
+    const reason = `the change at ${PR} is not in this project's repository`;
+    const { read } = appWith({
+      runs: { r1: delivered(null) },
+      state: async lookup => {
+        seen.push(lookup);
+        return { url: null, merged: 'unknown', mergedAt: null, number: null, reason };
+      },
+    });
+    expect((await read(url)).body.changes).toEqual([
+      { run: 'r1', url: PR, merged: 'unknown', mergedAt: null, number: null, reason },
+    ]);
+    expect(seen).toEqual([{ kind: 'url', url: PR, audits: [], remote: REMOTE }]);
+  });
+
+  test('a change URL of a run of another project answers nothing, and the forge is not asked', async () => {
+    const { read, asked } = appWith({
+      runs: { r1: { ...delivered(null), codebaseId: 'other' } },
+    });
+    expect((await read(url)).body.changes).toEqual([]);
+    expect(asked.changes).toBe(0);
+  });
+
   test('a run that named no URL answers only for its own project', async () => {
     const { read, asked } = appWith({
       runs: { r3: { ...delivered({ change: PR, at: MERGED_AT }), codebaseId: 'other' } },
@@ -263,7 +287,10 @@ describe('GET /api/forge/subjects with an answer file', () => {
       version: 1,
       issues: { [`${REMOTE}#5`]: { value: issue5, at: NOW } },
       changes: {
-        [PR]: { value: { url: PR, merged: true, mergedAt: MERGED_AT, number: 112 }, at: NOW },
+        [`${REMOTE}|${PR}`]: {
+          value: { url: PR, merged: true, mergedAt: MERGED_AT, number: 112 },
+          at: NOW,
+        },
       },
     });
     const { read, asked } = appWith({
@@ -275,6 +302,59 @@ describe('GET /api/forge/subjects with an answer file', () => {
     expect(body.issues[0]?.title).toBe('Kept title');
     expect(body.changes[0]).toMatchObject({ merged: true, mergedAt: MERGED_AT, number: 112 });
     expect(asked).toEqual({ changes: 0, issues: 0 });
+  });
+
+  test("a change kept for another project's remote, or by its bare URL, is not served", async () => {
+    const answerFile = await fileWith({
+      version: 1,
+      changes: {
+        [`https://github.com/someone/elsewhere.git|${PR}`]: {
+          value: { url: PR, merged: true, mergedAt: MERGED_AT, number: 112 },
+          at: NOW,
+        },
+        // How a server before the change was scoped kept it.
+        [PR]: { value: { url: PR, merged: true, mergedAt: MERGED_AT, number: 112 }, at: NOW },
+      },
+    });
+    const { read, asked } = appWith({
+      runs: { r1: delivered(null) },
+      now: () => NOW,
+      answerFile,
+    });
+    expect((await read(url)).body.changes[0]).toMatchObject({ merged: false, number: 112 });
+    expect(asked.changes).toBe(1);
+  });
+
+  test('the newest answers are kept: a full cache drops its oldest for a new one', async () => {
+    const changeAt = (n: number) => PR.replace('/112', `/${String(1000 + n)}`);
+    const changes = Object.fromEntries(
+      Array.from({ length: CHANGES_KEPT + 1 }, (_, n) => [
+        `${REMOTE}|${changeAt(n)}`,
+        { value: { url: changeAt(n), merged: true, mergedAt: MERGED_AT, number: 112 }, at: n },
+      ])
+    );
+    const answerFile = await fileWith({ version: 1, changes });
+    const file = forgeAnswerFile(() => answerFile);
+    await file.load();
+    // The file held one more than is kept: the oldest answer went on load.
+    expect(file.changes.size).toBe(CHANGES_KEPT);
+    expect(file.changes.has(`${REMOTE}|${changeAt(0)}`)).toBe(false);
+    const app = new OpenAPIHono();
+    registerForgeRoutes(app, {
+      remote: async () => REMOTE,
+      deliveredRun: async () => delivered(null),
+      changeMergeState: async () => ({ url: PR, merged: false, mergedAt: null, number: 112 }),
+      viewWorkItem: async number => ({ number, unknown: 'unused' }),
+      waitMs: 20,
+      now: () => NOW,
+      answerFile: file,
+    });
+    await app.request(`/api/forge/subjects?codebaseId=p&${url}`);
+    // A new answer is kept, and the oldest the cache held makes room for it.
+    expect(file.changes.size).toBe(CHANGES_KEPT);
+    expect(file.changes.has(`${REMOTE}|${PR}`)).toBe(true);
+    expect(file.changes.has(`${REMOTE}|${changeAt(1)}`)).toBe(false);
+    expect(file.changes.has(`${REMOTE}|${changeAt(2)}`)).toBe(true);
   });
 
   test('an old answer is served while it is asked again', async () => {
@@ -475,5 +555,16 @@ describe('forgeAnswerFile', () => {
         },
       ],
     ]);
+  });
+});
+
+describe('keepBounded', () => {
+  test('drops the oldest answer past the bound, and an answer kept again counts as new', () => {
+    const kept = new Map<string, Kept<string>>();
+    keepBounded(kept, 'a', { value: 'a', at: 1 }, 2);
+    keepBounded(kept, 'b', { value: 'b', at: 2 }, 2);
+    keepBounded(kept, 'a', { value: 'a2', at: 3 }, 2);
+    keepBounded(kept, 'c', { value: 'c', at: 4 }, 2);
+    expect([...kept.keys()]).toEqual(['a', 'c']);
   });
 });

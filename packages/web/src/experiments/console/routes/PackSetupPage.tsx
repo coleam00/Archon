@@ -115,8 +115,17 @@ function ProviderCheck(): ReactElement | null {
   );
 }
 
-/** When the wake watcher last read, and what it reported failing, in the record's own facts. */
-export function watcherLine(lastPass: Observing['lastPass'], now = Date.now()): string {
+/**
+ * When the wake watcher last read, and what it reported failing, in the record's own facts.
+ * A record that exists but does not read (`lastPassUnreadable`) says so, not "never".
+ */
+export function watcherLine(
+  observing: Pick<Observing, 'lastPass' | 'lastPassUnreadable'>,
+  now = Date.now()
+): string {
+  const { lastPass, lastPassUnreadable } = observing;
+  if (lastPassUnreadable !== null)
+    return `The wake watcher's last-pass record could not be read: ${lastPassUnreadable}`;
   if (lastPass === null) return 'The wake watcher has never recorded a pass on this install.';
   const read = `The wake watcher last read ${relativeTime(lastPass.at, now)}`;
   const failed = Object.values(lastPass.parts).flatMap(part =>
@@ -134,7 +143,7 @@ export function watcherLine(lastPass: Observing['lastPass'], now = Date.now()): 
 function ObservingCheck(): ReactElement | null {
   const { data } = useEntity<Observing>(K.observing, getObserving);
   if (data === undefined) return null;
-  const failing = data.lastPass !== null && !data.lastPass.ok;
+  const failing = data.lastPassUnreadable !== null || (data.lastPass !== null && !data.lastPass.ok);
   return (
     <div data-observing className="mt-4 text-console-12 text-text-secondary">
       <h3 className="font-semibold">Event bindings read without webhooks, on this install</h3>
@@ -171,7 +180,7 @@ function ObservingCheck(): ReactElement | null {
         </ul>
       )}
       <p data-watcher className={`mt-2 ${failing ? 'text-error' : ''}`}>
-        {watcherLine(data.lastPass)}
+        {watcherLine(data)}
       </p>
       <p className="mt-1 text-console-11 text-text-tertiary">
         Whether a job runs the watcher on this host:{' '}

@@ -25,12 +25,17 @@ describe('heldStartReads', () => {
   const ambiguous = (cwd: string) =>
     new CheckoutCodebaseAmbiguousError(cwd, '/repo/.git', '/a, /b');
 
-  test('the read of every item leaves out a start whose checkout is ambiguous', async () => {
+  test('the read of every item lists a start whose checkout is ambiguous unplaced, with why', async () => {
     const held = await readsWith(ambiguous).all();
     expect(held.map(each => [each.receiptId, each.projectKey])).toEqual([
       ['1', 'project'],
+      ['2', null],
       ['3', 'project'],
     ]);
+    const unplaced = held[1];
+    expect(unplaced && 'unplaced' in unplaced ? unplaced.unplaced : undefined).toBe(
+      ambiguous('/ambiguous').message
+    );
   });
 
   test("one item's read still fails on the ambiguity, and any other failure fails both", async () => {

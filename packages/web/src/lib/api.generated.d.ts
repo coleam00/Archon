@@ -4146,7 +4146,7 @@ export interface paths {
     };
     /**
      * What the project's forge says of some issues and delivered changes
-     * @description Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change its item recorded as merged (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.
+     * @description Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change its item recorded as merged (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a change URL is looked up only in the repository the project's registered remote resolves to, and one elsewhere answers `unknown` with a `reason`, without the forge being asked about it; a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.
      */
     get: {
       parameters: {
@@ -6243,8 +6243,8 @@ export interface components {
       turnId: string;
     };
     CodebaseListResponse: (components['schemas']['Codebase'] & {
-      /** @description The keys of the workflow packs with a run on an item of this project, as GET /api/packs/{pack}/graph takes them. Empty when the project has no item on a pack stage. */
-      item_packs: string[];
+      /** @description The keys of the workflow packs with a run on an item of this project, as GET /api/packs/{pack}/graph takes them. Empty when the project has no item on a pack stage; null when the item runs could not be scanned. */
+      item_packs: string[] | null;
     })[];
     Codebase: {
       id: string;
@@ -6435,11 +6435,6 @@ export interface components {
                 };
           };
         };
-        answers?: {
-          [key: string]: {
-            label: string;
-          };
-        };
         phases?: {
           label: string;
           cards: {
@@ -6484,6 +6479,7 @@ export interface components {
           does: string;
           /** @description What this option costs: what is given up, what breaks, what has to follow. */
           cost: string;
+          label?: string;
         }[];
         waits?: string;
         ends?: string[];
@@ -9951,6 +9947,15 @@ export interface components {
                   linkId: string;
                 };
           }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'held_start_unplaced';
+            receiptId: string;
+            workflow: string | null;
+            message: string;
+          }
       )[];
     };
     ItemWindow: {
@@ -10961,6 +10966,15 @@ export interface components {
                     reason: 'link_unreadable';
                     linkId: string;
                   };
+            }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'held_start_unplaced';
+              receiptId: string;
+              workflow: string | null;
+              message: string;
             }
         )[];
       }[];
@@ -13185,6 +13199,7 @@ export interface components {
         };
         sources?: string;
       } | null;
+      lastPassUnreadable: string | null;
     };
     ForgeSubjects: {
       issues: {
@@ -13201,6 +13216,7 @@ export interface components {
         merged: boolean | 'unknown' | 'pending';
         mergedAt: string | null;
         number: number | null;
+        reason?: string;
       }[];
     };
     PackGraph: {
@@ -13250,6 +13266,14 @@ export interface components {
         observes: boolean;
         asks: boolean;
         waits: boolean;
+        options:
+          | {
+              id: string;
+              label?: string;
+              does?: string;
+              cost?: string;
+            }[]
+          | null;
         nodes: {
           id: string;
           kind: string;
@@ -13277,11 +13301,6 @@ export interface components {
                 withChange: string;
                 withoutChange: string;
               };
-          answers?: {
-            [key: string]: {
-              label: string;
-            };
-          };
           phases?: {
             label: string;
             cards: {

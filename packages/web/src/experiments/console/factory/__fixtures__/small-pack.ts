@@ -33,7 +33,15 @@ function stage(
     inFlow = true,
     entry = false,
     observes = false,
-  }: { nodes?: [string, string][]; inFlow?: boolean; entry?: boolean; observes?: boolean } = {}
+    options,
+  }: {
+    nodes?: [string, string][];
+    inFlow?: boolean;
+    entry?: boolean;
+    observes?: boolean;
+    /** The stage's declared `returns.options`, by id, with the label each declares. */
+    options?: Record<string, string>;
+  } = {}
 ): Stage {
   return {
     name: name(workflow),
@@ -59,6 +67,14 @@ function stage(
     observes,
     asks: true,
     waits: false,
+    // As the engine serves them: the declared options in order, then the reserved `other`.
+    options:
+      options === undefined
+        ? null
+        : [
+            ...Object.entries(options).map(([id, label]) => ({ id, label, does: id, cost: id })),
+            { id: 'other', label: 'Other', does: 'None of these.' },
+          ],
     nodes: nodes.map(([id, label]) => ({
       id,
       kind: 'agent',
@@ -72,13 +88,8 @@ function stage(
   };
 }
 
-/** A stage's ask options as the pack labels them. */
-const answers = (labels: Record<string, string>): Display['answers'] =>
-  Object.fromEntries(Object.entries(labels).map(([option, label]) => [option, { label }]));
-
 const DECIDE = {
   'send-back': 'sent back',
-  other: 'something else',
   drop: 'dropped by you',
   reshape: 'needs shaping',
 };
@@ -112,8 +123,8 @@ const STAGES: Stage[] = [
     {
       label: 'Triage',
       short: 'Is it worth building?',
-      answers: answers({ build: 'build', ...DECIDE }),
-    }
+    },
+    { options: { build: 'build', ...DECIDE } }
   ),
   stage(
     'link',
@@ -151,7 +162,6 @@ const STAGES: Stage[] = [
       label: 'Build',
       short: 'Writes the change and PR',
       blurb: 'Writes the change and opens a draft pull request, then fixes what comes back.',
-      answers: answers(DECIDE),
       phases: [
         { label: 'Write', cards: [card('Write or fix the change', 'build__build')] },
         { label: 'Hand off', cards: [card('Count the round', 'limit'), card('Hand off', 'end')] },
@@ -176,6 +186,7 @@ const STAGES: Stage[] = [
         ['limit', 'Counts the round'],
         ['end', 'Hands the change on'],
       ],
+      options: DECIDE,
     }
   ),
   stage(
@@ -188,7 +199,6 @@ const STAGES: Stage[] = [
     {
       label: 'Checks',
       short: 'Review, tests, product',
-      answers: answers({ ...DECIDE, 'one-more-round': 'one more round' }),
       results: { round: '/round', allowance: '/allowance', change: '/change' },
       marks: [
         { node: 'verdict__verdict', outcome: 'return', means: 'returns' },
@@ -200,6 +210,7 @@ const STAGES: Stage[] = [
         ['review__review', 'Code review'],
         ['verdict__verdict', 'Verdict'],
       ],
+      options: { ...DECIDE, 'one-more-round': 'one more round' },
     }
   ),
   stage(
@@ -211,17 +222,17 @@ const STAGES: Stage[] = [
     {
       label: 'CI and review',
       short: 'Reads CI and PR reviews',
-      answers: answers(DECIDE),
       results: { change: '/change' },
       marks: [{ node: 'rounds__host', outcome: 'return', means: 'returns' }],
     },
-    { nodes: [['rounds__host', 'Reads CI and the reviews']] }
+    { nodes: [['rounds__host', 'Reads CI and the reviews']], options: DECIDE }
   ),
-  stage('landgate', [['land', 'merge it']], {
-    label: 'Merge gate',
-    short: 'May it merge?',
-    answers: answers({ land: 'merge it', ...DECIDE }),
-  }),
+  stage(
+    'landgate',
+    [['land', 'merge it']],
+    { label: 'Merge gate', short: 'May it merge?' },
+    { options: { land: 'merge it', ...DECIDE } }
+  ),
   stage(
     'land',
     [
@@ -239,8 +250,8 @@ const STAGES: Stage[] = [
       ['clear', 'branch sound'],
       ['broken_here', 'broke the branch'],
     ],
-    { label: 'Merged', short: 'The change is merged', answers: answers({ fix: 'fix ordered' }) },
-    { observes: true }
+    { label: 'Merged', short: 'The change is merged' },
+    { observes: true, options: { fix: 'fix ordered' } }
   ),
   stage('discoveries', null, {
     label: 'Discoveries',

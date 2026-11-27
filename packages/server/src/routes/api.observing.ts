@@ -7,7 +7,7 @@
  */
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { ObservingSource } from '@archon/core/workflows/source-plugins';
-import { wakeLastPassSchema, type WakeLastPass } from '@archon/core/workflows/wake-last-pass';
+import { wakeLastPassSchema, type WakeLastPassRead } from '@archon/core/workflows/wake-last-pass';
 import { jsonError, openApiRouteRegistrar } from './api-route-kit';
 
 export const observingResponseSchema = z
@@ -27,8 +27,10 @@ export const observingResponseSchema = z
         unserved: z.array(z.object({ bindingId: z.string(), reason: z.string() })),
       })
     ),
-    /** The wake watcher's last recorded pass, null when none has recorded one. */
+    /** The wake watcher's last recorded pass; null when none is recorded or it does not read. */
     lastPass: wakeLastPassSchema.nullable(),
+    /** Why the last-pass record could not be read, when it exists but does not read; else null. */
+    lastPassUnreadable: z.string().nullable(),
   })
   .openapi('Observing');
 
@@ -50,18 +52,20 @@ export function registerObservingRoute(
   app: OpenAPIHono,
   deps: {
     observing: readonly ObservingSource[];
-    lastPass: () => Promise<WakeLastPass | undefined>;
+    lastPass: () => Promise<WakeLastPassRead>;
   }
 ): void {
-  openApiRouteRegistrar(app)(getObservingRoute, async c =>
-    c.json({
+  openApiRouteRegistrar(app)(getObservingRoute, async c => {
+    const recorded = await deps.lastPass();
+    return c.json({
       sources: deps.observing.map(source => ({
         source: source.sourceInstanceId,
         everySeconds: source.everySeconds,
         labels: [...source.labels],
         unserved: [...source.unservedBindings],
       })),
-      lastPass: (await deps.lastPass()) ?? null,
-    })
-  );
+      lastPass: recorded.kind === 'read' ? recorded.pass : null,
+      lastPassUnreadable: recorded.kind === 'unreadable' ? recorded.reason : null,
+    });
+  });
 }

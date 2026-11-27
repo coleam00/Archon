@@ -145,12 +145,15 @@ async function remove(config: NativeScheduleConfig): Promise<Outcome> {
 async function status(config: NativeScheduleConfig): Promise<Outcome> {
   const installed = await inspectNativeSchedule(config);
   if (!installed) return { result: { installed: false }, text: NOT_INSTALLED };
-  const lastPass = await readWakeLastPass(wakeLastPassPath(config));
+  const passPath = wakeLastPassPath(config);
+  const recorded = await readWakeLastPass(passPath);
+  const lastPass = recorded.kind === 'read' ? recorded.pass : undefined;
   const result = {
     installed: true,
     path: installed.path,
     registered: installed.registered,
     ...(lastPass ? { lastPass } : {}),
+    ...(recorded.kind === 'unreadable' ? { lastPassUnreadable: recorded.reason } : {}),
   };
   if (!installed.registered)
     return {
@@ -159,9 +162,12 @@ async function status(config: NativeScheduleConfig): Promise<Outcome> {
         `The wake watcher job is installed, but the scheduler has not loaded it: ${installed.path}. ` +
         'Install it again with the same --interval to load it, or remove it.',
     };
-  const last = lastPass
-    ? ` ${describeWakeLastPass(lastPass)}`
-    : ' No watcher has recorded a pass yet.';
+  const last =
+    recorded.kind === 'unreadable'
+      ? ` Its last-pass record ${passPath} could not be read: ${recorded.reason}`
+      : lastPass
+        ? ` ${describeWakeLastPass(lastPass)}`
+        : ' No watcher has recorded a pass yet.';
   return { result, text: `The wake watcher job is installed: ${installed.path}.${last}` };
 }
 

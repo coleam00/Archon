@@ -360,6 +360,17 @@ describe('GET /api/codebases', () => {
     ]);
   });
 
+  test('a pack scan that fails leaves item_packs unknown, not the whole list failed', async () => {
+    mockListCodebaseClaims.mockResolvedValueOnce([MOCK_CODEBASE]);
+    mockListItemPacks.mockRejectedValueOnce(new Error('item runs unreadable'));
+    const response = await makeApp().request('/api/codebases');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { id: string; item_packs: string[] | null }[];
+    expect(body.map(codebase => [codebase.id, codebase.item_packs])).toEqual([
+      [MOCK_CODEBASE.id, null],
+    ]);
+  });
+
   test('returns empty array when no codebases exist', async () => {
     mockListCodebaseClaims.mockImplementationOnce(async () => []);
 

@@ -14,7 +14,6 @@ import { declaredOutcome, outcomeValues, stringEnumValues } from '../completed-o
 import { itemAsksJsonSchema } from '../schemas/item-ask';
 import { itemWaitsJsonSchema } from '../schemas/item-wait';
 import { isDeepStrictEqual } from 'node:util';
-import { displayContractError } from './display-contract';
 
 /**
  * Validate the result contract (`returns: { node, outcome, asks, options, waits, ends, summary }`) against its selected node.
@@ -24,19 +23,15 @@ import { displayContractError } from './display-contract';
  * to the flattened child's declared return. The expander calls this same helper
  * on the final flat workflow, where every selected node is executable.
  */
-type ContractWorkflow = Pick<
-  WorkflowDefinition,
-  'name' | 'returns' | 'result' | 'observes' | 'display'
-> & {
+type ContractWorkflow = Pick<WorkflowDefinition, 'name' | 'returns' | 'result' | 'observes'> & {
   readonly nodes: readonly (DagNode | IncludeDirective)[];
 };
 
-/** The result contract, then what `display:` names against the workflow (`display-contract.ts`). */
+/**
+ * The result contract. What `display:` names is not part of it: words never refuse a
+ * workflow, so the loader drops a stale display field instead (`display-contract.ts`).
+ */
 export function validateWorkflowResultContract(workflow: ContractWorkflow): string | null {
-  return resultContractError(workflow) ?? displayContractError(workflow);
-}
-
-function resultContractError(workflow: ContractWorkflow): string | null {
   if (workflow.result?.options !== undefined && workflow.result.asks === undefined)
     return 'Workflow returns.options declares the options of asks; declare returns.asks too';
   const declared = declaredResultFields(workflow.result);

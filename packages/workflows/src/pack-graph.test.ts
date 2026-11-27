@@ -356,6 +356,35 @@ describe('a pack graph', () => {
     ]);
   });
 
+  test("a stage serves its asks' options, each with its label, then the reserved other", () => {
+    const asking = wf('a', [decide(['ready'])], {
+      returns: 'decide',
+      result: {
+        outcome: 'outcome',
+        asks: 'asks',
+        options: [
+          { id: 'land', label: 'merge it', does: 'Merges it', cost: 'None' },
+          { id: 'drop', does: 'Drops it', cost: 'The work' },
+        ],
+      },
+    });
+    const graph = graphOf(stages(asking, stage('b', ['done'], true)), {
+      declared: undefined,
+      installed: [],
+    });
+    expect(graph.stages.find(s => s.name === 'a')?.options).toEqual([
+      { id: 'land', label: 'merge it', does: 'Merges it', cost: 'None' },
+      { id: 'drop', does: 'Drops it', cost: 'The work' },
+      {
+        id: 'other',
+        label: 'Other',
+        does: 'None of these. The answer text says what to do instead.',
+      },
+    ]);
+    // A stage whose asks write their own options declares none.
+    expect(graph.stages.find(s => s.name === 'b')?.options).toBeNull();
+  });
+
   test('an outcome spelled like a settlement is never matched by an asks arrow', () => {
     const graph = graphOf(stages(stage('a', ['asks:answered'], true), stage('b', ['done'])), {
       declared: { 'b-after-a': runEnded('b', 'a', 'asks:answered') },

@@ -390,20 +390,57 @@ export function parseReturns(
 }
 
 /**
- * Parse optional `display:`, the workflow's words for a person. Malformed REJECTS, and an
- * unknown key at any level is refused rather than stripped: a misspelt key would otherwise
- * show no words without saying why. Its outcome keys are checked against the declared
- * outcome with the result contract (`validateWorkflowResultContract`), where the outcome's
- * values are known.
+ * Parse optional `display:`, the workflow's words for a person, field by field. Words never
+ * stop a run, so nothing here refuses the workflow: an unknown key is ignored, a malformed
+ * field is dropped, and a malformed or missing `label` drops the block, each with a warning
+ * naming it, as `pack-document.ts` drops a bad group. Each field stays strict inside, so a
+ * misspelt nested key is named rather than silently showing no words. What the kept fields
+ * name is checked against the workflow by `withoutDisplayProblems` (`display-contract.ts`).
  */
-export function parseDisplay(raw: unknown): ParsedField<WorkflowDisplay> {
-  if (raw === undefined) return { value: undefined };
-  const parsed = workflowDisplaySchema.safeParse(raw);
-  if (!parsed.success)
-    return {
-      error: `Invalid 'display': expected { label, short?, blurb?, story?, outcomes?, answers?, phases?, marks?, results?, replaces? } (${z.prettifyError(parsed.error)})`,
-    };
-  return { value: parsed.data };
+export function parseDisplay(
+  raw: unknown,
+  workflowName: string,
+  warnings: string[]
+): WorkflowDisplay | undefined {
+  if (raw === undefined) return undefined;
+  const warn = (message: string): void => {
+    warnings.push(`Workflow '${workflowName}': ${message}`);
+  };
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    warn("'display' is not an object of words, so it is ignored");
+    return undefined;
+  }
+  const shape = workflowDisplaySchema.shape;
+  const kept: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!Object.hasOwn(shape, key)) {
+      warn(
+        key === 'answers'
+          ? "display.answers is no longer read and is ignored: an ask option's words are its 'label' in returns.options"
+          : `unknown display key '${key}' is ignored`
+      );
+      continue;
+    }
+    const parsed = shape[key as keyof typeof shape].safeParse(value);
+    if (parsed.success) {
+      kept[key] = parsed.data;
+      continue;
+    }
+    const why = z.prettifyError(parsed.error);
+    if (key === 'label') {
+      warn(`display.label is invalid, so the whole display block is ignored (${why})`);
+      return undefined;
+    }
+    warn(`display.${key} is invalid and ignored (${why})`);
+  }
+  const display = workflowDisplaySchema.safeParse(kept);
+  if (!display.success) {
+    warn(
+      `display has no label, so the whole display block is ignored (${z.prettifyError(display.error)})`
+    );
+    return undefined;
+  }
+  return display.data;
 }
 
 /** `resource: build` or `resource: { name: build, capacity: 3 }`, as one shape. */

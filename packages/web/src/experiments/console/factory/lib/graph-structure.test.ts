@@ -19,6 +19,7 @@ const stage = (name: string, nodes: string[]): Stage => ({
   roles: [],
   inFlow: true,
   waits: false,
+  options: null,
   returns: nodes.at(-1) ?? null,
   outcome: null,
   observes: false,

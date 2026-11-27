@@ -16,7 +16,7 @@ test('the read serves the observing sources with their reads and the recorded la
         wakes: [],
       },
     ],
-    lastPass: async () => lastPass,
+    lastPass: async () => ({ kind: 'read', pass: lastPass }),
   });
   const body = observingResponseSchema.parse(await (await app.request('/api/observing')).json());
   expect(body.sources[0]).toMatchObject({ source: 'forge', everySeconds: 30 });
@@ -27,9 +27,23 @@ test('the read serves the observing sources with their reads and the recorded la
 
 test('with no sources and no recorded pass the read says so', async () => {
   const app = new OpenAPIHono();
-  registerObservingRoute(app, { observing: [], lastPass: async () => undefined });
+  registerObservingRoute(app, { observing: [], lastPass: async () => ({ kind: 'none' }) });
   expect(await (await app.request('/api/observing')).json()).toEqual({
     sources: [],
     lastPass: null,
+    lastPassUnreadable: null,
+  });
+});
+
+test('a last-pass record that does not read is reported as unreadable, not as no pass', async () => {
+  const app = new OpenAPIHono();
+  registerObservingRoute(app, {
+    observing: [],
+    lastPass: async () => ({ kind: 'unreadable', reason: 'ok: expected boolean' }),
+  });
+  expect(await (await app.request('/api/observing')).json()).toEqual({
+    sources: [],
+    lastPass: null,
+    lastPassUnreadable: 'ok: expected boolean',
   });
 });

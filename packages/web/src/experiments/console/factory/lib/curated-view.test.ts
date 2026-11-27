@@ -133,9 +133,7 @@ describe("the map's arrows over a pack graph", () => {
     expect(label('triage', 'link')).toBe('build, narrow');
     expect(label('link', 'plan')).toBe('placed');
     expect(label('stage-build', 'close')).toBe('dropped by you, needs shaping');
-    expect(label('stage-check', 'stage-build')).toBe(
-      'returned, sent back, one more round, something else'
-    );
+    expect(label('stage-check', 'stage-build')).toBe('returned, sent back, one more round, Other');
     expect(label('land', 'landed')).toBe('merged');
     expect(label('plan', 'plan')).toBe('answered');
     expect(label('link', 'link')).toBe('asked');

@@ -5,8 +5,7 @@
 import { z } from 'zod';
 import { runPackKey } from './run-pack';
 import { observesItemRecorded } from './schemas/item-role';
-import { readItemFinal } from './schemas/run-metadata';
-import { displayedRunOutcome, type WorkflowRun } from './schemas/workflow-run';
+import type { WorkflowRun } from './schemas/workflow-run';
 
 /**
  * `runId` is the own run that says which workflow the item is on: the latest started of its
@@ -33,8 +32,7 @@ import { displayedRunOutcome, type WorkflowRun } from './schemas/workflow-run';
  *   outside Archon.
  * - `queued`: a start is admitted or waits for admission and has not begun.
  * - `done`: its change merged, whatever its last run did, or it has parts and every one of
- *   them is done, or the run `runId` names is from before item ends and recorded its outcome
- *   final (`item_final`).
+ *   them is done.
  * - `resting`, when it has parts: its work goes on in them, so it never needs a decision of
  *   its own, whatever its last run did, and an end its outcome recorded does not finish them.
  * - `done`, when the end that holds on it (`readHoldingItemEnd`) is the engine's: a run's
@@ -43,12 +41,12 @@ import { displayedRunOutcome, type WorkflowRun } from './schemas/workflow-run';
  *   stopped item waited for, and nothing more will happen on it.
  * - `failed`: that run failed.
  * - `waiting`, when an item it depends on is not done: it waits for that item.
- * - `stopped`: that run completed with an outcome and nothing followed: the engine recorded
- *   the stop (the attention queue's `stopped` item), or the run is from before stops were
- *   recorded, or its next start was refused or never prepared; or a
- *   start no run caused was refused on it and nothing started since (`refused_start`).
- * - `resting`: nothing runs, is queued or waits, and none of the above: its last run was
- *   cancelled or declared no outcome, or it has no run.
+ * - `stopped`: the engine's own stop rule says so, and nothing else does: the attention
+ *   queue holds a `stopped` item for it (a run completed with an outcome and the engine
+ *   recorded the stop), or a start no run caused was refused on it and nothing started since
+ *   (`refused_start`).
+ * - `resting`: nothing runs, is queued or waits, and none of the above: its last run
+ *   completed with no stop recorded, was cancelled or declared no outcome, or it has no run.
  *
  * A `failed` or `stopped` item needs a decision: it stays so until a newer run starts on it,
  * its change merges or it is ended. An item reads `done` only when the engine knows it is.
@@ -71,10 +69,7 @@ export type ItemStanding = z.infer<typeof itemStandingSchema>;
 
 /** The one rule for where an item stands; see `itemStandingSchema`. `runs` are in start order. */
 export function itemStanding(facts: {
-  runs: readonly Pick<
-    WorkflowRun,
-    'id' | 'status' | 'outcome' | 'completed_outcome' | 'metadata'
-  >[];
+  runs: readonly Pick<WorkflowRun, 'id' | 'status' | 'metadata'>[];
   queued: readonly unknown[];
   held: readonly unknown[];
   waits: readonly unknown[];
@@ -105,13 +100,11 @@ export function itemStanding(facts: {
     if (status('running')) return 'running';
     if (status('paused') || asked || facts.waits.length > 0) return 'waiting';
     if (status('pending') || facts.queued.length > 0 || facts.held.length > 0) return 'queued';
-    const finished = finishedState(facts, at);
+    const finished = finishedState(facts);
     if (finished !== undefined) return finished;
     if (at?.status === 'failed') return 'failed';
     if (facts.dependsOn.some(other => !other.done)) return 'waiting';
-    // A completed run with an outcome that nothing followed, recorded as a stop or not.
-    const completed = at?.status === 'completed' && displayedRunOutcome(at) !== null;
-    return stopped || completed ? 'stopped' : 'resting';
+    return stopped ? 'stopped' : 'resting';
   })();
   const keys = runs.map(runPackKey).filter(key => key !== null);
   const pack = (at === undefined ? null : runPackKey(at)) ?? keys.at(-1) ?? null;
@@ -123,13 +116,12 @@ export function itemStanding(facts: {
  * nothing runs, waits or queues on stands, in `itemStandingSchema`'s order; else undefined.
  */
 function finishedState(
-  facts: Pick<Parameters<typeof itemStanding>[0], 'merged' | 'parts' | 'ended'>,
-  at: Pick<WorkflowRun, 'metadata'> | undefined
+  facts: Pick<Parameters<typeof itemStanding>[0], 'merged' | 'parts' | 'ended'>
 ): 'done' | 'resting' | undefined {
   const { parts } = facts;
   // An item with no parts is not done by them: `every` holds on an empty list.
   const partsDone = parts.length > 0 && parts.every(part => part.done);
-  if (facts.merged || partsDone || (at !== undefined && readItemFinal(at.metadata))) return 'done';
+  if (facts.merged || partsDone) return 'done';
   if (parts.length > 0) return 'resting';
   if (facts.ended === 'outcome') return 'done';
   if (facts.ended === 'operator') return 'resting';

@@ -24,6 +24,11 @@ import {
   type IdentifiedAttentionDegraded,
 } from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
+import {
+  heldStartUnplacedSchema,
+  itemHeldStartSchema,
+  unplacedHeldStarts,
+} from './schemas/item-held-start';
 import { operatorPause, operatorPauseSchema } from './schemas/operator-pause';
 import { itemLinkDegradedSchema, itemLinkKindSchema, type ItemLink } from './schemas/item-link';
 import { itemRulingDegradedSchema, itemRulingSchema } from './schemas/item-ruling';
@@ -194,21 +199,6 @@ export const itemSkippedStartSchema = z.object({
 export type ItemSkippedStart = z.infer<typeof itemSkippedStartSchema>;
 
 /**
- * A start on the item from a trigger's binding that is not yet prepared, so it has no
- * request or run. Under the install hold it waits for the lift; otherwise for the next
- * drain of its host (`hostId`), which prepares it and admits, queues or skips it by its
- * binding's `overlap`. `workflow` is null when the stored binding does not read.
- */
-export const itemHeldStartSchema = z.object({
-  receiptId: z.string(),
-  bindingId: z.string(),
-  hostId: z.string().nullable(),
-  workflow: z.string().nullable(),
-  receivedAt: z.string(),
-});
-export type ItemHeldStart = z.infer<typeof itemHeldStartSchema>;
-
-/**
  * Where an answer was recorded. A field the event row does not carry is null, so an older
  * row still reads as an answer with its run, node and time.
  */
@@ -323,7 +313,8 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * `degraded` names each part that could not be read: one of the item's own runs, a paused
  * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
- * merge (`merge_unreadable`), or where the item lands (`landing_unresolved`). The rest
+ * merge (`merge_unreadable`), or where the item lands (`landing_unresolved`), or a held
+ * start naming its key that could not be placed in a project (`held_start_unplaced`). The rest
  * still reads. `merged` is the merge the forge reported for the item's change, recorded
  * once; null while none is recorded or when its row could not be read. `landing` is the
  * branch a fresh run on the item is cut from and proposes against, and where it came from:
@@ -373,6 +364,7 @@ export const itemReadSchema = z.object({
       itemLandingUnresolvedSchema,
       itemEndDegradedSchema,
       workOrderMemberUnreadableSchema,
+      heldStartUnplacedSchema,
     ])
   ),
 });
@@ -711,6 +703,7 @@ export async function placeItem(
       workflow,
       receivedAt,
     }));
+  const unplacedHeld = unplacedHeldStarts(install.held, item.key);
   // An admitted start shows in both queued and runs (its run id is its request id) and is
   // listed once as a run.
   const waiting = await source.store.listQueuedItemStarts(item.id);
@@ -840,6 +833,7 @@ export async function placeItem(
           ...asks.degraded,
         ]),
         ...factsDegraded,
+        ...unplacedHeld,
       ],
     };
   };

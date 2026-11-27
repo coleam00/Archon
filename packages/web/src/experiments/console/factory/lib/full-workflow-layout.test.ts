@@ -71,6 +71,7 @@ const stage = (name: string, ends: string[] = []): Stage => ({
   roles: [],
   inFlow: true,
   waits: false,
+  options: null,
   returns: null,
   outcome: {
     field: 'verdict',

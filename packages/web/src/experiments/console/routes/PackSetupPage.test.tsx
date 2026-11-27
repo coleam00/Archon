@@ -42,20 +42,22 @@ test('a provider is configured only when the default is one of the registered pr
   expect(providerState('pi', ['claude']).ok).toBe(false);
 });
 
-test('the watcher line says never, a clean pass, a failed pass and an earlier failure apart', () => {
+test('the watcher line says never, unreadable, a clean pass, a failed pass and an earlier failure apart', () => {
   const now = Date.parse('2026-11-24T12:00:40Z');
   const at = '2026-11-24T12:00:00Z';
   const pass = { at, pid: 1, ok: true, parts: {} };
+  type LastPass = Parameters<typeof watcherLine>[0]['lastPass'];
+  const read = (lastPass: LastPass, lastPassUnreadable: string | null = null) =>
+    watcherLine({ lastPass, lastPassUnreadable }, now);
   const lines = [
-    watcherLine(null, now),
-    watcherLine(pass, now),
-    watcherLine(
-      { ...pass, ok: false, parts: { observe: { at, ok: false, errors: ['rate limited'] } } },
-      now
-    ),
-    watcherLine({ ...pass, lastFailure: { at, errors: ['unknown user'] } }, now),
+    read(null),
+    read(null, 'ok: expected boolean'),
+    read(pass),
+    read({ ...pass, ok: false, parts: { observe: { at, ok: false, errors: ['rate limited'] } } }),
+    read({ ...pass, lastFailure: { at, errors: ['unknown user'] } }),
   ];
-  expect(new Set(lines).size).toBe(4);
-  expect(lines[2]).toContain('rate limited');
-  expect(lines[3]).toContain('unknown user');
+  expect(new Set(lines).size).toBe(5);
+  expect(lines[1]).toContain('ok: expected boolean');
+  expect(lines[3]).toContain('rate limited');
+  expect(lines[4]).toContain('unknown user');
 });

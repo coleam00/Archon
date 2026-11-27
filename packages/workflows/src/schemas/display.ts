@@ -4,13 +4,15 @@
  * engine validates and serves them (the pack graph) and runs nothing differently for them: a
  * workflow without `display:` behaves exactly as one with it.
  *
- * Nothing here has a meaning to the engine. An icon, a card's kind, a mark's `means`, a result
- * name and a loop name are opaque slugs a reader maps to its own vocabulary, as a pack group's
- * `kind` is (`pack-document.ts`): the engine checks their spelling and the node ids they name,
- * and serves them as written.
+ * Nothing here has a meaning to the engine. An icon, a card's kind, a result name and a loop
+ * name are opaque slugs a reader maps to its own vocabulary, as a pack group's `kind` is
+ * (`pack-document.ts`); a mark's `means` is checked against the readers' vocabulary by
+ * `archon validate` only (`DISPLAY_MARK_MEANINGS`), so this engine still loads a newer pack's.
  *
- * Every level is strict, so a misspelt key fails the load instead of silently showing no
- * words: the reason the words live beside the names is that drift is caught where it starts.
+ * Words never stop a run. The loader reads `display:` field by field (`parseDisplay`, and
+ * `parseDagNodes` for a node's): an unknown key, a malformed field or a field naming what the
+ * workflow lacks (`loader/display-contract.ts`) is dropped with a warning, as a bad pack group
+ * is. The schemas below are strict so that each such field is caught and named, not loaded.
  */
 import { z } from 'zod';
 
@@ -50,9 +52,6 @@ export const nodeDisplaySchema = z.strictObject({
 });
 export type NodeDisplay = z.infer<typeof nodeDisplaySchema>;
 
-/** The short words an ask option reads as where a reader shows the answer that chose it. */
-export const answerDisplaySchema = z.strictObject({ label: labelSchema });
-
 /** One card of the workflow told in plain words: a box standing for some of its steps. */
 export const displayCardSchema = z.strictObject({
   title: labelSchema,
@@ -71,8 +70,15 @@ export const displayPhaseSchema = z.strictObject({
 });
 
 /**
+ * The `means` a reader gives a mark: `returns`, the run sent its item back to an earlier stage;
+ * `approves`, the run passed it on. `archon validate` errors on any other, so a misspelt one
+ * is caught rather than silently dropping a count; the loader keeps any slug.
+ */
+export const DISPLAY_MARK_MEANINGS = ['returns', 'approves'] as const;
+
+/**
  * A step's outcome value that means something to a reader: `means` is the reader's slug for
- * it (for example that the run sent its item back). The engine gives it no meaning.
+ * it (`DISPLAY_MARK_MEANINGS`). The engine runs nothing differently for it.
  */
 export const displayMarkSchema = z.strictObject({
   node: stepIdSchema,
@@ -95,7 +101,7 @@ export const displayReplacedSchema = z.strictObject({
   results: resultsSchema.optional(),
 });
 
-/** A workflow's words without its outcomes', answers' and the rest: its name and line. */
+/** A workflow's words without its outcomes' and the rest: its name and line. */
 export const workflowWordsSchema = z.strictObject({
   label: labelSchema,
   short: z.string().trim().min(1).max(24).optional(),
@@ -106,14 +112,13 @@ export const workflowWordsSchema = z.strictObject({
 
 /**
  * A workflow's `display:`. `outcomes` is keyed by the values the workflow's declared outcome
- * (`returns.outcome`) can take, `answers` by the ids of its declared ask options
- * (`returns.options`) and the reserved `other`; `phases[].cards[].covers` and `marks[].node`
- * name its steps. The loader refuses anything else (`loader/display-contract.ts`).
+ * (`returns.outcome`) can take; `phases[].cards[].covers` and `marks[].node` name its steps.
+ * The loader drops a field naming anything else, with a warning (`loader/display-contract.ts`).
+ * An ask option's words are not here: they are the option's `label` in `returns.options`.
  */
 export const workflowDisplaySchema = z.strictObject({
   ...workflowWordsSchema.shape,
   outcomes: z.record(z.string().min(1), outcomeDisplaySchema).optional(),
-  answers: z.record(z.string().min(1), answerDisplaySchema).optional(),
   phases: z.array(displayPhaseSchema).min(1).optional(),
   marks: z.array(displayMarkSchema).min(1).optional(),
   results: resultsSchema.optional(),

@@ -36,7 +36,6 @@ import {
   type LoopControl,
 } from './loop';
 import { validateNodeHooks } from './hooks';
-import { nodeDisplaySchema } from './display';
 import type { AgentNode } from './agent-node';
 import {
   dagNodeBaseSchema,
@@ -566,43 +565,7 @@ function validateRawDagNode(value: unknown, ctx: z.RefinementCtx): unknown {
   // Without an id or a single mode the variant schema's own error comes first.
   if (id && modes.length === 1) rejectForeignModeKeys(node, modes[0], id, ctx);
   rejectTopLevelLoopSettings(node, id, ctx);
-  validateNodeDisplay(node, modes, id, ctx);
   return value;
-}
-
-/**
- * A node's `display:` is checked on the raw node. The node schema's intersection below
- * drops a nested unrecognized-key issue, and a misspelt key must fail the load rather than
- * show no label. An include expands into the included workflow's nodes, so a label on the
- * include itself would name no node anyone runs: it belongs on the included workflow's
- * node, where it is served under the expanded id. An include with `fan_out:` stays one node
- * and keeps its own label.
- */
-function validateNodeDisplay(
-  node: Readonly<Record<string, unknown>>,
-  modes: readonly NodeMode[],
-  id: string,
-  ctx: z.RefinementCtx
-): void {
-  if (node.display === undefined) return;
-  if (modes[0] === 'include' && node.fan_out === undefined) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['display'],
-      message:
-        "is not supported on an include node: it expands into the included workflow's nodes. Put 'display:' on those nodes instead.",
-      params: { nodeId: id },
-    });
-    return;
-  }
-  const parsed = nodeDisplaySchema.safeParse(node.display);
-  if (!parsed.success)
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['display'],
-      message: `expected { label, text? } (${z.prettifyError(parsed.error)})`,
-      params: { nodeId: id },
-    });
 }
 
 function rejectForeignModeKeys(

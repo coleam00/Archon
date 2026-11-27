@@ -12,6 +12,7 @@
  * started the next.
  */
 import { observesItem } from './schemas/item-role';
+import { stageAskOptions, stageAskOptionsSchema } from './schemas/ask-option';
 import { z } from 'zod';
 import { declaredItemFate, declaredOutcome, outcomeValues } from './completed-outcome';
 import type { PackBinding } from './schemas/pack-bindings';
@@ -29,12 +30,9 @@ import {
   stageDisplay,
   stageDisplaySchema,
 } from './schemas/display';
-import { readsLinkedEntry } from './schemas/binding-input-source';
-import {
-  asksSettledTriggerSchema,
-  runEndedLinkedSchema,
-  type RunEndedLinked,
-} from './schemas/resource-start';
+import { asksSettledTriggerSchema } from './schemas/resource-start';
+import { arrowLinkSchema, graphLink, type PackGraphLink } from './pack-graph-link';
+export { graphLink, type PackGraphLink } from './pack-graph-link';
 import {
   workflowSourceSchema,
   type ResolvedWorkflow,
@@ -127,6 +125,8 @@ const packGraphStageSchema = z.object({
   asks: z.boolean(),
   /** The stage declares `result.waits`, so a run can end leaving its item waiting on an event. */
   waits: z.boolean(),
+  /** The options every ask of the stage offers (`stageAskOptions`), or null. */
+  options: stageAskOptionsSchema,
   nodes: z.array(packGraphNodeSchema),
   /** The stage's `display:` without its outcomes'. Each `display` is absent, never null, when unset. */
   display: stageDisplaySchema.optional(),
@@ -145,30 +145,6 @@ const arrowFromSchema = z.union([
   }),
 ]);
 export type PackGraphArrowFrom = z.infer<typeof arrowFromSchema>;
-
-/**
- * The link an arrow starts its stage over: `on.runEnded.linked`, with the result list
- * naming the items when it has `items`, and `entries`, each input of the started stage
- * that reads the started item's own entry of that list, by its entry pointer.
- */
-const arrowLinkSchema = z.object({
-  ...runEndedLinkedSchema.shape,
-  entries: z.record(z.string(), z.string()),
-});
-export type PackGraphLink = z.infer<typeof arrowLinkSchema>;
-
-/** The arrow's link from a binding's `linked` and its inputs, or null without `linked`. */
-export function graphLink(
-  linked: RunEndedLinked | undefined,
-  inputs: Readonly<Record<string, unknown>> | undefined
-): PackGraphLink | null {
-  if (linked === undefined) return null;
-  const entries: Record<string, string> = {};
-  for (const [target, source] of Object.entries(inputs ?? {}))
-    if (typeof source === 'object' && source !== null && readsLinkedEntry(source))
-      entries[target] = source.entry;
-  return { ...linked, entries };
-}
 
 const arrowEndsSchema = {
   from: arrowFromSchema,
@@ -747,6 +723,7 @@ function graphStage(
     observes: observesItem(stage),
     asks: stage.result?.asks !== undefined,
     waits: stage.result?.waits !== undefined,
+    options: stageAskOptions(stage.result?.options),
     nodes: stageNodes(stage),
     ...stageDisplay(stage.display),
   };

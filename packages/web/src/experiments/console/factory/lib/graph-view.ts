@@ -9,7 +9,8 @@
  *   nodes' `display.label` its step names, an included node's under its expanded id;
  * - an outcome value's `display` gives its label and story, and the stage's `display.story`
  *   the story of a run whose outcome tells none (`stage:*`);
- * - `display.answers` labels an ask option (`stage:option`);
+ * - a stage's ask option, as the graph serves it (`stage.options`: the declared
+ *   `returns.options` and the reserved `other`), is labelled by its `label` (`stage:option`);
  * - a mark `means: returns` is a step outcome that sends an item back, `means: approves` one
  *   that approves its round; any other `means` is not the console's and is left alone;
  * - `results.round` and `results.allowance` number a stage's runs as check rounds, and
@@ -137,11 +138,12 @@ function addStage(stage: GraphStage, live: ReadonlySet<string>, into: FactoryWor
   const { workflow, display } = stage;
   for (const value of stage.outcome?.values ?? [])
     if (value.display !== undefined) into.outcomes[`${workflow}:${value.value}`] = value.display;
+  for (const option of stage.options ?? [])
+    if (option.label !== undefined)
+      into.answers[`${workflow}:${option.id}`] = { label: option.label };
   if (display === undefined) return;
   into.stages[workflow] = stageWordsOf(stage, display);
   if (display.story !== undefined) into.outcomes[`${workflow}:*`] = { story: display.story };
-  for (const [option, answer] of Object.entries(display.answers ?? {}))
-    into.answers[`${workflow}:${option}`] = answer;
   meaningOf(workflow, display, into);
   // A replaces entry naming a live stage is left alone: `archon validate` refuses it.
   for (const replaced of display.replaces ?? [])

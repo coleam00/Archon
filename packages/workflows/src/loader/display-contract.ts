@@ -1,16 +1,16 @@
 /**
  * A workflow's `display:` checked against the workflow it describes (`schemas/display.ts`):
- * every outcome, option and step it names is one the workflow has, so a renamed or removed one
- * fails the load instead of leaving words that name nothing. Run with the result contract
- * (`contracts.ts`), on the loaded workflow and again on the flattened one: the step ids a
- * reader records (`<include>__<node>`) exist only after includes expand, so while any include
- * is still a directive the step check waits for the flattened workflow.
+ * every outcome and step it names is one the workflow has. A field naming a renamed or
+ * removed one is dropped with a warning, never refusing the workflow: words never stop a run.
+ * Run on the loaded workflow (`loader.ts`) and again on the flattened one (`expand-scope.ts`):
+ * the step ids a reader records (`<include>__<node>`) exist only after includes expand, so
+ * while any include is still a directive the step check waits for the flattened workflow.
  */
 import type { DagNode, IncludeDirective, WorkflowDefinition } from '../schemas';
+import type { WorkflowDisplay } from '../schemas/display';
 import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from '../schemas';
 import { declaredOutcome, outcomeValues } from '../completed-outcome';
 import { loopBodyStepNamePrefix } from '../graph-plan';
-import { OTHER_ATTENTION_OPTION } from '../schemas/wait-node';
 
 type DisplayWorkflow = Pick<
   WorkflowDefinition,
@@ -42,65 +42,85 @@ export function recordedStepIds(
   return ids;
 }
 
-function outcomesError(workflow: DisplayWorkflow): string | null {
+/** A `display:` field that names what the workflow lacks, and why. */
+export interface DisplayProblem {
+  readonly field: 'outcomes' | 'phases' | 'marks';
+  readonly message: string;
+}
+
+function outcomesProblem(workflow: DisplayWorkflow): string | null {
   const keys = Object.keys(workflow.display?.outcomes ?? {});
   if (keys.length === 0) return null;
   if (workflow.result?.outcome === undefined)
-    return 'Workflow declares display.outcomes but no returns.outcome; display.outcomes names outcomes, so it needs returns.outcome';
+    return 'display.outcomes names outcomes, but the workflow declares no returns.outcome';
   const selected = workflow.nodes.find(node => node.id === workflow.returns);
   // Deferred, like the result contract, while the returns node is an include alias.
   if (selected === undefined || isIncludeDirective(selected)) return null;
   const outcome = declaredOutcome(workflow);
   if (outcome === undefined) return null;
   const values = outcomeValues(outcome.form);
-  const unknown = keys.find(key => !values.includes(key));
-  return unknown === undefined
+  const unknown = keys.filter(key => !values.includes(key));
+  return unknown.length === 0
     ? null
-    : `Workflow display.outcomes names '${unknown}', which returns.outcome: '${outcome.field}' cannot take (it takes: ${values.join(', ')})`;
+    : `display.outcomes names ${unknown.map(key => `'${key}'`).join(', ')}, which returns.outcome: '${outcome.field}' cannot take (it takes: ${values.join(', ')})`;
 }
 
-function answersError(workflow: DisplayWorkflow): string | null {
-  const keys = Object.keys(workflow.display?.answers ?? {});
-  if (keys.length === 0) return null;
-  const ids = (workflow.result?.options ?? []).map(option => option.id);
-  if (ids.length === 0)
-    return 'Workflow declares display.answers but no returns.options; display.answers names the options of its asks';
-  const known = [...ids, OTHER_ATTENTION_OPTION.id];
-  const unknown = keys.find(key => !known.includes(key));
-  return unknown === undefined
-    ? null
-    : `Workflow display.answers names '${unknown}', which is not an option it declares (it declares: ${known.join(', ')})`;
-}
-
-function stepsError(workflow: DisplayWorkflow): string | null {
-  const display = workflow.display;
-  if (display?.phases === undefined && display?.marks === undefined) return null;
-  const steps = recordedStepIds(workflow.nodes);
-  if (steps === undefined) return null;
-  const named = [
-    ...(display.phases ?? []).flatMap(phase =>
-      phase.cards.flatMap(card =>
-        card.covers.map(step => ({ step, where: `display.phases card '${card.title}'` }))
-      )
-    ),
-    ...(display.marks ?? []).map(mark => ({ step: mark.node, where: 'display.marks' })),
-  ];
-  const missing = named.find(({ step }) => !steps.includes(step));
-  if (missing !== undefined)
-    return `Workflow ${missing.where} names step '${missing.step}', which it does not have (its steps: ${steps.join(', ')})`;
+function phasesProblem(display: WorkflowDisplay, steps: readonly string[]): string | null {
   const covered = new Map<string, string>();
   for (const card of (display.phases ?? []).flatMap(phase => phase.cards))
     for (const step of card.covers) {
+      if (!steps.includes(step))
+        return `display.phases card '${card.title}' names step '${step}', which the workflow does not have (its steps: ${steps.join(', ')})`;
       const first = covered.get(step);
       if (first !== undefined)
-        return `Workflow display.phases cards '${first}' and '${card.title}' both cover step '${step}'; a step is on one card`;
+        return `display.phases cards '${first}' and '${card.title}' both cover step '${step}'; a step is on one card`;
       covered.set(step, card.title);
     }
   return null;
 }
 
-/** The first thing `display:` names that the workflow lacks, or null. */
-export function displayContractError(workflow: DisplayWorkflow): string | null {
-  if (workflow.display === undefined) return null;
-  return outcomesError(workflow) ?? answersError(workflow) ?? stepsError(workflow);
+function marksProblem(display: WorkflowDisplay, steps: readonly string[]): string | null {
+  const missing = (display.marks ?? []).find(mark => !steps.includes(mark.node));
+  return missing === undefined
+    ? null
+    : `display.marks names step '${missing.node}', which the workflow does not have (its steps: ${steps.join(', ')})`;
+}
+
+/** Each `display:` field that names something the workflow lacks; empty when none does. */
+export function displayContractProblems(workflow: DisplayWorkflow): DisplayProblem[] {
+  const display = workflow.display;
+  if (display === undefined) return [];
+  const problems: DisplayProblem[] = [];
+  const outcomes = outcomesProblem(workflow);
+  if (outcomes !== null) problems.push({ field: 'outcomes', message: outcomes });
+  const steps =
+    display.phases === undefined && display.marks === undefined
+      ? undefined
+      : recordedStepIds(workflow.nodes);
+  if (steps !== undefined) {
+    const phases = phasesProblem(display, steps);
+    if (phases !== null) problems.push({ field: 'phases', message: phases });
+    const marks = marksProblem(display, steps);
+    if (marks !== null) problems.push({ field: 'marks', message: marks });
+  }
+  return problems;
+}
+
+/**
+ * The workflow with each `display:` field that names what it lacks dropped, and one warning
+ * per dropped field. The rest of the workflow, and the rest of its words, are untouched.
+ */
+export function withoutDisplayProblems<T extends DisplayWorkflow>(
+  workflow: T
+): { workflow: T; warnings: string[] } {
+  const problems = displayContractProblems(workflow);
+  if (problems.length === 0 || workflow.display === undefined) return { workflow, warnings: [] };
+  const display: Record<string, unknown> = { ...workflow.display };
+  for (const { field } of problems) delete display[field];
+  return {
+    workflow: { ...workflow, display: display as WorkflowDisplay },
+    warnings: problems.map(
+      ({ field, message }) => `Workflow '${workflow.name}': ${message}; display.${field} is ignored`
+    ),
+  };
 }

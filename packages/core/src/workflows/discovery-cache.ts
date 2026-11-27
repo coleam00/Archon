@@ -87,8 +87,16 @@ async function discoveryStamp(root: string, loadConfig: LoadConfig): Promise<str
 }
 
 /**
- * `discover(root)`, kept per root while its stamp is unchanged. `discover` is live discovery
- * with the same `loadConfig` (`discoverWorkflowsWithConfig`); the stamp reads that config too.
+ * The most project roots whose discovery is kept, the root read least recently dropped first.
+ * A server discovers for its registered projects, a handful on one install, so this is far
+ * above a real install; it bounds what reads naming many roots can make the server hold.
+ */
+export const ROOTS_KEPT = 64;
+
+/**
+ * `discover(root)`, kept per root while its stamp is unchanged, for at most `ROOTS_KEPT`
+ * roots. `discover` is live discovery with the same `loadConfig`
+ * (`discoverWorkflowsWithConfig`); the stamp reads that config too.
  */
 export function createDiscoveryCache(
   loadConfig: LoadConfig,
@@ -100,10 +108,19 @@ export function createDiscoveryCache(
     const stamp = await discoveryStamp(root, loadConfig);
     if (stamp === null) return discover(root);
     const entry = kept.get(root);
-    if (entry?.stamp === stamp) return entry.result;
+    // A Map iterates in insertion order: setting a root again makes it the newest.
+    kept.delete(root);
+    if (entry?.stamp === stamp) {
+      kept.set(root, entry);
+      return entry.result;
+    }
     const result = discover(root);
     const fresh = { stamp, result };
     kept.set(root, fresh);
+    for (const oldest of kept.keys()) {
+      if (kept.size <= ROOTS_KEPT) break;
+      kept.delete(oldest);
+    }
     result.catch(() => {
       if (kept.get(root) === fresh) kept.delete(root);
     });

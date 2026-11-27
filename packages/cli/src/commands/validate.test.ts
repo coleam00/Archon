@@ -5,6 +5,7 @@ import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import type { WorkflowDisplay } from '@archon/workflows/schemas/display';
 import {
   packEventBindingSchema,
   packRunEndedBindingSchema,
@@ -479,6 +480,91 @@ describe('validateWorkflowsCommand', () => {
           'error',
           "stage 'review' display.replaces names 'build', which the pack still has as a stage",
         ],
+      ]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test('refuses a mark with an unknown means, a results pointer the result lacks, and a retired workflow replaced twice', async () => {
+    const bindings = {
+      'build-after-review': packRunEndedBindingSchema.parse({
+        workflow: 'build',
+        resource: 'build',
+        overlap: 'queue',
+        run_ended: { workflow: 'review', outcome: 'ready' },
+      }),
+    };
+    const stage = (name: string, display: WorkflowDisplay) => {
+      const entry = makeTestWorkflowWithSource({
+        name,
+        nodes: [
+          {
+            id: 'decide',
+            bash: 'true',
+            display: { label: 'Decides' },
+            output_format: {
+              type: 'object',
+              properties: {
+                outcome: { type: 'string', enum: ['ready', 'close'] },
+                round: { type: 'integer' },
+              },
+              required: ['outcome'],
+            },
+          },
+        ],
+        returns: 'decide',
+        result: { outcome: 'outcome' },
+      });
+      entry.workflow.pack = { key: 'factory', workflow: name, source: 'project', bindings };
+      entry.workflow.display = {
+        outcomes: { ready: { label: 'ready' }, close: { label: 'closed' } },
+        ...display,
+      };
+      return entry;
+    };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        stage('review', {
+          label: 'Review',
+          marks: [{ node: 'decide', outcome: 'close', means: 'retruns' }],
+          results: { round: '/round', allowance: '/allowance' },
+          replaces: [
+            { workflow: 'deliver' },
+            { workflow: 'older', marks: [{ node: 'x', outcome: 'y', means: 'approved' }] },
+          ],
+        }),
+        stage('build', { label: 'Build', replaces: [{ workflow: 'deliver' }] }),
+      ],
+      errors: [],
+    });
+    await writeFile(
+      join(validationCwd, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'factory',
+        description: 'Factory workflows',
+        entrypoints: { review: 'review/review.yaml', build: 'build/build.yaml' },
+      })
+    );
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      const code = await validateWorkflowsCommand(validationCwd, undefined, true);
+      const results = JSON.parse(String(write.mock.calls[0]?.[0]))
+        .results as validator.WorkflowValidationResult[];
+      const errors = (workflow: string) =>
+        (results.find(r => r.workflowName === workflow)?.issues ?? [])
+          .filter(issue => issue.field === 'display' && issue.level === 'error')
+          .map(issue => issue.message);
+      expect(code).toBe(1);
+      expect(errors('review')).toEqual([
+        "Workflow 'review' display.marks: step 'decide' outcome 'close' means 'retruns', which no reader knows (known: returns, approves)",
+        "Workflow 'review' display.replaces 'older' marks: step 'x' outcome 'y' means 'approved', which no reader knows (known: returns, approves)",
+        "Workflow 'review' display.results 'allowance' points at '/allowance', which node 'decide' output_format does not declare",
+      ]);
+      expect(errors('build')).toEqual([
+        "stage 'build' display.replaces names 'deliver', which stage 'review' already replaces",
       ]);
     } finally {
       write.mockRestore();

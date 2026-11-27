@@ -167,7 +167,7 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/codebases` | List codebases with one representative per resolved repository remote. Each has `item_packs`: the keys of the workflow packs with a run on an item of the project, empty when it has none |
+| GET | `/api/codebases` | List codebases with one representative per resolved repository remote. Each has `item_packs`: the keys of the workflow packs with a run on an item of the project, empty when it has none, or null on every codebase when the item runs could not be scanned (the list still answers) |
 | GET | `/api/codebases/{id}` | Get a single codebase |
 | POST | `/api/codebases` | Register a codebase (clone or local path) |
 | PATCH | `/api/codebases/{id}` | Rename a codebase |
@@ -252,8 +252,8 @@ Returns the active isolation environments (worktrees and containers) associated 
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
-| GET | `/api/observing` | What this install reads for event bindings without receiving webhooks, as `Observing`: `sources`, the observing sources of the file the server started with (`ARCHON_WEBHOOK_SOURCES`), each with its interval, the label reads its bindings name and the label bindings it cannot read with why; and `lastPass`, the last pass the wake watcher recorded with its failures, null when none is recorded. The reads are the whole install's, not a project's. It does not say whether a scheduler job runs the watcher: `archon workflow wake schedule status` does |
-| GET | `/api/packs/{pack}/graph` | A pack's [stage graph](/guides/workflow-triggers/#see-how-a-packs-stages-connect) as `PackGraph`: its stages with their outcomes and nodes, and the run-ended arrows between them, each active or declared and inactive. A stage, outcome value and node carry the workflow's `display:` words as written, absent when it has none, and the pack's document its groups, `words` and `exit`. `codebaseId` (required) names the project the pack is discovered from and its arrows launch in; `workflowSource` (an absolute directory, optional) discovers the pack there instead, as a binding's `launch.discoveryCwd` does. 400 for a relative `workflowSource`; 404 for an unknown codebase or a pack with no workflow there; 422 naming the file for a trigger file that cannot be read, or for run-ended files under `store: files`. The same read as `archon pack graph --json` |
+| GET | `/api/observing` | What this install reads for event bindings without receiving webhooks, as `Observing`: `sources`, the observing sources of the file the server started with (`ARCHON_WEBHOOK_SOURCES`), each with its interval, the label reads its bindings name and the label bindings it cannot read with why; `lastPass`, the last pass the wake watcher recorded with its failures, null when none is recorded or its record does not read; and `lastPassUnreadable`, why a record that exists could not be read or validated, null otherwise. The reads are the whole install's, not a project's. It does not say whether a scheduler job runs the watcher: `archon workflow wake schedule status` does |
+| GET | `/api/packs/{pack}/graph` | A pack's [stage graph](/guides/workflow-triggers/#see-how-a-packs-stages-connect) as `PackGraph`: its stages with their outcomes and nodes, and the run-ended arrows between them, each active or declared and inactive. A stage, outcome value and node carry the workflow's `display:` words as written, absent when it has none, and the pack's document its groups, `words` and `exit`. A stage's `options` are the options every ask of it offers, its declared `returns.options` in order, each with its `label` when it declares one, then the reserved `other`; null when it declares none. `codebaseId` (required) names the project the pack is discovered from and its arrows launch in; `workflowSource` (an absolute directory, optional) discovers the pack there instead, as a binding's `launch.discoveryCwd` does. 400 for a relative `workflowSource`; 404 for an unknown codebase or a pack with no workflow there; 422 naming the file for a trigger file that cannot be read, or for run-ended files under `store: files`. The same read as `archon pack graph --json` |
 | DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name an existing conversation, and a web or CLI one must be the caller's own (chat and forge conversations need no ownership) |
 
 #### List Workflows
@@ -638,11 +638,16 @@ Archon's forge seam, so the browser never calls it:
   recorded by hand as `#12` is asked of the forge like an unrecorded one.
   Otherwise the forge's `pr.view` answers: a `changeUrl` by number, for the pull request the
   run's forge operations recorded or else the one the forge resolves the URL to; a `branchRun`
-  by head on the item's run branches. A `branchRun` from another project than `codebaseId`, or
-  whose item recorded no branch and no merge, has no change and no entry.
+  by head on the item's run branches. Either is looked up only in the repository the project's
+  registered remote resolves to: a `changeUrl` of another repository answers `merged: "unknown"`
+  with a `reason`, and the forge is never asked about it (resolving the URL uses no credential).
+  A `reason` is set on any `unknown` answer. A `changeRun` or `branchRun` from another project
+  than `codebaseId`, or a `branchRun` whose item recorded no branch and no merge, has no change
+  and no entry.
 
-Answers are cached on the server, in memory and in a file under its home so a restarted server
-keeps them: a change that has not merged for 60 seconds, a merge for good, an issue for 6 hours,
+Answers are cached on the server, at most 5000 issues and 5000 changes, the oldest answer dropped
+first, in memory and in a file under its home so a restarted server keeps them; a change URL's
+answer is kept per project remote: a change that has not merged for 60 seconds, a merge for good, an issue for 6 hours,
 a stale answer served while it refreshes. A first lookup still running after 4 seconds answers
 `merged: "pending"` (a change) or `pending: true` (an issue) for that read only, so read again
 shortly; a lookup that failed answers `unknown` (a change, cached 60 seconds) or null fields (an

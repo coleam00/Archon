@@ -24,7 +24,13 @@ import {
   jsonError,
   openApiRouteRegistrar,
 } from './api-route-kit';
-import type { ForgeAnswerFile, Kept } from './forge-answer-file';
+import {
+  CHANGES_KEPT,
+  type ForgeAnswerFile,
+  ISSUES_KEPT,
+  type Kept,
+  keepBounded,
+} from './forge-answer-file';
 
 /** The most issues, and the most changes, one request asks about. */
 const SUBJECTS_MAX = 100;
@@ -74,6 +80,11 @@ export const forgeSubjectsResponseSchema = z
         merged: mergedSchema,
         mergedAt: z.string().nullable(),
         number: z.number().int().positive().nullable(),
+        /**
+         * Why `merged` is `unknown`: the forge could not say, or the change is not in the
+         * project's repository and was never asked about. Absent otherwise.
+         */
+        reason: z.string().optional(),
       })
     ),
   })
@@ -85,7 +96,7 @@ const getForgeSubjectsRoute = createRoute({
   tags: ['Workflows'],
   summary: "What the project's forge says of some issues and delivered changes",
   description:
-    "Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change its item recorded as merged (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.",
+    "Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change its item recorded as merged (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a change URL is looked up only in the repository the project's registered remote resolves to, and one elsewhere answers `unknown` with a `reason`, without the forge being asked about it; a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.",
   request: { query: forgeSubjectsQuerySchema },
   responses: {
     200: {
@@ -143,12 +154,14 @@ interface Keeping<T> {
 }
 
 /**
- * One load in flight per key, the last success kept with the time it settled. The caller owns
- * freshness. A load that rejects stores nothing and rejects its callers.
+ * One load in flight per key, the last success kept with the time it settled, at most `most`
+ * kept (the oldest answer dropped first). The caller owns freshness. A load that rejects
+ * stores nothing and rejects its callers.
  */
 function keyedOnce<T, A extends unknown[]>(
   load: (key: string, ...args: A) => Promise<T>,
   now: () => number,
+  most: number,
   { kept = new Map<string, Kept<T>>(), onKept }: Keeping<T> = {}
 ): {
   known: (key: string) => { value: T; at: number } | undefined;
@@ -162,7 +175,7 @@ function keyedOnce<T, A extends unknown[]>(
       if (inFlight !== undefined) return inFlight;
       const started = load(key, ...args)
         .then(value => {
-          kept.set(key, { value, at: now() });
+          keepBounded(kept, key, { value, at: now() }, most);
           onKept?.();
           return value;
         })
@@ -254,8 +267,10 @@ type ShownAnswer = Omit<ChangeAnswer, 'run'>;
  * lookup in flight per change, a merged answer kept, any other for `CHANGE_TTL_MS` and served
  * stale while it refreshes. A cold lookup slower than the wait answers `pending` for that
  * request only; a lookup that failed answers `unknown` and is cached like any other. A change
- * is keyed by its URL, or, for a run that named none, by that run, so two such items never
- * share an answer. The URL is the run's, else the forge's (the record's, when recorded); the
+ * at a URL is keyed by its project's remote (without credentials) and the URL, so an answer
+ * kept for one project is never served to another, whose lookup is scoped to its own
+ * repository; a run that named no URL is keyed by that run, so two such items never share an
+ * answer. The URL is the run's, else the forge's (the record's, when recorded); the
  * number is the forge's, else the one the run's own audit rows name.
  */
 export function changeStateCache(
@@ -270,8 +285,10 @@ export function changeStateCache(
   const now = deps.now ?? Date.now;
   const waitMs = deps.waitMs ?? WAIT_MS;
   const lookups = limiter(CHANGE_LOOKUPS);
-  const keyOf = (change: Change): string =>
-    change.kind === 'url' ? change.url : `run:${change.run}`;
+  const keyOf = (change: Change, remote: string | null): string =>
+    change.kind === 'url'
+      ? `${sanitizeCredentials(remote ?? '')}|${change.url}`
+      : `run:${change.run}`;
   const answers = keyedOnce(
     (
       key: string,
@@ -279,7 +296,8 @@ export function changeStateCache(
       branches: () => Promise<readonly string[]>,
       remote: string | null
     ): Promise<ChangeMergeState> => {
-      const asked: ChangeLookup = change.kind === 'url' ? change : { kind: 'branch', remote };
+      const asked: ChangeLookup =
+        change.kind === 'url' ? { ...change, remote } : { kind: 'branch', remote };
       return lookups(() => deps.changeMergeState(asked, branches))
         .catch(
           (error: unknown): ChangeMergeState => ({
@@ -297,27 +315,33 @@ export function changeStateCache(
         });
     },
     now,
+    CHANGES_KEPT,
     keeping
   );
   const lookup = (
     change: Change,
     branches: () => Promise<readonly string[]>,
     remote: string | null
-  ): Promise<ChangeMergeState> => answers.refresh(keyOf(change), change, branches, remote);
-  const shown = (answer: ShownAnswer, change: Change): ShownAnswer =>
-    change.kind === 'url'
+  ): Promise<ChangeMergeState> => answers.refresh(keyOf(change, remote), change, branches, remote);
+  const shown = (answer: ShownAnswer, change: Change): ShownAnswer => {
+    const why =
+      answer.merged === 'unknown' && answer.reason !== undefined ? { reason: answer.reason } : {};
+    return change.kind === 'url'
       ? {
           url: change.url,
           merged: answer.merged,
           mergedAt: answer.mergedAt,
           number: answer.number ?? prRefFromAudits(change.url, change.audits)?.number ?? null,
+          ...why,
         }
       : {
           url: answer.url,
           merged: answer.merged,
           mergedAt: answer.mergedAt,
           number: answer.number,
+          ...why,
         };
+  };
   const recordedAnswer = (
     change: Change,
     branches: () => Promise<readonly string[]>,
@@ -329,7 +353,7 @@ export function changeStateCache(
       change
     );
     if (answer.number !== null) return answer;
-    const known = answers.known(keyOf(change));
+    const known = answers.known(keyOf(change, remote));
     if (known === undefined) {
       void lookup(change, branches, remote);
       return answer;
@@ -341,7 +365,7 @@ export function changeStateCache(
     // have delivered other changes before it (#286).
     if (recorded !== null && (change.kind === 'branch' || recorded.change === change.url))
       return recordedAnswer(change, branches, remote, recorded);
-    const known = answers.known(keyOf(change));
+    const known = answers.known(keyOf(change, remote));
     if (known !== undefined) {
       if (known.value.merged !== true && now() - known.at >= CHANGE_TTL_MS)
         void lookup(change, branches, remote);
@@ -381,6 +405,7 @@ function issueCache(
         return answer;
       }),
     now,
+    ISSUES_KEPT,
     keeping
   );
   const shown = (answer: WorkItemAnswer): IssueAnswer =>
@@ -451,9 +476,10 @@ export function registerForgeRoutes(app: OpenAPIHono, deps: ForgeRouteDeps): voi
   const issues = issueCache(deps, file === null ? {} : { kept: file.issues, onKept: file.changed });
 
   /**
-   * The answer for one delivered change; null when its run is gone, or it has no change. A run
-   * that named no URL is searched for in `remote`, so it answers only for its own project
-   * (`codebaseId`); a URL names its own repository and needs no such check.
+   * The answer for one delivered change; null when its run is gone, belongs to another project
+   * than `codebaseId`, or has no change. Either kind is looked up only in the repository
+   * `remote` resolves to: a URL of another repository answers `unknown` with its reason, and
+   * the forge is never asked about that change.
    */
   const answerFor = async (
     run: string,
@@ -463,7 +489,7 @@ export function registerForgeRoutes(app: OpenAPIHono, deps: ForgeRouteDeps): voi
   ): Promise<ChangeAnswer | null> => {
     const delivered = await deps.deliveredRun(run);
     if (delivered === null) return null;
-    if (url === null && delivered.codebaseId !== codebaseId) return null;
+    if (delivered.codebaseId !== codebaseId) return null;
     const { audits, branches, recorded } = delivered;
     if (url !== null)
       return {

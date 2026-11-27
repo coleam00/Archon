@@ -18,7 +18,7 @@ import {
   forgeOperationAuditSchema,
   forgePrRecordSchema,
 } from '@archon/forge/operations';
-import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
+import { forgePluginConfigSchema, normalizeHost } from '@archon/forge/plugin-config';
 import type { PrRef } from '@archon/forge';
 
 /**
@@ -40,11 +40,13 @@ export function prRefFromAudits(url: string, audits: readonly unknown[]): PrRef 
 
 /**
  * Which change to ask about: the change at a URL, with the forge audit rows of the run that
- * recorded it, or the pull request on the item's run branches in the repository the project's
- * git `remote` resolves to (null when the project has none), for a run that named no URL.
+ * recorded it, or the pull request on the item's run branches, for a run that named no URL.
+ * Either is looked up only in the repository the project's git `remote` resolves to (null when
+ * the project has none): a URL of another repository is refused before the forge is asked
+ * about the change, so a caller cannot read a pull request outside the project.
  */
 export type ChangeLookup =
-  | { kind: 'url'; url: string; audits: readonly unknown[] }
+  | { kind: 'url'; url: string; audits: readonly unknown[]; remote: string | null }
   | { kind: 'branch'; remote: string | null };
 
 export interface ChangeMergeState {
@@ -123,7 +125,7 @@ async function repoOfRemote(
   ask: Ask,
   remote: string | null
 ): Promise<{ repo: PrRef['repo'] } | { reason: string }> {
-  if (remote === null) return { reason: 'the project has no remote to look the change up in' };
+  if (remote === null) return { reason: 'the project has no remote to scope the change to' };
   const found = await resolve(ask, remote, false);
   return 'reason' in found ? found : { repo: found.resolved.repo };
 }
@@ -152,10 +154,41 @@ async function viewByBranch(
 }
 
 /**
- * The pull request a lookup names, through the forge. A URL is asked by number: the one its
- * run's audit rows recorded, else the one the forge resolves the URL to, so a URL needs no
- * branch (#286). A branch lookup takes the first pull request on the item's run branches in
- * the repository the project's remote resolves to.
+ * Whether two repositories are the same, compared as a forge registers them: host and path
+ * case-insensitively, as `@archon/forge`'s own response matching does.
+ */
+function sameRepo(left: PrRef['repo'], right: PrRef['repo']): boolean {
+  return (
+    normalizeHost(left.host) === normalizeHost(right.host) &&
+    left.path.toLowerCase() === right.path.toLowerCase()
+  );
+}
+
+/** The pull request a change URL names: its run's audit record, else what the forge resolves it to. */
+async function refOfUrl(
+  ask: Ask,
+  url: string,
+  audits: readonly unknown[]
+): Promise<PrRef | { reason: string }> {
+  const ref = prRefFromAudits(url, audits);
+  if (ref !== null) return ref;
+  const found = await resolve(ask, url, true);
+  if ('reason' in found) return found;
+  const { repo, subject } = found.resolved;
+  // The host refuses a resolved `web` answer without a subject, so none means a forge
+  // that broke its contract; it is reported rather than guessed around.
+  if (subject === undefined) return { reason: 'the forge did not say what this URL names' };
+  if (subject.kind !== 'pr') return { reason: 'the URL names an issue, not a pull request' };
+  return { repo, number: subject.number };
+}
+
+/**
+ * The pull request a lookup names, through the forge, in the project's repository only. A URL
+ * is asked by number: the one its run's audit rows recorded, else the one the forge resolves
+ * the URL to, so a URL needs no branch (#286). Its repository is compared with the one the
+ * project's remote resolves to before any `pr.view`; `resolve` runs without a credential, so a
+ * refused URL costs the operator's credential nothing. A branch lookup takes the first pull
+ * request on the item's run branches in the project's repository.
  */
 async function findChange(
   ask: Ask,
@@ -163,16 +196,13 @@ async function findChange(
   branches: () => Promise<readonly string[]>
 ): Promise<Found> {
   if (lookup.kind === 'url') {
-    const ref = prRefFromAudits(lookup.url, lookup.audits);
-    if (ref !== null) return viewByNumber(ask, ref);
-    const found = await resolve(ask, lookup.url, true);
-    if ('reason' in found) return found;
-    const { repo, subject } = found.resolved;
-    // The host refuses a resolved `web` answer without a subject, so none means a forge
-    // that broke its contract; it is reported rather than guessed around.
-    if (subject === undefined) return { reason: 'the forge did not say what this URL names' };
-    if (subject.kind !== 'pr') return { reason: 'the URL names an issue, not a pull request' };
-    return viewByNumber(ask, { repo, number: subject.number });
+    const project = await repoOfRemote(ask, lookup.remote);
+    if ('reason' in project) return project;
+    const ref = await refOfUrl(ask, lookup.url, lookup.audits);
+    if ('reason' in ref) return ref;
+    if (!sameRepo(ref.repo, project.repo))
+      return { reason: `the change at ${lookup.url} is not in this project's repository` };
+    return viewByNumber(ask, ref);
   }
   const heads = await branches();
   if (heads.length === 0) return { reason: 'no run branch names this change' };
@@ -248,7 +278,8 @@ export function forgePluginsOnce(
  * Which pull request a change is and whether it merged, asked of its forge with `pr.view`.
  * A URL lookup asks by number: the pull request one of the recording run's forge audit rows
  * names, or, when none does (an earlier run opened it), the one the forge resolves the URL
- * to. A branch lookup (the run named no URL) takes the first pull request on the item's runs'
+ * to; a pull request outside the project remote's repository is `unknown`, never viewed. A
+ * branch lookup (the run named no URL) takes the first pull request on the item's runs'
  * recorded branches (`branches`, newest first, read only for it) in the project remote's
  * repository, whatever its URL. Plugins come from `plugins` (`forgePluginsOnce`).
  * Never throws: a failure, a failed discovery included, is `unknown` with its reason.

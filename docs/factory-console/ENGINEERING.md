@@ -67,16 +67,19 @@ The factory building this repository runs Archon from another checkout, on the h
 - Everything a console shows about a pack comes from the pack graph, not a side file (DESIGN.md,
   COMBINED direction, "No hand-synced view file"). Words live in each workflow's optional
   `display:` block (`packages/workflows/src/schemas/display.ts`): a workflow's `label`, `short`,
-  `blurb` and `story`, its outcomes' and answers' words and its stage-modal `phases`, and a node's
-  `label`, served under the id its runs record it by. The meaning a console reads runs with is
+  `blurb` and `story`, its outcomes' words and its stage-modal `phases`, and a node's
+  `label`, served under the id its runs record it by. An ask option's words are its `label` in
+  `returns.options`, served on the graph's `stage.options` with the reserved `other`. The meaning a console reads runs with is
   declared there too: `marks` (a step's outcome and an opaque `means`), `results` (named JSON
   pointers into the workflow's result) and `replaces` (a retired workflow whose runs stand at
   this stage, with its own `loops`, `marks` and `results`). The pack's count words and the stage
   items leave the map by are its document's front matter (`words`, `exit`,
-  `packages/workflows/src/pack-document.ts`). The engine validates them against the workflow
-  and serves them as written, slugs and names opaque; `archon validate` warns on an in-flow
-  stage, step, outcome or asks-settled option with no words and refuses a `replaces` naming a
-  stage the pack still has. `lib/graph-view.ts` `graphWords(graph)` is the one place the web
+  `packages/workflows/src/pack-document.ts`). Words never refuse a workflow: the loader drops
+  an unknown key, a malformed field or one naming an outcome or step the workflow lacks, with a
+  warning, and serves the rest as written. `archon validate` warns on an in-flow stage, step,
+  outcome or asks-settled option with no words, and refuses a `means` other than `returns` or
+  `approves`, a `results` pointer the returns node's `output_format` does not declare, a
+  `replaces` naming a stage the pack still has, and a retired workflow replaced twice. `lib/graph-view.ts` `graphWords(graph)` is the one place the web
   gives them meaning (`means: returns` and `approves`, the results `round`, `allowance` and
   `change`, the loop `round`), derived once per graph object, so no screen waits on a second
   read; the map, the stage modal, the board cards and the board's placement all read it. The
@@ -119,7 +122,7 @@ The factory building this repository runs Archon from another checkout, on the h
   Speed is a requirement (DESIGN.md, COMBINED direction), so two things are kept between
   requests. The graph's workflow discovery, nearly all of its cost, is kept while the files it
   reads are unchanged (`packages/core/src/workflows/discovery-cache.ts`, keyed by a stamp of
-  every file under the roots discovery reads). That is how DESIGN's "the pack graph is read
+  every file under the roots discovery reads, at most 64 roots). That is how DESIGN's "the pack graph is read
   once per pack copy and cached" is met: the rest of the graph read (bindings, trigger checks,
   settings, capacity) reads git and database state a file stamp cannot see, costs tens of
   milliseconds, and runs every request. On an install with trigger files, each file's check
@@ -131,8 +134,9 @@ The factory building this repository runs Archon from another checkout, on the h
   Overview's count filter it rather than asking `GET /api/items/window` again, because each
   window read places every item of the project on the server.
   The forge subjects route keeps its answers in a display cache file under the server's home,
-  `<home>/cache/forge-subjects.json` (`forge-answer-file.ts`), so a restarted server does not
-  ask the forge once per card. A home that has never served (every fresh `dev:console` copy)
+  `<home>/cache/forge-subjects.json` (`forge-answer-file.ts`, at most 5000 issues and 5000
+  changes), so a restarted server does not ask the forge once per card. It looks a change URL
+  up only in the repository the project's remote resolves to. A home that has never served (every fresh `dev:console` copy)
   has no file, and its first load still asks the forge once per titleless issue. That file is a cache, not engine state: "new server code only
   reads" still holds for engine data. The page timings are measured with
   `bun scripts/measure-board.ts` (its header says how). The server

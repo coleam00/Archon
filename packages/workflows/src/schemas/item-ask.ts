@@ -126,7 +126,9 @@ type WrittenAsk = z.infer<typeof itemAskSchema>;
  * stage's reason beside it, so a binary that reads a recommendation as always naming an
  * option still reads the ask.
  */
-export type ItemAsk = Omit<WrittenAsk, 'recommendation'> & {
+export type ItemAsk = Omit<WrittenAsk, 'recommendation' | 'options'> & {
+  /** The ask's options; a workflow's declared options keep their `label`. */
+  options: DeclaredAskOption[];
   recommendation: { option: string; why: string } | null;
   /** Why the stage recommends none, in its words; only with no recommendation. */
   no_recommendation?: string;
@@ -150,7 +152,10 @@ export const itemAsksSchema = z.array(itemAskSchema).describe(ITEM_ASKS_DESCRIPT
 export const storedItemAskSchema = z
   .looseObject({
     ...askFields,
-    options: z.array(askOptionSchema.loose()).min(2),
+    // `label` comes from the workflow's declared options (`returns.options[].label`).
+    options: z
+      .array(askOptionSchema.extend({ label: z.string().min(1).optional() }).loose())
+      .min(2),
     recommendation: attentionRecommendationSchema.loose().nullable(),
     no_recommendation: z.string().min(1).optional(),
   })

@@ -300,11 +300,22 @@ export function registerCodebaseRoutes(
       deduped.push(...seen.values());
       deduped.sort((a, b) => a.name.localeCompare(b.name));
 
-      const itemPacks = await listItemPacks();
+      // The pack scan reads every item run; when it fails the list still serves, with the
+      // one field it feeds unknown (null), not a 500 for every project.
+      let itemPacks: ReadonlyMap<string, string[]> | null;
+      try {
+        itemPacks = await listItemPacks();
+      } catch (error) {
+        getLog().warn({ err: error }, 'list_codebases_item_packs_failed');
+        itemPacks = null;
+      }
       return c.json(
         deduped.map(cb => ({
           ...toApiCodebase(cb),
-          item_packs: itemPacks.get(projectKeyForCodebase(cb, cb.default_cwd)) ?? [],
+          item_packs:
+            itemPacks === null
+              ? null
+              : (itemPacks.get(projectKeyForCodebase(cb, cb.default_cwd)) ?? []),
         }))
       );
     } catch (error) {

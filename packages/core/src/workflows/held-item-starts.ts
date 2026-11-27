@@ -4,7 +4,7 @@
  */
 import { createLogger } from '@archon/paths';
 import type { HeldStart } from '@archon/workflows/resource-start-store';
-import type { IWorkflowStore } from '@archon/workflows/store';
+import type { ItemNamingHeldStart } from '@archon/workflows/schemas/item-held-start';
 import { CheckoutCodebaseAmbiguousError } from '../services/codebase-checkout-resolver';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -19,7 +19,7 @@ export interface HeldStartSources {
   projectKeyOf: (cwd: string) => Promise<string | null>;
 }
 
-type HeldItemStarts = Awaited<ReturnType<IWorkflowStore['listAllHeldItemStarts']>>;
+type PlacedHeldStart = Extract<ItemNamingHeldStart, { projectKey: string }>;
 
 /**
  * The held binding starts that name an item, each with the item it names. A binding is
@@ -27,38 +27,43 @@ type HeldItemStarts = Awaited<ReturnType<IWorkflowStore['listAllHeldItemStarts']
  * the way it will then; only a start whose key matches is resolved.
  *
  * `all` is the read of many items at once: a start whose checkout matches more than one
- * registered codebase is logged and left out, so one such checkout cannot fail a read of every
- * item (#286). `naming` is the read of one item's starts, which a decision depends on, so it
+ * registered codebase is logged and listed unplaced, with the reason, so one such checkout
+ * cannot fail a read of every item (#286) and the start still shows on the item reads its
+ * key names. `naming` is the read of one item's starts, which a decision depends on, so it
  * still fails on that ambiguity. Any other failure throws from both.
  */
 export function heldStartReads(sources: HeldStartSources): {
-  all: () => Promise<HeldItemStarts>;
-  naming: (itemKey: string) => Promise<HeldItemStarts>;
+  all: () => Promise<ItemNamingHeldStart[]>;
+  naming: (itemKey: string) => Promise<PlacedHeldStart[]>;
 } {
   const read = async (
     keyMatches: (itemKey: string) => boolean,
-    skipAmbiguous: boolean
-  ): Promise<HeldItemStarts> => {
-    const held: HeldItemStarts = [];
+    listAmbiguous: boolean
+  ): Promise<ItemNamingHeldStart[]> => {
+    const held: ItemNamingHeldStart[] = [];
     for (const start of await sources.listHeldStarts()) {
       if (start.kind !== 'trigger' || start.itemKey === null || start.cwd === null) continue;
       if (!keyMatches(start.itemKey)) continue;
       const { receiptId, bindingId, hostId, workflow, receivedAt, itemKey, cwd } = start;
+      const fields = { receiptId, bindingId, hostId, workflow, receivedAt, itemKey };
       let projectKey: string | null;
       try {
         projectKey = await sources.projectKeyOf(cwd);
       } catch (error) {
-        if (!skipAmbiguous || !(error instanceof CheckoutCodebaseAmbiguousError)) throw error;
+        if (!listAmbiguous || !(error instanceof CheckoutCodebaseAmbiguousError)) throw error;
         getLog().warn({ err: error, receiptId, cwd }, 'held_start_project_ambiguous');
+        held.push({ ...fields, projectKey: null, unplaced: error.message });
         continue;
       }
-      if (projectKey !== null)
-        held.push({ receiptId, bindingId, hostId, workflow, receivedAt, itemKey, projectKey });
+      if (projectKey !== null) held.push({ ...fields, projectKey });
     }
     return held;
   };
   return {
     all: () => read(() => true, true),
-    naming: itemKey => read(key => key === itemKey, false),
+    naming: async itemKey =>
+      (await read(key => key === itemKey, false)).filter(
+        (start): start is PlacedHeldStart => start.projectKey !== null
+      ),
   };
 }

@@ -95,6 +95,7 @@ const graph: PackGraph = {
     observes: false,
     asks: false,
     waits: false,
+    options: null,
     nodes: [],
   })),
   entries: [],

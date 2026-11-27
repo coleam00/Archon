@@ -76,7 +76,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `observes` | `true` declares that the workflow's runs act on an item without being steps of it: an advice stage, a shadow judgment, a drain, a check after a merge. An observing run never stops, ends or moves its item. The stop and end rules read past it to the item's last step, so a stopped item stays listed while it runs and after it completes or fails, an ended item stays ended, and an observing run that fails is not listed itself. It can still leave asks and waits on the item. It cannot be combined with `returns.ends`. Default `false`. See [`returns.ends`](#workflow-signature-inputs-returns-and-inputs). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
-| `display` | What a person reads about the workflow, served by the pack graph (`GET /api/packs/{pack}/graph`, `archon pack graph`) and never read by the executor. `label` (required, up to 80 characters), `short` (up to 24), `blurb` (up to 300) and `story` (one sentence of up to 160, or `{ withChange, withoutChange }`, for a run whose outcome tells none). `outcomes` gives each value of the declared outcome (`returns.outcome`) an optional `label` and `story`; `answers` gives each declared ask option (`returns.options`), and the reserved `other`, a `label`. `phases` tells the workflow as numbered phases of cards (`{ title, text, icon, kind, covers }`, `covers` naming the steps by the ids their runs record). `marks` (`{ node, outcome, means }`), `results` (a name to a JSON pointer into the workflow's result) and `replaces` (a retired workflow whose runs a reader counts as this one's, with its own `loops`, `marks` and `results`) tell a reader how to read the workflow's runs. `icon`, `kind`, `means` and the names are slugs a reader gives its own meaning; the engine checks only their spelling. An unknown key, an outcome the workflow cannot end with, an option it does not declare, or a step it does not have fails the load. `archon validate` warns on an in-flow stage of a pack, one of its steps, outcome values or asks-settled options with no words, and refuses a `replaces` naming a workflow the pack still has. |
+| `display` | What a person reads about the workflow, served by the pack graph (`GET /api/packs/{pack}/graph`, `archon pack graph`) and never read by the executor. `label` (required, up to 80 characters), `short` (up to 24), `blurb` (up to 300) and `story` (one sentence of up to 160, or `{ withChange, withoutChange }`, for a run whose outcome tells none). `outcomes` gives each value of the declared outcome (`returns.outcome`) an optional `label` and `story`. An ask option's words are its `label` in `returns.options`, not here. `phases` tells the workflow as numbered phases of cards (`{ title, text, icon, kind, covers }`, `covers` naming the steps by the ids their runs record). `marks` (`{ node, outcome, means }`), `results` (a name to a JSON pointer into the workflow's result) and `replaces` (a retired workflow whose runs a reader counts as this one's, with its own `loops`, `marks` and `results`) tell a reader how to read the workflow's runs. `icon`, `kind` and the names are slugs a reader gives its own meaning; `means` is `returns` (the run sent its item back) or `approves` (it passed it on). Words never stop a run: an unknown key is ignored, a malformed field is dropped, a missing or malformed `label` drops the whole block, and a field naming an outcome the workflow cannot end with or a step it does not have is dropped, each with a load warning; the workflow still loads and runs. `archon validate` warns on an in-flow stage of a pack, one of its steps, outcome values or asks-settled options with no words, and refuses a mark whose `means` is neither `returns` nor `approves` (in `marks` or a `replaces` entry's), a `results` pointer that does not reach a property the returns node's `output_format` declares, a `replaces` naming a workflow the pack still has, and a retired workflow that one stage or two name twice. |
 
 Some fields are retired. Workflow-level `interactive:` loads with a warning and has no effect. `modelReasoningEffort:` is applied as `effort:` with a warning. The old sequential `steps:` format fails to load, and so does `thinking:` on a workflow, node, tier or alias, with an error pointing at `effort:`. Workflow-level `evidence_policy:` also fails to load: it only checked that a file named `evidence.json` existed, so use a `bash:` or `script:` node that exits non-zero when a check must fail the run.
 
@@ -108,7 +108,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 |-------|------|---------|-------------|
 | `id` | string | required | Unique node identifier. Used in `depends_on`, `when:`, and `$id.output` substitution |
 | `depends_on` | string[] | `[]` | Node IDs that must complete before this node runs |
-| `display` | `{ label, text? }` | unset | The node's name for a person (up to 80 characters), and an optional longer line (up to 160), served by the pack graph under the id the node runs as (`<include>__<id>` for an included node). Never read by the executor. Not allowed on an `include:` node without `fan_out`: put it on the included workflow's node. An unknown key fails the load |
+| `display` | `{ label, text? }` | unset | The node's name for a person (up to 80 characters), and an optional longer line (up to 160), served by the pack graph under the id the node runs as (`<include>__<id>` for an included node). Never read by the executor. On an `include:` node without `fan_out` it is ignored with a warning: put it on the included workflow's node. An unknown key is ignored, and a block that does not parse is dropped, each with a warning; the node still loads |
 | `when` | string | unset | Condition expression. Node is skipped if false. See [Condition Syntax](#when-condition-syntax) |
 | `trigger_rule` | string | `all_success` | Join semantics when multiple upstreams exist. Distinct from a fan-out node's [`fan_out.join`](#the-four-fields), which reduces one node's N children and defaults to `all_done` |
 | `context` | `'fresh'` \| `'shared'` \| `'same'` \| `{ resume: node-id }` | unset | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `same` = continue the session this node itself last had, in its previous loop round or an earlier run on the same item (see [Continuing a node's own session](#continuing-a-nodes-own-session)); `resume` = fork the exact completed upstream node's session. Parallel layers require named resume, `same`, or fresh context |
@@ -2500,7 +2500,7 @@ nodes:
   decisions the run leaves for an operator: its asks. See [Asks](#asks-decisions-a-run-leaves-on-its-item).
 
 - **`returns.options`**: with `asks`, the one set of options every ask of the workflow offers,
-  each with an `id`, what it `does` and what it `cost`s. See [Declared
+  each with an `id`, what it `does`, what it `cost`s and an optional `label`. See [Declared
   options](#declared-options-one-set-for-every-ask).
 
 - **`returns.waits`**: a property of the `returns:` node's output, defined and required by the engine, that holds what
@@ -2651,10 +2651,14 @@ returns:
   node: decide
   asks: asks
   options:
-    - { id: send-back, does: The builder continues with the answer., cost: Another round. }
+    - { id: send-back, label: sent back, does: The builder continues with the answer., cost: Another round. }
     - { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }
 ```
 
+- An option's optional `label` (up to 80 characters) is the short words a person reads where
+  the option is shown or was chosen: the attention queue, the console and the pack graph's
+  `stage.options`. A surface shows the id where there is none. The label is the author's,
+  never the model's: the node's ask schema does not carry it.
 - The set holds at least two options, no id twice, and not the reserved `other`, which every
   ask offers anyway. `options` without `asks` fails to load.
 - The node writes no options. Its ask schema has no `options` field, and
@@ -2669,8 +2673,8 @@ returns:
   the note that `returns.options` supplies them and the ids every ask offers. (An
   additional-property error quotes the object's `description`, when it has one, for any
   output schema.)
-- When the run completes, each ask is stored with the declared options, `does` and `cost` as
-  the YAML wrote them, so `archon workflow attention`, the console and the item's tracker
+- When the run completes, each ask is stored with the declared options, `label`, `does` and
+  `cost` as the YAML wrote them, so `archon workflow attention`, the console and the item's tracker
   comment show them like any ask's options.
 - `archon trigger check`, `archon pack bindings` and the check a bound start gets report an
   asks-settled binding whose `option` is not a declared id (or `other`): no answer could start

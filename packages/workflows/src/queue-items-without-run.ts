@@ -111,7 +111,12 @@ export async function askQueueItem(
     message: ask.ask.question,
     form: 'select',
     options: [
-      ...ask.ask.options.map(option => ({ id: option.id, does: option.does, cost: option.cost })),
+      ...ask.ask.options.map(option => ({
+        id: option.id,
+        ...(option.label === undefined ? {} : { label: option.label }),
+        does: option.does,
+        cost: option.cost,
+      })),
       OTHER_ATTENTION_OPTION,
     ],
     other: true,

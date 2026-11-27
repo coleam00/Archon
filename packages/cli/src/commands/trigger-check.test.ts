@@ -395,6 +395,17 @@ test('names the observing sources nothing watches with the fix, and the watcher 
   });
   expect(failing.error).toBeUndefined();
 
+  // A record that exists but fails validation is a problem, not "no pass recorded".
+  await writeFile(lastPass, JSON.stringify({ ...failed, ok: 'yes' }));
+  const unreadable = await check();
+  expect(unreadable.observing).toEqual({
+    sources: observed,
+    watcher: { installed: true, registered: true },
+    unwatched: false,
+    problem: expect.stringContaining(`its last-pass record ${lastPass} could not be read`),
+  });
+  expect(unreadable.error).toBeUndefined();
+
   // With the sources file only in the job (passed with --sources), check reads the file the
   // job's watcher recorded.
   delete process.env.ARCHON_WEBHOOK_SOURCES;

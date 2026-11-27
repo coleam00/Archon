@@ -40,15 +40,36 @@ export function wakeLastPassPath(
   return join(target.archonHome, 'schedules', `${target.id}.last-pass.json`);
 }
 
-/** The last pass recorded for the installed job, when a watcher has recorded a readable one. */
-export async function readWakeLastPass(
-  path = wakeLastPassPath()
-): Promise<WakeLastPass | undefined> {
+/**
+ * What the last-pass record says: `none` when no watcher has written one, `read` with the
+ * pass, or `unreadable` with why, for a record that exists but cannot be read, is not JSON
+ * or fails the schema. An unreadable record is not "no pass recorded": a reader that
+ * conflated them would report a watcher that writes a broken record as one never run.
+ */
+export type WakeLastPassRead =
+  | { kind: 'none' }
+  | { kind: 'read'; pass: WakeLastPass }
+  | { kind: 'unreadable'; reason: string };
+
+/** The last pass recorded for the installed job (`WakeLastPassRead`). */
+export async function readWakeLastPass(path = wakeLastPassPath()): Promise<WakeLastPassRead> {
+  let text: string;
   try {
-    return wakeLastPassSchema.parse(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
-    return undefined;
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'none' };
+    return { kind: 'unreadable', reason: (error as Error).message };
   }
+  let document: unknown;
+  try {
+    document = JSON.parse(text);
+  } catch (error) {
+    return { kind: 'unreadable', reason: `not JSON: ${(error as Error).message}` };
+  }
+  const parsed = wakeLastPassSchema.safeParse(document);
+  return parsed.success
+    ? { kind: 'read', pass: parsed.data }
+    : { kind: 'unreadable', reason: z.prettifyError(parsed.error) };
 }
 
 /** Replaces the record whole, so a reader never sees half of one. */

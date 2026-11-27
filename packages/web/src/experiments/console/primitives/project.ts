@@ -11,12 +11,16 @@ export interface Project {
   kind: 'repo' | 'folder';
   /**
    * The workflow packs with a run on an item of the project, by pack key. Empty for a
-   * project with no item on a pack stage, and for a project read outside the list.
+   * project with no item on a pack stage, for a project read outside the list, and when the
+   * server could not scan the item runs.
    */
   itemPacks: string[];
 }
 
-type RawCodebase = components['schemas']['Codebase'] & { item_packs?: string[] };
+/** A codebase as the list serves it (with `item_packs`), or as a single read serves it. */
+type RawCodebase =
+  | components['schemas']['CodebaseListResponse'][number]
+  | components['schemas']['Codebase'];
 
 export function toProject(raw: RawCodebase): Project {
   return {
@@ -27,6 +31,6 @@ export function toProject(raw: RawCodebase): Project {
     repositoryUrl: raw.repository_url,
     lastSyncedAt: raw.updated_at,
     kind: raw.kind,
-    itemPacks: raw.item_packs ?? [],
+    itemPacks: ('item_packs' in raw ? raw.item_packs : null) ?? [],
   };
 }

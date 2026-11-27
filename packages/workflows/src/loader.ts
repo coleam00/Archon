@@ -43,6 +43,7 @@ import {
   resolveEffort,
 } from './loader/workflow-fields';
 import { parseDagNodes } from './loader/node-parse';
+import { withoutDisplayProblems } from './loader/display-contract';
 import {
   persistSessionError,
   sameContextProviderError,
@@ -201,7 +202,9 @@ function parseWorkflowDocument(
 
   collectUnknownWorkflowKeys(raw, header.name, parseWarnings);
 
-  const workflow = buildWorkflowDefinition(header, dagNodes, fields, pack);
+  const words = withoutDisplayProblems(buildWorkflowDefinition(header, dagNodes, fields, pack));
+  parseWarnings.push(...words.warnings);
+  const workflow = words.workflow;
   const contractError = workflowContractError(workflow, configuredEnvNames, parseWarnings);
   if (contractError !== null) return reject(contractError);
 
@@ -313,8 +316,7 @@ function parseWorkflowFields(
   if ('error' in returns) return returns.error;
   const observes = parseObserves(raw.observes);
   if ('error' in observes) return observes.error;
-  const display = parseDisplay(raw.display);
-  if ('error' in display) return display.error;
+  const display = parseDisplay(raw.display, workflowName, parseWarnings);
   const effort = resolveEffort(
     raw.effort,
     modelReasoningEffort,
@@ -350,7 +352,7 @@ function parseWorkflowFields(
     result: returns.value?.result,
     observes: observes.value,
     deprecated: deprecated.value,
-    display: display.value,
+    display,
   };
 }
 

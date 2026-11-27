@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { itemStanding } from './item-standing';
 import type { WorkflowRun } from './schemas/workflow-run';
 
-type Run = Parameters<typeof itemStanding>[0]['runs'][number];
+type Run = Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'completed_outcome' | 'metadata'>;
 
 function run(
   id: string,
@@ -71,15 +71,21 @@ describe('where an item stands', () => {
     expect(standing([run('r1', 'failed'), rerun]).state).toBe('resting');
   });
 
-  test('a start that failed, or ended with an outcome nothing followed, needs a decision', () => {
+  test('a start that failed, or one the engine recorded a stop for, needs a decision', () => {
     expect(standing([run('r1', 'failed')]).state).toBe('failed');
-    expect(standing([run('r1', 'completed', { outcome: 'refused' })]).state).toBe('stopped');
+    const refused = [run('r1', 'completed', { outcome: 'refused' })];
+    expect(standing(refused, { stopped: true }).state).toBe('stopped');
+  });
+
+  test('a completed run with an outcome reads stopped only by the engine stop rule', () => {
+    // No stop recorded (an older run, or a stop the engine does not count): at rest.
+    expect(standing([run('r1', 'completed', { outcome: 'refused' })]).state).toBe('resting');
   });
 
   test('an item is done when every part is done, and not by having no parts', () => {
     const split = [run('r1', 'completed', { outcome: 'split' })];
     expect(standing(split, { parts: [{ done: true }, { done: true }] }).state).toBe('done');
-    expect(standing(split).state).toBe('stopped');
+    expect(standing(split, { stopped: true }).state).toBe('stopped');
   });
 
   test('an item that split into parts never needs a decision of its own while they go on', () => {
@@ -98,7 +104,7 @@ describe('where an item stands', () => {
     expect(standing(linked, { dependsOn: [{ done: false }] }).state).toBe('waiting');
     expect(standing(linked, { dependsOn: [{ done: false }], stopped: true }).state).toBe('waiting');
     // Once what it depends on is done, nothing moves it but a decision; a failure stays one.
-    expect(standing(linked, { dependsOn: [{ done: true }] }).state).toBe('stopped');
+    expect(standing(linked, { dependsOn: [{ done: true }], stopped: true }).state).toBe('stopped');
     expect(standing([run('r1', 'failed')], { dependsOn: [{ done: false }] }).state).toBe('failed');
   });
 
@@ -123,9 +129,9 @@ describe('where an item stands', () => {
       'resting'
     );
     expect(standing(finished, { ended: 'outcome', parts: [{ done: true }] }).state).toBe('done');
-    // A run from before item ends that recorded its outcome final reads as it always did.
+    // Only the engine's end finishes an item: a run carrying an `item_final` key is not done.
     const older = [run('r1', 'completed', { outcome: 'dropped', metadata: { item_final: true } })];
-    expect(standing(older).state).toBe('done');
+    expect(standing(older).state).toBe('resting');
   });
 
   test('a run that observes the item moves it nowhere: standing reads past it', () => {

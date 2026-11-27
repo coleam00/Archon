@@ -9,7 +9,13 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { changeMergeState, forgePluginsOnce, prRefFromAudits, viewWorkItem } from './forge-host';
 
 const URL10 = 'https://github.com/coleam00/archon-factory-console/pull/10';
-const byUrl = (rows: unknown[]) => ({ kind: 'url' as const, url: URL10, audits: rows });
+const PROJECT_REMOTE = 'https://github.com/coleam00/archon-factory-console.git';
+const byUrl = (rows: unknown[], remote: string | null = PROJECT_REMOTE) => ({
+  kind: 'url' as const,
+  url: URL10,
+  audits: rows,
+  remote,
+});
 const repo = { host: 'github.com', path: 'coleam00/archon-factory-console' };
 const prRecord = {
   repo,
@@ -79,14 +85,20 @@ const noPlugins = async (): Promise<PluginDiscovery> => none;
 type Dispatch = typeof dispatchForge;
 type Dispatched = Awaited<ReturnType<Dispatch>>;
 
+/**
+ * A forge that answers every request with `response`, except that it resolves a remote to
+ * `repo` when `response` is not itself a resolve answer.
+ */
 function answering(response: Dispatched['response']): {
   dispatch: Dispatch;
   asked: ForgeRequest[];
 } {
   const asked: ForgeRequest[] = [];
+  const answersResolve = response.ok && response.result.op === 'resolve';
   const dispatch: Dispatch = async request => {
     asked.push(request);
-    return { response, plugin: null, audit: {} as Dispatched['audit'] };
+    const answer = request.op === 'resolve' && !answersResolve ? resolved : response;
+    return { response: answer, plugin: null, audit: {} as Dispatched['audit'] };
   };
   return { dispatch, asked };
 }
@@ -139,6 +151,8 @@ describe('the merge state of a change', () => {
       number: 10,
     });
     expect(asked).toEqual([
+      // The project's remote, resolved without a credential, scopes the change.
+      { op: 'resolve', operationId: expect.any(String), remote: PROJECT_REMOTE },
       {
         op: 'pr.view',
         operationId: expect.any(String),
@@ -231,7 +245,7 @@ describe('when the forge cannot say, or no audit row names the change', () => {
       mergedAt: '2026-11-17T01:00:00Z',
       number: 10,
     });
-    expect(forge.asked[0]).toMatchObject({ op: 'resolve', remote: URL10, web: true });
+    expect(forge.asked[1]).toMatchObject({ op: 'resolve', remote: URL10, web: true });
   });
 
   test('a URL the forge resolves to an issue is unknown, and no pull request is asked for', async () => {
@@ -244,7 +258,50 @@ describe('when the forge cannot say, or no audit row names the change', () => {
       merged: 'unknown',
     });
     // The issue's number is never sent to `pr.view` as if it were a pull request's.
-    expect(asked.map(request => request.op)).toEqual(['resolve']);
+    expect(asked.map(request => request.op)).toEqual(['resolve', 'resolve']);
+  });
+
+  test('a URL in another repository is unknown with why, and no pull request is viewed', async () => {
+    const elsewhere = { host: 'github.com', path: 'someone/private-repo' };
+    const foreignAudit = structuredClone(audits[1]) as {
+      result: { result: { value: { pr: { repo: unknown; url: string } } } };
+    };
+    foreignAudit.result.result.value.pr.repo = elsewhere;
+    const foreignResolve = structuredClone(resolved) as unknown as {
+      result: { value: { repo: unknown } };
+    };
+    foreignResolve.result.value.repo = elsewhere;
+    const reason = `the change at ${URL10} is not in this project's repository`;
+    // Named by the run's audit rows, or found by resolving the URL: either way, no pr.view.
+    for (const [rows, onResolve] of [
+      [[foreignAudit], resolved],
+      [[], foreignResolve as unknown as Dispatched['response']],
+    ] as const) {
+      const asked: ForgeRequest[] = [];
+      const dispatch: Dispatch = async request => {
+        asked.push(request);
+        const web = request.op === 'resolve' && request.web === true;
+        return {
+          response: web ? onResolve : request.op === 'resolve' ? resolved : viewed('merged', null),
+          plugin: null,
+          audit: {} as Dispatched['audit'],
+        };
+      };
+      expect(await changeMergeState(byUrl([...rows]), noBranches, via(dispatch))).toMatchObject({
+        merged: 'unknown',
+        reason,
+      });
+      expect(asked.some(request => request.op === 'pr.view')).toBe(false);
+    }
+  });
+
+  test('a URL lookup for a project with no remote asks the forge nothing', async () => {
+    const { dispatch, asked } = answering(viewed('merged', null));
+    expect(await changeMergeState(byUrl(audits, null), noBranches, via(dispatch))).toMatchObject({
+      merged: 'unknown',
+      reason: 'the project has no remote to scope the change to',
+    });
+    expect(asked).toEqual([]);
   });
 
   test('a run that named no URL walks its branches newest first, past those with none', async () => {

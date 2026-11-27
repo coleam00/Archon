@@ -3132,6 +3132,12 @@ declare module 'archon:script' {
         readonly reason: 'link_unreadable';
         readonly linkId: string;
       };
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'held_start_unplaced';
+      readonly receiptId: string;
+      readonly workflow: string | null;
+      readonly message: string;
     }>;
   };
 
@@ -3934,6 +3940,12 @@ declare module 'archon:script' {
           readonly reason: 'link_unreadable';
           readonly linkId: string;
         };
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'held_start_unplaced';
+        readonly receiptId: string;
+        readonly workflow: string | null;
+        readonly message: string;
       }>;
     }>;
     readonly next: string | null;

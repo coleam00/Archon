@@ -1,13 +1,8 @@
 // @archon-test-isolated
-import {
-  discoverFiles,
-  parseError,
-  parseWorkflow,
-  parseWorkflowYaml,
-  useTempWorkflowRoot,
-} from './test-utils';
+import { discoverFiles, parseWorkflowYaml, useTempWorkflowRoot } from './test-utils';
 import { describe, it, expect } from 'bun:test';
 import { buildPackGraph } from '../pack-graph';
+import { itemAsksJsonSchema, parseItemAsks } from '../schemas/item-ask';
 
 /** A stage whose `end` node returns one of `values` as its outcome, with `extra` YAML after it. */
 const stage = (extra: string, values = '[go, stop]') => `name: decide
@@ -56,51 +51,101 @@ describe('display: on a workflow, a node and an outcome', () => {
     expect(warnings).toEqual([]);
   });
 
-  it('refuses an unknown key at every level as a load error, not a warning', () => {
-    expect(parseError(stage('display: { label: Decide, lable: Decide }\n'))).toContain(
-      "Invalid 'display'"
-    );
-    expect(
-      parseError(stage('display: { label: Decide, outcomes: { go: { label: Go, tale: x } } }\n'))
-    ).toContain("Invalid 'display'");
-    expect(
-      parseError(
-        stage('').replace('    bash:', '    display: { label: End, lable: End }\n    bash:')
-      )
-    ).toContain('display');
-    // A node display without its label is as wrong as a misspelt key.
-    expect(
-      parseWorkflow(stage('').replace('    bash:', '    display: {}\n    bash:'), 'x.yaml').workflow
-    ).toBeNull();
+  // Words never stop a run: each of these refused the workflow before. Now it loads and runs,
+  // the bad words are dropped, and a warning names them.
+  it('drops a malformed display block with a warning instead of refusing the workflow', () => {
+    for (const line of ['display: { label: 1 }', 'display: [Decide]', 'display: { short: S }']) {
+      const { workflow, warnings } = parseWorkflowYaml(stage(`${line}\n`));
+      expect(workflow).not.toHaveProperty('display');
+      expect(warnings.join('\n')).toContain('display');
+    }
   });
 
-  it('refuses words for an outcome the workflow cannot end with', () => {
-    expect(
-      parseError(stage('display: { label: D, outcomes: { gone: { label: Gone } } }\n'))
-    ).toContain("display.outcomes names 'gone'");
-    expect(
-      parseError(`name: plain
+  it('ignores an unknown display key, keeping the rest of the words', () => {
+    const { workflow, warnings } = parseWorkflowYaml(
+      stage('display: { label: Decide, future: { anything: 1 } }\n')
+    );
+    expect(workflow.display).toEqual({ label: 'Decide' });
+    expect(warnings).toContain("Workflow 'decide': unknown display key 'future' is ignored");
+  });
+
+  it('drops only the malformed field, naming it, when a nested key is misspelt', () => {
+    const { workflow, warnings } = parseWorkflowYaml(
+      stage(
+        'display: { label: Decide, short: Calls it, outcomes: { go: { label: Go, tale: x } } }\n'
+      )
+    );
+    expect(workflow.display).toEqual({ label: 'Decide', short: 'Calls it' });
+    expect(warnings.join('\n')).toContain('display.outcomes is invalid and ignored');
+  });
+
+  it('strips an unknown node display key, and drops a node display that does not parse', () => {
+    const withWords = (words: string) =>
+      parseWorkflowYaml(stage('').replace('    bash:', `    display: ${words}\n    bash:`));
+    const typo = withWords('{ label: End, lable: End }');
+    expect(typo.workflow.nodes[0]).toMatchObject({ display: { label: 'End' } });
+    expect(typo.warnings).toContain("Node 'end': unknown display key 'lable' is ignored");
+    for (const words of ['{}', '{ lable: End }']) {
+      const { workflow, warnings } = withWords(words);
+      expect(workflow.nodes[0]).not.toHaveProperty('display');
+      expect(warnings.join('\n')).toContain("Node 'end': display is invalid and ignored");
+    }
+  });
+
+  it('drops a malformed display on a loop body node, and the loop still loads', () => {
+    const { workflow, warnings } = parseWorkflowYaml(`name: looped
+description: loops
+nodes:
+  - id: rounds
+    loop_group:
+      until_bash: 'true'
+      max_iterations: 2
+      nodes:
+        - id: verdict
+          display: { text: Each verdict }
+          bash: 'true'
+`);
+    const [rounds] = workflow.nodes;
+    expect(rounds).toMatchObject({ loop_group: { nodes: [{ id: 'verdict' }] } });
+    expect(JSON.stringify(rounds)).not.toContain('Each verdict');
+    expect(warnings.join('\n')).toContain("loop_group node 'verdict': display is invalid");
+  });
+
+  it('drops words for an outcome the workflow cannot end with, keeping the label', () => {
+    const { workflow, warnings } = parseWorkflowYaml(
+      stage('display: { label: D, outcomes: { gone: { label: Gone } } }\n')
+    );
+    expect(workflow.display).toEqual({ label: 'D' });
+    expect(warnings.join('\n')).toContain("display.outcomes names 'gone'");
+    const plain = parseWorkflowYaml(`name: plain
 description: no outcome
 nodes:
   - id: end
     bash: 'true'
 display: { label: Plain, outcomes: { go: { label: Go } } }
-`)
-    ).toContain('display.outcomes but no returns.outcome');
+`);
+    expect(plain.workflow.display).toEqual({ label: 'Plain' });
+    expect(plain.warnings.join('\n')).toContain('declares no returns.outcome');
   });
 
-  it('refuses display: on an include node, whose label belongs on the included node', () => {
-    expect(
-      parseError(`name: outer
+  it('drops display: on an include node, whose label belongs on the included node', () => {
+    const { workflow, warnings } = parseWorkflowYaml(`name: outer
 description: includes
 nodes:
   - id: blk
     include: decide
     display: { label: Block }
-`)
-    ).toContain(
-      "is not supported on an include node: it expands into the included workflow's nodes"
+`);
+    expect(workflow.nodes[0]).not.toHaveProperty('display');
+    expect(warnings.join('\n')).toContain("'display' is ignored on an include node");
+  });
+
+  it('tells a pack still writing display.answers where the words went', () => {
+    const { workflow, warnings } = parseWorkflowYaml(
+      stage('display: { label: D, answers: { go: { label: Go } } }\n')
     );
+    expect(workflow.display).toEqual({ label: 'D' });
+    expect(warnings.join('\n')).toContain("its 'label' in returns.options");
   });
 });
 
@@ -135,15 +180,12 @@ nodes:
       required: [outcome]
 ${extra}`;
 
-describe('display: answers, phases, marks, results and replaces', () => {
+describe('display: phases, marks, results and replaces, and option labels', () => {
   it('parses each and serves it as written', () => {
     const { workflow } = parseWorkflowYaml(
       asking(`display:
   label: Decide
   story: It decided
-  answers:
-    send-back: { label: sent back }
-    other: { label: something else }
   phases:
     - label: Read
       cards:
@@ -161,7 +203,6 @@ describe('display: answers, phases, marks, results and replaces', () => {
     );
     expect(workflow.display).toMatchObject({
       story: 'It decided',
-      answers: { 'send-back': { label: 'sent back' }, other: { label: 'something else' } },
       marks: [{ node: 'rounds.verdict', outcome: 'stop', means: 'returns' }],
       results: { round: '/round', change: '/change' },
       replaces: [{ workflow: 'older', loops: { round: 'loop' } }],
@@ -172,46 +213,75 @@ describe('display: answers, phases, marks, results and replaces', () => {
     ]);
   });
 
-  it('refuses an answer for an option the workflow does not declare', () => {
-    expect(
-      parseError(asking('display: { label: D, answers: { keep: { label: kept } } }\n'))
-    ).toContain("display.answers names 'keep', which is not an option it declares");
-    expect(
-      parseError(stage('display: { label: D, answers: { other: { label: else } } }\n'))
-    ).toContain('display.answers but no returns.options');
+  it("loads an option's label from returns.options, and its asks carry it", () => {
+    const { workflow } = parseWorkflowYaml(
+      asking('').replace(
+        '{ id: send-back, does: Sends it back, cost: A round }',
+        '{ id: send-back, label: sent back, does: Sends it back, cost: A round }'
+      )
+    );
+    expect(workflow.result?.options).toEqual([
+      { id: 'send-back', label: 'sent back', does: 'Sends it back', cost: 'A round' },
+      { id: 'drop', does: 'Drops it', cost: 'The work' },
+    ]);
+    // The asks schema the model writes to is built from ids only, so a label never reaches it.
+    const asks = parseItemAsks(
+      [{ question: 'Q?', context: 'C', recommendation: null, artifacts: [] }],
+      workflow.result?.options
+    );
+    expect(asks).toMatchObject({
+      asks: [{ options: [{ id: 'send-back', label: 'sent back' }, { id: 'drop' }] }],
+    });
+    expect(JSON.stringify(itemAsksJsonSchema(workflow.result?.options))).not.toContain('sent back');
   });
 
-  it('refuses a card or a mark naming a step the workflow lacks, and a step two cards cover', () => {
+  it('drops a card or a mark naming a step the workflow lacks, and a step two cards cover', () => {
     const card = (covers: string) =>
       asking(`display:
   label: D
+  marks: [{ node: end, outcome: stop, means: returns }]
   phases:
     - label: P
       cards:
         - { title: A, text: a, icon: send, kind: script, covers: [${covers}] }
         - { title: B, text: b, icon: send, kind: script, covers: [end] }
 `);
-    expect(parseError(card('verdict'))).toContain(
-      "display.phases card 'A' names step 'verdict', which it does not have"
+    for (const [covers, why] of [
+      ['verdict', "display.phases card 'A' names step 'verdict', which the workflow does not have"],
+      ['end', "cards 'A' and 'B' both cover step 'end'"],
+    ] as const) {
+      const { workflow, warnings } = parseWorkflowYaml(card(covers));
+      expect(workflow.display).not.toHaveProperty('phases');
+      // Only the field that names what the workflow lacks goes.
+      expect(workflow.display?.marks).toHaveLength(1);
+      expect(warnings.join('\n')).toContain(why);
+    }
+    const marked = parseWorkflowYaml(
+      asking('display: { label: D, marks: [{ node: gone, outcome: stop, means: returns }] }\n')
     );
-    expect(parseError(card('end'))).toContain("cards 'A' and 'B' both cover step 'end'");
-    expect(
-      parseError(
-        asking('display: { label: D, marks: [{ node: gone, outcome: stop, means: returns }] }\n')
-      )
-    ).toContain("display.marks names step 'gone'");
+    expect(marked.workflow.display).toEqual({ label: 'D' });
+    expect(marked.warnings.join('\n')).toContain("display.marks names step 'gone'");
   });
 
-  it('refuses a malformed slug, pointer or key at every new level', () => {
+  it('drops a malformed slug, pointer or key at every level, keeping the label', () => {
     const bad = [
-      'display: { label: D, results: { round: round } }',
-      'display: { label: D, marks: [{ node: end, outcome: stop, means: Returns }] }',
-      'display: { label: D, answers: { drop: { label: x, starts: y } } }',
-      'display: { label: D, phases: [{ label: P, cards: [{ title: A, text: a, icon: Send, kind: script, covers: [end] }] }] }',
-      'display: { label: D, replaces: [{ workflow: older, loop: rounds }] }',
-      'display: { label: D, replaces: [{ workflow: older, results: { change: change } }] }',
-    ];
-    for (const line of bad) expect(parseError(asking(`${line}\n`))).toContain("Invalid 'display'");
+      ['results', 'display: { label: D, results: { round: round } }'],
+      ['marks', 'display: { label: D, marks: [{ node: end, outcome: stop, means: Returns }] }'],
+      [
+        'phases',
+        'display: { label: D, phases: [{ label: P, cards: [{ title: A, text: a, icon: Send, kind: script, covers: [end] }] }] }',
+      ],
+      ['replaces', 'display: { label: D, replaces: [{ workflow: older, loop: rounds }] }'],
+      [
+        'replaces',
+        'display: { label: D, replaces: [{ workflow: older, results: { change: change } }] }',
+      ],
+    ] as const;
+    for (const [field, line] of bad) {
+      const { workflow, warnings } = parseWorkflowYaml(asking(`${line}\n`));
+      expect(workflow.display).toEqual({ label: 'D' });
+      expect(warnings.join('\n')).toContain(`display.${field} is invalid and ignored`);
+    }
   });
 });
 
@@ -318,12 +388,16 @@ nodes:
       'stage.yaml': stage('rounds.verdict__verdict, final__verdict'),
     });
     expect(good.errors).toEqual([]);
+    // A step the flattened workflow lacks drops the phases; the workflow keeps its label.
     const bad = await discoverFiles(root(), {
       'check.yaml': check,
       'stage.yaml': stage('final__gone'),
     });
-    expect(bad.errors.map(error => error.error).join('\n')).toContain(
-      "names step 'final__gone', which it does not have"
+    expect(bad.errors).toEqual([]);
+    const loaded = bad.workflows.find(entry => entry.workflow.name === 'stage');
+    expect(loaded?.workflow.display).toEqual({ label: 'Checks' });
+    expect(loaded?.parseWarnings?.join('\n')).toContain(
+      "names step 'final__gone', which the workflow does not have"
     );
   });
 });

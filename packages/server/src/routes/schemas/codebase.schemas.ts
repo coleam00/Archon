@@ -21,9 +21,9 @@ export const codebaseSchema = codebaseRowSchema
 export const codebaseListResponseSchema = z
   .array(
     codebaseSchema.extend({
-      item_packs: z.array(z.string()).openapi({
+      item_packs: z.array(z.string()).nullable().openapi({
         description:
-          'The keys of the workflow packs with a run on an item of this project, as GET /api/packs/{pack}/graph takes them. Empty when the project has no item on a pack stage.',
+          'The keys of the workflow packs with a run on an item of this project, as GET /api/packs/{pack}/graph takes them. Empty when the project has no item on a pack stage; null when the item runs could not be scanned.',
       }),
     })
   )

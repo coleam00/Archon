@@ -51,8 +51,9 @@ function stepHint(node: GraphNode): string {
 /**
  * Each in-flow stage with no `display.label`, each of its steps (an included node by its
  * expanded id) with none, each value of its declared outcome with no `display.outcomes` label,
- * and each ask option an asks-settled arrow leaves it on (the reserved `other` among them) with
- * no `display.answers` label. Only in-flow stages: no item stands at the rest.
+ * and each declared ask option an asks-settled arrow leaves it on with no `label` in
+ * `returns.options` (the reserved `other` is the engine's, labelled already). Only in-flow
+ * stages: no item stands at the rest.
  */
 export function unlabelled(graph: Pick<PackGraph, 'stages' | 'arrows'>): StageFinding[] {
   return graph.stages
@@ -77,10 +78,15 @@ export function unlabelled(graph: Pick<PackGraph, 'stages' | 'arrows'>): StageFi
             finding(`outcome '${value}' of stage '${workflow}' has no display.outcomes label`)
           ),
         ...settledOptions(graph, stage)
-          .filter(option => display?.answers?.[option] === undefined)
+          .filter(option => {
+            if (option === OTHER_ATTENTION_OPTION.id) return false;
+            const declared = stage.options?.find(candidate => candidate.id === option);
+            return declared !== undefined && declared.label === undefined;
+          })
           .map(option =>
             finding(
-              `option '${option}' of stage '${workflow}' has no display.answers label${option === OTHER_ATTENTION_OPTION.id ? ' (every ask offers it)' : ''}`
+              `option '${option}' of stage '${workflow}' has no label`,
+              'Give the option a label in returns.options; a reader shows its id until then.'
             )
           ),
       ];
@@ -102,4 +108,30 @@ export function replacedStillPresent(graph: Pick<PackGraph, 'stages'>): StageFin
         hint: 'Name only a workflow the pack no longer has in display.replaces.',
       }))
   );
+}
+
+/**
+ * Each retired workflow `display.replaces` names more than once, within one stage or across
+ * stages: its runs would stand at two places, or be counted twice at one.
+ */
+export function replacedTwice(graph: Pick<PackGraph, 'stages'>): StageFinding[] {
+  const first = new Map<string, string>();
+  const findings: StageFinding[] = [];
+  for (const stage of graph.stages)
+    for (const entry of stage.display?.replaces ?? []) {
+      const earlier = first.get(entry.workflow);
+      if (earlier === undefined) {
+        first.set(entry.workflow, stage.workflow);
+        continue;
+      }
+      findings.push({
+        stage: stage.workflow,
+        message:
+          earlier === stage.workflow
+            ? `stage '${stage.workflow}' display.replaces names '${entry.workflow}' twice`
+            : `stage '${stage.workflow}' display.replaces names '${entry.workflow}', which stage '${earlier}' already replaces`,
+        hint: 'Name each retired workflow once, in the one stage its runs stand at.',
+      });
+    }
+  return findings;
 }

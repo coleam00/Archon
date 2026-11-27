@@ -557,6 +557,50 @@ describe('reading an item', () => {
     ]);
   });
 
+  test('a held start naming its key that no project could place is reported, not left out', async () => {
+    const heldFields = {
+      bindingId: 'binding',
+      hostId: null,
+      workflow: 'deliver',
+      receivedAt: '2026-11-01T09:00:00.000Z',
+    };
+    const unplaced: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        listAllHeldItemStarts: async () => [
+          {
+            ...heldFields,
+            receiptId: 'ambiguous',
+            itemKey: item.key,
+            projectKey: null,
+            unplaced: 'the checkout matches two projects',
+          },
+          // Another key's unplaced start is not this item's to report.
+          {
+            ...heldFields,
+            receiptId: 'elsewhere',
+            itemKey: 'issue-99',
+            projectKey: null,
+            unplaced: 'the checkout matches two projects',
+          },
+        ],
+      },
+    };
+    const read = await readItem(unplaced, item.projectKey, item.key);
+    expect(read?.held).toEqual([]);
+    expect(read?.degraded).toContainEqual({
+      type: 'degraded',
+      reason: 'held_start_unplaced',
+      receiptId: 'ambiguous',
+      workflow: 'deliver',
+      message: 'the checkout matches two projects',
+    });
+    expect(read?.degraded.map(report => 'receiptId' in report && report.receiptId)).not.toContain(
+      'elsewhere'
+    );
+  });
+
   test('an unknown key reads as null, an item with no runs as empty but for its rulings', async () => {
     expect(await readItem(source, item.projectKey, 'issue-8')).toBeNull();
     const empty: ItemReadSource = {

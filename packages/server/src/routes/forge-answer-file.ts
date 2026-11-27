@@ -27,6 +27,46 @@ export interface Kept<T> {
   at: number;
 }
 
+/**
+ * The most issue answers, and the most change answers, kept in memory and in the file. A
+ * board shows a few hundred cards per project and a server serves a handful of projects, so
+ * this is far above what a real install reads; it bounds what a caller naming endless distinct
+ * URLs or issue numbers can make the server, and its file, hold.
+ */
+export const ISSUES_KEPT = 5000;
+export const CHANGES_KEPT = 5000;
+
+/**
+ * Drops the oldest entries of `kept` past `most`. A Map iterates in insertion order, and every
+ * writer keeps that order the order of last answer (`keepBounded`, and `boundByAge` on load).
+ */
+function trim<T>(kept: Map<string, Kept<T>>, most: number): void {
+  for (const oldest of kept.keys()) {
+    if (kept.size <= most) break;
+    kept.delete(oldest);
+  }
+}
+
+/** Keeps `entry` under `key` as the newest entry of `kept`, at most `most` kept. */
+export function keepBounded<T>(
+  kept: Map<string, Kept<T>>,
+  key: string,
+  entry: Kept<T>,
+  most: number
+): void {
+  kept.delete(key);
+  kept.set(key, entry);
+  trim(kept, most);
+}
+
+/** Reorders `kept` oldest answer first, then keeps the newest `most`. */
+function boundByAge<T>(kept: Map<string, Kept<T>>, most: number): void {
+  const ordered = [...kept].sort(([, a], [, b]) => a.at - b.at);
+  kept.clear();
+  for (const [key, entry] of ordered) kept.set(key, entry);
+  trim(kept, most);
+}
+
 const issueEntry = z.object({
   value: z.union([
     z.object({
@@ -119,6 +159,9 @@ export function forgeAnswerFile(where: () => string): ForgeAnswerFile {
     }
     for (const [key, entry] of entries(parsed.changes, changeEntry))
       if (!changes.has(key)) changes.set(key, entry);
+    // A file another server wrote may hold more than this one keeps: the newest are kept.
+    boundByAge(issues, ISSUES_KEPT);
+    boundByAge(changes, CHANGES_KEPT);
   };
 
   const write = async (): Promise<void> => {

@@ -332,19 +332,6 @@ export function readItemStopped(metadata: Record<string, unknown>): ItemStopped 
   };
 }
 
-/**
- * Written by `combined` before it carried Archon dev's item ends: the completing write of a
- * top-level run on an item whose outcome its workflow declared final (`returns.final`, gone
- * since). Nothing writes it now; an outcome that finishes an item records an item end (`via:
- * 'engine'`) instead. Runs written then still carry it, so standing keeps reading it.
- */
-export const ITEM_FINAL_METADATA_KEY = 'item_final';
-
-/** True when an older completed run recorded that its outcome was final. */
-export function readItemFinal(metadata: Record<string, unknown>): boolean {
-  return metadata[ITEM_FINAL_METADATA_KEY] === true;
-}
-
 export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
 
 export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';

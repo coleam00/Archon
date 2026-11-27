@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import * as archonPaths from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
-import { createDiscoveryCache } from './discovery-cache';
+import { createDiscoveryCache, ROOTS_KEPT } from './discovery-cache';
 
 const track = trackTempRoots();
 
@@ -49,6 +49,20 @@ async function inHome(path: string, body: string, then: () => Promise<unknown>):
 }
 
 describe('createDiscoveryCache', () => {
+  test('keeps at most ROOTS_KEPT roots, dropping the one read least recently', async () => {
+    const roots = await Promise.all(Array.from({ length: ROOTS_KEPT + 1 }, () => project()));
+    const { read, calls } = counted();
+    for (const root of roots.slice(0, ROOTS_KEPT)) await read(root);
+    // The first root is read again, so the second is now the least recently read.
+    await read(roots[0] as string);
+    expect(calls.count).toBe(ROOTS_KEPT);
+    await read(roots[ROOTS_KEPT] as string);
+    await read(roots[0] as string);
+    expect(calls.count).toBe(ROOTS_KEPT + 1);
+    await read(roots[1] as string);
+    expect(calls.count).toBe(ROOTS_KEPT + 2);
+  });
+
   test('answers a second read with the kept discovery while nothing changed', async () => {
     const root = await project();
     const { read, calls } = counted();

@@ -62,7 +62,8 @@ interface World {
   statuses?: Record<string, WorkflowRun['status']>;
   queuedOn?: string[];
   mergedIds?: string[];
-  finalRuns?: string[];
+  /** Item ids the engine recorded a stop for: the attention queue's `stopped` item. */
+  stoppedOn?: string[];
   /** Metadata by run id, in place of the run's own. */
   metadata?: Record<string, Record<string, unknown>>;
   /** Items and runs in place of the module's. */
@@ -77,7 +78,7 @@ function source(world: World = {}): ItemWindowSource {
     statuses = {},
     queuedOn = [],
     mergedIds = [],
-    finalRuns = [],
+    stoppedOn = [],
     metadata = {},
     items = defaultItems,
     runsByItem = defaultRuns,
@@ -85,6 +86,29 @@ function source(world: World = {}): ItemWindowSource {
   } = world;
   return {
     branchOf: async () => null,
+    itemsWithoutRun: async () =>
+      items
+        .filter(item => stoppedOn.includes(item.id))
+        .map(item => {
+          const last = (runsByItem.get(item.id) ?? []).at(-1);
+          return {
+            kind: 'stopped' as const,
+            ref: `stopped-${item.id}`,
+            project: null,
+            item,
+            priority: false,
+            revision: 1,
+            labels: {},
+            pausedAt: null,
+            stoppedIn: {
+              runId: last?.id ?? 'none',
+              workflow: last?.workflow_name ?? 'none',
+              outcome: last?.completed_outcome ?? null,
+            },
+            summary: null,
+            checkout: null,
+          };
+        }),
     store: {
       listItemsInWindow: async query =>
         items
@@ -102,9 +126,7 @@ function source(world: World = {}): ItemWindowSource {
           .map(row => ({
             ...row,
             status: statuses[row.id] ?? row.status,
-            metadata: finalRuns.includes(row.id)
-              ? { item_final: true }
-              : (metadata[row.id] ?? row.metadata),
+            metadata: metadata[row.id] ?? row.metadata,
           }))
           .map(row =>
             unreadable.includes(row.id)
@@ -218,10 +240,14 @@ describe('reading items over a window', () => {
       ['b', { runId: 'b1', state: 'failed', pack: null }],
       ['c', { runId: 'c2', state: 'queued', pack: null }],
     ]);
-    // A run that ended with an outcome and nothing followed stopped its item: it is not done.
-    // Done is a recorded merge, whatever the last run did, or an outcome recorded as final.
+    // An item the engine recorded a stop for is stopped, not done. Done is a recorded merge,
+    // whatever the last run did.
     const ended = (): ItemWindowSource =>
-      source({ statuses: { b1: 'failed' }, mergedIds: ['item-b'], finalRuns: ['c2'] });
+      source({
+        statuses: { b1: 'failed' },
+        mergedIds: ['item-b', 'item-c'],
+        stoppedOn: ['item-a'],
+      });
     const rested = await readItemWindow(ended(), PROJECT, wide);
     expect(rested.items.map(read => [read.item.key, read.standing])).toEqual([
       ['a', { runId: 'a2', state: 'stopped', pack: null }],
@@ -277,7 +303,9 @@ describe('reading items over a window', () => {
       const act = { at: '2026-11-01T00:00:00.000Z', via: 'cli', by: null, fromRun: null };
       const read = source({
         items,
-        // Each item's one run ended with an outcome and nothing followed: it is stopped.
+        // Each item's one run ended with an outcome, nothing followed, and the engine
+        // recorded the stop.
+        stoppedOn: items.map(item => item.id),
         runsByItem: new Map(
           items.map(item => [
             item.id,
