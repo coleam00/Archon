@@ -37,9 +37,9 @@ returns:
   outcome: outcome
   asks: asks
   # `dropped` ends the item. `waiting` and `none` are not ends: an item that waits holds a
-  # recorded `depends_on`, and the engine does not yet count that as a wait, so a waiting
-  # item is listed as stopped (with the summary saying what it waits on) until the item it
-  # waits on ends and this stage runs again. Listed beats silent.
+  # recorded `depends_on`, which the engine counts as a wait, so it is not listed as
+  # stopped while the item it waits on is still on its way. This stage runs again when
+  # that item ends.
   ends: [dropped]
   summary: summary
   options:

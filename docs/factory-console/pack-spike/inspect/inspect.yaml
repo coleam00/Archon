@@ -1,0 +1,169 @@
+name: inspect
+description: |
+  Review a change someone else proposed, such as a contributor's pull request, and post the
+  report where the change is proposed. It reads the change's own description as the item,
+  checks out the proposed commit, runs the review and the test check side by side, sorts
+  what they found, and posts one formatted report with findings on their lines. It changes
+  nothing in the change and decides nothing for the maintainer: the report is what they read.
+
+inputs:
+  change:
+    default: ""
+    description: A link to where the change is proposed (a pull request). A run by hand gives this.
+  number:
+    default: ""
+    description: The number of the pull request, on the repository `repo_host` and `repo_path` name. Set by the binding that starts a review when a label is put on a pull request.
+  repo_host:
+    default: ""
+    description: The host of the project's repository, such as github.com. Read with `number`.
+  repo_path:
+    default: ""
+    description: The path of the project's repository on its host, such as acme/widgets. Read with `number`.
+  answers:
+    default: "None."
+    description: Decisions an operator already made about this change.
+  review_policy:
+    default: ""
+    description: The pack setting of the same name.
+  test_policy:
+    default: ""
+    description: The pack setting of the same name.
+
+# A review of someone else's change ends with its verdict, whatever it is.
+# `observes: true`: its runs act on an item without being steps of it, so they never
+# stop, end or move the item, and never hide a stop on it.
+observes: true
+returns: { node: verdict, outcome: outcome }
+
+display:
+  label: Inspect
+  short: "Reviews others' PRs"
+  blurb: "Reviews a pull request someone else proposed, with the review and the test check, and posts one report on it. It changes nothing in the pull request and decides nothing for the maintainer."
+  outcomes:
+    approve: { label: would approve, story: The review found the pull request ready and said so in its report }
+    return: { label: changes asked, story: The review found what must change and posted it on the pull request }
+    replan: { label: needs another approach, story: The review found the pull request needs a different approach and said so in its report }
+    ask: { label: question for the maintainer, story: The review left a question for the maintainer in its report }
+  phases:
+    - label: Read
+      cards:
+        - { title: Read the pull request, text: "Reads the pull request, its description and its discussion, as the item", icon: git-pull-request, kind: script, covers: [read] }
+        - { title: Check it out, text: Checks out the proposed commit and finds the commit it was built on, icon: git-branch, kind: script, covers: [base] }
+    - label: Check
+      cards:
+        - { title: Code review, text: Reviews the change, icon: search-code, kind: check, covers: [review__review] }
+        - { title: Test check, text: Checks the tests prove the change, icon: flask-conical, kind: check, covers: [tests__tests] }
+    - label: Verdict
+      cards:
+        - { title: Verdict, text: Sorts what the checks found into one verdict, icon: gavel, kind: check, covers: [verdict__verdict] }
+    - label: Report
+      cards:
+        - { title: Report, text: Posts the report on the pull request with findings on their lines, icon: message-square, kind: agent, covers: [report__report] }
+
+nodes:
+  # What is proposed, read through the forge: the description is the item, and the forge
+  # names the commit to review and the branch it is proposed against.
+  - id: read
+    display: { label: Reads the pull request }
+    runtime: bun
+    mutates_checkout: false
+    with:
+      change: $INPUTS.change
+      number: $INPUTS.number
+      repo_host: $INPUTS.repo_host
+      repo_path: $INPUTS.repo_path
+    script: |
+      import { emit, forge, input } from 'archon:script';
+      // A label binding names the pull request by its number on the project's repository.
+      const change = input('change').trim() ||
+        (input('number').trim() ? `https://${input('repo_host').trim()}/${input('repo_path').trim()}/pull/${input('number').trim()}` : '');
+      const refused = (why: string) => emit({ outcome: 'refused', item: '', head: '', number: '', onto: '', why });
+      try {
+        const where = forge('resolve', { remote: change, web: true });
+        if (where.kind !== 'resolved' || where.subject?.kind !== 'pr') {
+          refused(`This is not a proposed change on a forge this install can read: ${change}`);
+        } else {
+          const ref = { repo: where.repo, number: where.subject.number };
+          const seen = forge('pr.view', { selector: { kind: 'number', ref } });
+          const talk = forge('workitem.comments', { subject: { kind: 'pr', ref } });
+          const said = (talk.comments ?? [])
+            .map((c: any) => `**${c.author?.login ?? 'someone'}**:\n\n${String(c.body ?? '').trim()}`)
+            .join('\n\n');
+          const item =
+            `---\nid: change-${ref.number}\nsource: ${seen.pr.url}\n---\n\n# ${seen.title}\n\n` +
+            `This is a change proposed by ${seen.author?.login ?? 'a contributor'} against the branch \`${seen.pr.base}\`. ` +
+            'No separate work item was given: the description below, written by its author, is the item. ' +
+            'Judge the change against what it says it does, against the project\'s own guidance, and against what the project is for. ' +
+            'Say plainly what you could run and what you could only read.\n\n' +
+            `${String(seen.body ?? '').trim()}\n\n## Discussion\n\n${said || 'No comments.'}`;
+          emit({ outcome: 'ready', item, head: seen.pr.head_revision, number: String(ref.number), onto: seen.pr.base, why: '' });
+        }
+      } catch (error) {
+        refused(`The change could not be read: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [ready, refused] }
+        item: { type: string }
+        head: { type: string }
+        number: { type: string }
+        onto: { type: string }
+        why: { type: string }
+      required: [outcome, item, head, number, onto, why]
+
+  # The proposed commit, checked out here, and the commit it was built on.
+  - id: base
+    display: { label: Checks out the proposed commit }
+    depends_on: [read]
+    when: "$read.output.outcome == 'ready'"
+    bash: |
+      set -e
+      head=$read.output.head; number=$read.output.number; onto=$read.output.onto
+      git fetch -q origin "$onto"
+      git fetch -q origin "$head" 2>/dev/null || git fetch -q origin "pull/$number/head"
+      git checkout -q --detach "$head"
+      git merge-base HEAD "origin/$onto"
+
+  - id: review
+    include: review
+    depends_on: [base]
+    with:
+      item: $read.output.item
+      answers: $INPUTS.answers
+      base: $base.output
+      review_policy: $INPUTS.review_policy
+
+  - id: tests
+    include: tests
+    depends_on: [base]
+    with:
+      item: $read.output.item
+      answers: $INPUTS.answers
+      base: $base.output
+      test_policy: $INPUTS.test_policy
+
+  - id: verdict
+    include: verdict
+    depends_on: [review, tests]
+    with:
+      item: $read.output.item
+      answers: $INPUTS.answers
+      review_policy: $INPUTS.review_policy
+      reports: |
+        ## From the review (is the change right against the item)
+        $review.output
+
+        ## From the test check (do the tests the change adds or edits earn their place)
+        $tests.output
+
+  # The report where the change is proposed, written by the pack's report stage: one
+  # comment, and what must change and the notes on their lines. Nothing reads the posted
+  # report. A change that could not be read ends the run with no verdict and no report.
+  - id: report
+    include: report
+    depends_on: [verdict]
+    with:
+      change: $INPUTS.change
+      verdict: $verdict.output
+      item_lines: $review.output.item_lines

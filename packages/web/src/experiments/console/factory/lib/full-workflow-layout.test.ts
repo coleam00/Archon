@@ -48,7 +48,9 @@ describe("the shipped pack's full workflow", () => {
     }
   });
 
-  test('the whole graph opens inside the Overview frame at 1440x900 (about 1110x720)', () => {
+  // DESIGN, rule 1 (#219): the Full workflow opens fitted, down to a scale of 0.4, so every
+  // stage shows at once. The send-back lanes under the cards may run below the frame and pan.
+  test('every stage opens inside the Overview frame at 1440x900 (about 1110x720)', () => {
     const frame = { width: 1110, height: 720 };
     const { pad } = LIVE_FITTING;
     const camera = fitCamera(layout.bounds, frame, pad, 0.4, 1);
@@ -57,7 +59,8 @@ describe("the shipped pack's full workflow", () => {
     expect(bounds.x * camera.k + camera.x).toBeGreaterThanOrEqual(0);
     expect(bounds.y * camera.k + camera.y).toBeGreaterThanOrEqual(0);
     expect((bounds.x + bounds.w) * camera.k + camera.x).toBeLessThanOrEqual(frame.width);
-    expect((bounds.y + bounds.h) * camera.k + camera.y).toBeLessThanOrEqual(frame.height);
+    for (const { box } of layout.cards)
+      expect((box.y + box.h) * camera.k + camera.y).toBeLessThanOrEqual(frame.height);
   });
 });
 

@@ -21,10 +21,13 @@ const FLOW = [
   'land',
   'landed',
   'discoveries',
+  'inspect',
+  'survey',
   'close',
+  'order-done',
 ];
 
-describe('the slim file over the af6d0b4a graph', () => {
+describe('the slim file over the dd30226 graph', () => {
   test('one map stage per in-flow graph stage, in flow order, with its words from the file', () => {
     expect(shippedView.stages.map(entry => [entry.id, entry.workflows])).toEqual(
       FLOW.map(workflow => [workflow, [workflow]])
@@ -41,10 +44,10 @@ describe('the slim file over the af6d0b4a graph', () => {
     expect(
       mapColumns(shippedView).map(column => [column.label, column.stages, column.tone])
     ).toEqual([
-      ['Intake', ['order', 'triage', 'link', 'split', 'complexity'], 'intake'],
+      ['Intake', ['order', 'triage', 'link', 'split', 'complexity', 'survey'], 'intake'],
       ['Plan and build', ['plan', 'attend', 'stage-build'], 'build'],
-      ['Checks', ['stage-check', 'stage-host', 'catchup'], 'check'],
-      ['Landing', ['landgate', 'land', 'discoveries', 'close'], 'land'],
+      ['Checks', ['stage-check', 'stage-host', 'catchup', 'inspect'], 'check'],
+      ['Landing', ['landgate', 'land', 'discoveries', 'close', 'order-done'], 'land'],
       ['Merged', ['landed'], 'merged'],
     ]);
     expect(shippedView.landed.stage).toBe('landed');
@@ -111,7 +114,10 @@ describe('the slim file over the af6d0b4a graph', () => {
   test('a document that names no exit stage leaves the last in-flow stage there', () => {
     const { exit: _named, ...document } = shippedGraph.document!;
     const view = curatedView(shippedFile, { ...shippedGraph, document });
-    expect([view.landed.stage, view.columns.at(-1)?.stages]).toEqual(['close', ['close']]);
+    expect([view.landed.stage, view.columns.at(-1)?.stages]).toEqual([
+      'order-done',
+      ['order-done'],
+    ]);
   });
 
   test('a stage the pack gives no words is named by its id in words, not the raw id', () => {
@@ -123,7 +129,7 @@ describe('the slim file over the af6d0b4a graph', () => {
   });
 });
 
-describe("the map's arrows over the af6d0b4a graph", () => {
+describe("the map's arrows over the dd30226 graph", () => {
   const label = (from: string, to: string) =>
     shippedArrows.find(arrow => arrow.from === from && arrow.to === to)?.label;
 

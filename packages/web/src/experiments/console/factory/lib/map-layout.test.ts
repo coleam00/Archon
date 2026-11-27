@@ -128,18 +128,19 @@ describe('the shipped map', () => {
     expect(
       layout.arrows.map(arrow => [arrow.from, arrow.to, arrow.lines.join(' '), arrow.outcomes])
     ).toEqual([
-      // Triage's drop and reshape answers go to close, which skips a card, so they are worded
-      // on this pill with their target. Attend, in Plan and build, takes the asks link and
-      // split leave.
+      // Triage's drop and reshape answers go to close, and link's drop to order-done, which
+      // skip a card, so they are worded on this pill with their target. Attend, in Plan and
+      // build, takes the asks link and split leave.
       [
         'intake',
         'plan-and-build',
-        'placed +6',
+        'placed +7',
         [
           'placed',
           'dropped by you → Landing',
           'needs shaping → Landing',
           'kept whole',
+          'Dropped by link → Landing',
           'waiting on what it needs',
           'Folded into another item',
           'Split into pieces',
@@ -181,13 +182,17 @@ describe('the shipped map', () => {
   test('one lane under the row: one pill per target stage, the self hand-offs on it too', () => {
     expect(layout.feedback.pills.map(pill => [pill.stage, pill.text])).toEqual([
       ['order', 'Ordered as a work order, Split into pieces, broke the branch, fix ordered'],
+      ['triage', 'something else'],
       ['link', 'asked'],
       ['split', 'answered'],
       ['plan', 'answered, plan again'],
       ['attend', 'asked you'],
       ['stage-build', 'returned, sent back, one more round, something else, behind its branch'],
       ['stage-host', 'changed'],
+      // A work order's proposed branch goes back to the gate; a reported member reports its order.
+      ['landgate', 'proposed for landing'],
       ['land', 'merge it'],
+      ['order-done', 'reported'],
     ]);
     // Checks holds stage-check and stage-host, which both send back to stage-build and to plan:
     // one route each, not two drawn on top of each other.

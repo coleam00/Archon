@@ -2,8 +2,8 @@ name: discoveries
 description: |
   Drain what agents noticed outside their scope: read the whole list, verify
   what is worth filing against the code, and decide what becomes a work item.
-  It creates up to three of those items in the project's tracker, when there is one,
-  and changes nothing else.
+  It creates those items in the project's tracker, when there is one, and changes
+  nothing else.
 
 model: ['@manager', large]
 
@@ -85,7 +85,7 @@ nodes:
             additionalProperties: false
             properties:
               what: { type: string }
-              until: { type: string, description: 'What would change that. For one held only because three were filed this run: say so.' }
+              until: { type: string, description: 'What would change that.' }
             required: [what, until]
         dropped:
           type: array

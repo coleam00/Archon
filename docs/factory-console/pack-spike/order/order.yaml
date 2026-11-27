@@ -53,7 +53,9 @@ inputs:
 
 # A refused order starts nothing and shows the item as stopped in attention, with `why`.
 # `work_order` ends the order's own item: the work goes on as its members, and the item
-# read derives the work order's open or done from them. `refused` stops it with the reason.
+# read derives the work order's open or done from them. The end is what keeps the item out
+# of attention while they work; the `order-done` stage, which only observes the item,
+# reports it when they are all done. `refused` stops it with the reason.
 returns: { node: order, outcome: outcome, ends: [work_order], summary: why }
 
 display:

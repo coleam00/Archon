@@ -215,6 +215,58 @@ describe('a pack graph', () => {
     expect(order(chain)).toEqual(['intake', 'build', 'check', 'close']);
   });
 
+  test('a linked arrow places its stage in flow, but not in the order work flows through', () => {
+    // An observing stage started only on the holder of a part_of link: when a member ends, and
+    // when a member that is itself an order reports. A linked arrow places it in flow, as any
+    // arrow does. It starts work on other items, so it says nothing of where the ended run's
+    // item goes next: `report` comes after the stages the item flows through, though it is
+    // found first and `a`'s first binding leads to it.
+    const report = wf('report', [decide(['reported'])], {
+      returns: 'decide',
+      result: { outcome: 'outcome' },
+      observes: true,
+    });
+    const linked = (from: string, outcome: string) =>
+      packRunEndedBindingSchema.parse({
+        workflow: 'report',
+        resource: 'report',
+        overlap: 'queue',
+        run_ended: { workflow: from, outcome, linked: partOfOrder },
+        inputs: { member: { item: 'key' } },
+      });
+    const enter = packFireBindingSchema.parse({ workflow: 'a', resource: 'a', overlap: 'queue' });
+    const graph = graphOf(
+      stages(report, stage('a', ['done']), stage('b', ['done']), stage('c', ['done'])),
+      {
+        declared: {
+          enter,
+          'report-after-a': linked('a', 'done'),
+          'b-after-a': runEnded('b', 'a', 'done'),
+          'c-after-b': runEnded('c', 'b', 'done'),
+          'report-after-report': linked('report', 'reported'),
+        },
+        installed: [],
+      }
+    );
+    expect(graph.stages.map(s => [s.workflow, s.inFlow, s.observes])).toEqual([
+      ['a', true, false],
+      ['b', true, false],
+      ['c', true, false],
+      ['report', true, true],
+    ]);
+    // Once the item's own stages are placed, linked arrows still order the rest: a stage only
+    // a linked arrow reaches comes before the stages its own item flows on to.
+    const crossing = graphOf(stages(stage('d', ['done']), report, stage('a', ['done'])), {
+      declared: {
+        enter,
+        'report-after-a': linked('a', 'done'),
+        'd-after-report': runEnded('d', 'report', 'reported'),
+      },
+      installed: [],
+    });
+    expect(crossing.stages.map(s => s.workflow)).toEqual(['a', 'report', 'd']);
+  });
+
   test('a stage lists the roles its nodes name, each with the tier it falls back to', () => {
     const node = (id: string, model: unknown) => ({ id, prompt: 'Do it.', model });
     const staged = stages(

@@ -757,31 +757,34 @@ function entryStages(input: GraphInput): string[] {
 
 /**
  * The stages in the order work flows through them, which the pack declares nowhere else:
- * breadth-first along the outcome arrows, from the stages the pack's timer, event and fire
- * bindings start, then from each stage no arrow leads to, then from each one only an
- * answer leads to, then from any stage still unplaced. Arrows keep the order the pack
- * declares its bindings in, so the order changes only when the pack does.
+ * breadth-first along the arrows that start work on the run's own item, from the stages the
+ * pack's timer, event and fire bindings start, then from each stage no arrow (then only an
+ * answer) leads to; then along linked arrows, which start work on other items, out of the stages
+ * placed; then from any stage still unplaced. Arrows keep the order the pack declares them in.
  */
 function inFlowOrder(input: GraphInput, arrows: readonly PackGraphArrow[]): Stage[] {
   const names = input.stages.map(stage => stage.name);
-  const entries = entryStages(input);
   const led = (outcomeOnly: boolean): string[] => {
     const to = arrows
       .filter(arrow => arrow.from.stage !== arrow.to && (!outcomeOnly || 'outcome' in arrow.from))
       .map(arrow => arrow.to);
     return names.filter(name => !to.includes(name));
   };
-  const next = (stage: string): string[] =>
-    arrows.filter(({ from }) => from.stage === stage && 'outcome' in from).map(arrow => arrow.to);
+  const next = (s: string, all: boolean): string[] =>
+    arrows
+      .filter(a => a.from.stage === s && 'outcome' in a.from && (all || !a.linked))
+      .map(a => a.to);
   const ordered = new Set<string>();
-  for (const root of [...entries, ...led(false), ...led(true), ...names]) {
-    const pending = [root];
+  const walk = (pending: string[], all: boolean): void => {
     for (let name = pending.shift(); name !== undefined; name = pending.shift()) {
       if (ordered.has(name) || !names.includes(name)) continue;
       ordered.add(name);
-      pending.push(...next(name));
+      pending.push(...next(name, all));
     }
-  }
+  };
+  for (const root of [...entryStages(input), ...led(false), ...led(true)]) walk([root], false);
+  walk(Array.from(ordered, name => next(name, true)).flat(), true);
+  for (const root of names) walk([root], true);
   return [...ordered].flatMap(name => input.stages.find(stage => stage.name === name) ?? []);
 }
 

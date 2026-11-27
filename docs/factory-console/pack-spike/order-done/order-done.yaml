@@ -1,0 +1,168 @@
+name: order-done
+description: |
+  When the last member of a work order is done: report the order, and when its members
+  landed together on a branch of their own, propose that branch against the project's
+  base branch, so the land gate decides whether it lands. A work order is an item other
+  items are part of: an order of several items, or an item a split cut into members. It
+  starts each time a member lands or ends without landing, and does nothing while a
+  member is still open. It merges nothing and changes no branch.
+
+model: ['@reporter', medium]
+
+inputs:
+  member:
+    default: ""
+    description: The key of the member whose ending started this run. The binding names it; nothing reads it but whoever reads the run.
+
+# `observes: true`: its runs act on the work order's item without being steps of it. The
+# order or the split that named the members ended the item, so it is in no list while they
+# work. A run that finds a member open leaves that as it is: it cannot stop the item, open
+# its end or end it again. `proposed` starts the land gate through a binding, and the gate
+# is a step: its run opens the item, so its ask shows. No outcome is an end: after
+# `reported` the item is still ended as the order left it, and after `proposed` the land
+# stage's merge or the close step finishes it.
+observes: true
+returns: { node: end, outcome: outcome, summary: summary }
+
+display:
+  label: Order done
+  short: Reports finished orders
+  blurb: "When the last member of a work order is done, reports the order, and proposes the members' shared branch for the land gate when they landed together."
+  outcomes:
+    open: { label: members still open, story: A member of the work order is still open; nothing was reported }
+    already: { label: already reported, story: The work order was reported before; nothing changed }
+    unknown: { label: could not tell, story: The factory could not read whether every member is done }
+    reported: { label: reported, story: Every member is done; the work order was reported }
+    proposed: { label: proposed for landing, story: "Every member is done; their shared branch was proposed, and the land gate decides" }
+  phases:
+    - label: Read
+      cards:
+        - { title: Read the order, text: "Reads whether every member is done, and the branch they shared", icon: clipboard-list, kind: script, covers: [read] }
+    - label: Report
+      cards:
+        - { title: Report, text: "Reports the order, and proposes the shared branch when the members landed on one", icon: message-square, kind: agent, covers: [report] }
+    - label: Hand on
+      cards:
+        - { title: Hand on, text: Hands a proposed branch to the land gate, icon: send, kind: script, covers: [end] }
+
+nodes:
+  # The facts the engine holds: whether every member is done, whether this order was
+  # reported before, and the branch the members shared. A member is done when its change
+  # merged, it ended, or it is itself a work order whose members are all done.
+  - id: read
+    display: { label: Reads the order's members }
+    runtime: bun
+    mutates_checkout: false
+    script: |
+      import { emit, item, refuse } from 'archon:script';
+      const read = item();
+      const order = read?.workOrder ?? null;
+      if (!read || !order) refuse('No item is part of this run\'s item, so it is no work order.');
+      else {
+        const reported = read.runs.some(run => run.status === 'completed'
+          && run.workflow.slice(run.workflow.lastIndexOf(':') + 1) === 'order-done'
+          && (run.outcome === 'reported' || run.outcome === 'proposed'));
+        // An order that is part of a larger one landed where that one lands. The larger
+        // order proposes the branch, when its own last member is done.
+        const inside = read.links.some(link => link.kind === 'part_of' && link.direction === 'outgoing' && !link.ended);
+        emit({
+          state: reported ? 'already' : order.state,
+          key: read.item.key,
+          members: order.members.map(member => ({ key: member.item.key, state: member.state })),
+          branch: !inside && read.landing?.from.kind === 'own' ? read.landing.branch : '',
+        });
+      }
+    output_format:
+      type: object
+      properties:
+        state: { type: string, enum: [open, done, unknown, already] }
+        key: { type: string }
+        members: { type: array }
+        branch: { type: string, description: 'The branch recorded on the order itself, which its members landed on. Empty when it records none, or is part of a larger order.' }
+      required: [state, key, members, branch]
+
+  - id: report
+    display: { label: Reports the order }
+    depends_on: [read]
+    when: "$read.output.state == 'done'"
+    command: order-done
+    mutates_checkout: false
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        summary: { type: string, description: 'One line: how many members, how they ended, and whether a change is proposed.' }
+        report: { type: string, description: 'The report as text that stands alone.' }
+        members:
+          type: array
+          description: 'One entry for each member.'
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              key: { type: string }
+              title: { type: string, description: 'What the member was, in one line.' }
+              change: { type: string, description: 'Where its change is proposed. Empty when it proposed none.' }
+              ended: { type: string, enum: [landed, dropped, split, other], description: 'landed: its change merged. dropped: an operator dropped it. split: it was cut into further items, which are all done. other: anything else; say what in `note`.' }
+              note: { type: string, description: 'Why it did not land, or what is still open on it. Empty when it landed and nothing is.' }
+            required: [key, title, change, ended, note]
+        left_open: { type: array, items: { type: string }, description: 'Each thing that was ordered and is not delivered, or is still running. Empty when nothing is.' }
+        base: { type: string, description: 'The project''s base branch, as you found it. Empty when no shared branch was named.' }
+        change: { type: string, description: 'The address of the change that proposes the shared branch against the base branch, opened now or found open. Empty when there is nothing to propose or it could not be opened.' }
+        title: { type: string, description: 'The title you proposed it with. Empty when you proposed nothing.' }
+        description: { type: string, description: 'The description you proposed it with, as text. Empty when you proposed nothing.' }
+        why: { type: string, description: 'When a shared branch was named and `change` is empty: why, and what an operator has to do by hand. Empty otherwise.' }
+      required: [summary, report, members, left_open, base, change, title, description, why]
+
+  # The outcome the bindings route on. `proposed` hands the change to the land gate with
+  # the base branch as the branch it lands on; every other outcome starts nothing here.
+  - id: end
+    display: { label: Hands the order on }
+    depends_on: [read, report]
+    trigger_rule: none_failed_min_one_success
+    runtime: bun
+    mutates_checkout: false
+    with:
+      read: $read.output
+      report: $report.output
+    script: |
+      import { emit, input, notice } from 'archon:script';
+      const parse = (name: string) => { try { return JSON.parse(input(name) || 'null'); } catch { return null; } };
+      const read = parse('read') ?? {};
+      const said = parse('report');
+      const open = (read.members ?? []).filter((m: any) => m.state === 'open').map((m: any) => m.key);
+      const change = String(said?.change ?? '').trim();
+      const outcome = read.state !== 'done' ? String(read.state) : change ? 'proposed' : 'reported';
+      const summary = outcome === 'open' ? `Still open: ${open.join(', ')}.`
+        : outcome === 'already' ? 'This work order was reported before.'
+        : outcome === 'unknown' ? 'No member is open, but the state of one could not be read, so nothing was reported.'
+        : [said?.summary, said?.why].map(text => String(text ?? '').trim()).filter(Boolean).join(' ');
+      // The report asks nothing of anyone, so it is a notice, as is an order nobody can
+      // call done. A run that found a member open, or the order reported, says nothing.
+      if (outcome !== 'open' && outcome !== 'already')
+        notice(`Work order ${read.key}: ${summary}`.replace(/\s+/g, ' ').slice(0, 400), { stage: 'order-done', outcome });
+      emit({
+        outcome,
+        summary,
+        // The land gate and the land stage read the report as the item.
+        report: String(said?.report ?? ''),
+        members: said?.members ?? read.members ?? [],
+        left_open: said?.left_open ?? [],
+        change,
+        land_on: String(said?.base ?? ''),
+        title: String(said?.title ?? ''),
+        description: String(said?.description ?? ''),
+      });
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [open, already, unknown, reported, proposed] }
+        summary: { type: string }
+        report: { type: string, description: 'The work order as reported. The land gate reads it as the item.' }
+        members: { type: array }
+        left_open: { type: array }
+        change: { type: string, description: 'Where the shared branch is proposed against the base branch. Empty unless proposed.' }
+        land_on: { type: string, description: 'The branch that change lands on: the project''s base branch.' }
+        title: { type: string }
+        description: { type: string }
+      required: [outcome, summary, report, members, left_open, change, land_on, title, description]

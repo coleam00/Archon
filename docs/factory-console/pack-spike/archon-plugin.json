@@ -10,6 +10,7 @@
   },
   "entrypoints": {
     "order": "order/order.yaml",
+    "order-done": "order-done/order-done.yaml",
     "triage": "triage/triage.yaml",
     "judge": "judge/judge.yaml",
     "link": "link/link.yaml",

@@ -1,21 +1,21 @@
 ---
 groups:
   - name: Intake
-    blurb: Order, triage, split and link
+    blurb: Order, triage, split and link, and surveying new issues
     kind: intake
-    stages: [order, triage, split, link, complexity]
+    stages: [order, triage, split, link, complexity, survey]
   - name: Plan and build
     blurb: Plan, then build
     kind: build
     stages: [plan, stage-build, attend]
   - name: Checks
-    blurb: Checks, CI and PR reviews, and catching up
+    blurb: Checks, CI and PR reviews, catching up, and reviewing others' PRs
     kind: check
-    stages: [stage-check, stage-host, catchup]
+    stages: [stage-check, stage-host, catchup, inspect]
   - name: Landing
     blurb: Gate, merge, and what follows the merge
     kind: merge
-    stages: [landgate, land, landed, discoveries, close]
+    stages: [landgate, land, landed, discoveries, close, order-done]
 words:
   round: check round
   rounds: check rounds
@@ -25,6 +25,7 @@ words:
   workOrders: work orders
 exit: landed
 ---
+
 # How the factory works
 
 Work comes in as a work order, or as an issue someone adds the `factory` label to. Agents also find work while they do other work. Triage decides whether it is worth building. The link stage places it among the project's other work. Plan writes down how to build it. Build writes the change and opens a draft pull request. Three checks read it, then the project's own CI and the reviews on the pull request. The land gate lets it land or asks you, and the change lands on its branch.
@@ -90,6 +91,7 @@ The host round reads what the project's own CI and the reviewers on the pull req
 - **Landed check.** Looks at the branch after the landing, and starts a fix when the change broke it.
 - **Discoveries.** What the agents noticed along the way becomes new work.
 - **Close.** A change you dropped is closed with your reason; one you sent back to shaping is closed too, its branch kept, and the item waits to be shaped again.
+- **Order done.** When the last member of a work order is done, the order is reported: each member and how it ended. Members that landed together on a branch of their own are proposed against the base branch as one change, which goes to the land gate.
 
 ## You
 

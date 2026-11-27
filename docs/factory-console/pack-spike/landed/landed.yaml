@@ -2,9 +2,10 @@ name: landed
 description: |
   After a change of ours merged: is the branch it landed on still sound, and if not,
   whose failure is it and what should happen? It reads the host and the project's land
-  policy. It merges, reverts and writes nothing itself. Since 2026-11-18 one result is
-  acted on: when the change broke the branch and the stage writes a work order, a binding
-  starts that order as new work on this run's item. Every other result is only recorded.
+  policy. It merges, reverts and writes nothing itself. When the change broke the branch
+  and the stage writes a work order, a binding starts that order as new work on this run's
+  item. When it cannot tell, or the break is older, it leaves an ask; `clear` and `none`
+  are only recorded.
 
 model: ['@judge', medium]
 

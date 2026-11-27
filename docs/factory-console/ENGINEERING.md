@@ -13,9 +13,10 @@ reference for anything v1 showed is `main`'s history (tag `console-v1-full`) and
 `title` migration is part of the base; add no new migration.
 
 `combined` also carries Archon `dev` (https://github.com/coleam00/Archon, last merged at
-3a15fae9d, #280), so it can go upstream. It reads the pack's dev branch (af6d0b4a, the revision
-`docs/factory-console/pack-view/` is written for): the pack's dev tracks Archon `dev` and its
-main the released Archon, and Archon `dev` no longer loads the pack's main (`returns.final` is
+3a15fae9d, #280), so it can go upstream. It reads the pack's dev branch (dd30226, the revision
+`docs/factory-console/pack-view/` is written for; the pack now lives at
+https://github.com/dynamous-community/archon-software-factory): the pack's dev tracks Archon
+`dev` and its main the released Archon, and Archon `dev` no longer loads the pack's main (`returns.final` is
 gone). `dev` is brought in as a merge
 commit whose second parent is `dev`; landed as a squash or a rebase, that change drops `dev` as
 a parent, and the next merge of `dev` conflicts in the same files again.
@@ -42,10 +43,11 @@ The factory building this repository runs Archon from another checkout, on the h
   show titles, asks, PR links and the running step (named by its id in words) but no check
   rounds or returns, and the map reads stage ids in words. To see the pack's words and its
   rounds and returns, replace the copy's installed pack folder
-  (`.console-home/plugins/packs/<owner>/<name>/<commit>/`) with the pack's dev tree at af6d0b4a,
-  copy the overlay `docs/factory-console/pack-spike/` over it (the words, the declarations and
-  the document's front matter), and copy `docs/factory-console/pack-view/factory-view.json` into
-  its `.shared/`, as `fc-runtime/gate_combined.sh` does (`pack-view/README.md`). On the older tree
+  (`.console-home/plugins/packs/<owner>/<name>/<commit>/`) with the pack's dev tree at dd30226
+  (`fc-runtime/spike/pack-dev-dd30226`), copy the overlay `docs/factory-console/pack-spike/`
+  over it (the words, the declarations and the document's front matter), and copy
+  `docs/factory-console/pack-view/factory-view.json` into its `.shared/`, as
+  `fc-runtime/gate_combined.sh` does with `PACK_TREE` set to that tree (`pack-view/README.md`). On the older tree
   the Overview lists document problems for the stages it lacks.
 - Pick a free port (not 3090, 3190 or 8864, which are in use); check it first.
 - Stop every server and browser you start before you finish. Kill by the PID you started, never by

@@ -14,12 +14,12 @@ export const shippedFile = JSON.parse(
 ) as ViewFile;
 
 /**
- * The pack graph of the commit that file is written for, af6d0b4a, with the overlay
+ * The pack graph of the commit that file is written for, dd30226, with the overlay
  * `docs/factory-console/pack-spike/` applied (its words and declarations), as the checker's
  * graph read gives it.
  */
 export const shippedGraph = JSON.parse(
-  readFileSync(join(import.meta.dir, '__fixtures__', 'pack-graph-af6d0b4a.json'), 'utf8')
+  readFileSync(join(import.meta.dir, '__fixtures__', 'pack-graph-dd30226.json'), 'utf8')
 ) as PackGraph;
 
 export const shippedView: CuratedView = curatedView(shippedFile, shippedGraph);

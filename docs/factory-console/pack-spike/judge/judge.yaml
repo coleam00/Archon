@@ -19,6 +19,9 @@ inputs:
   depends_on:
     default: "[]"
     description: Keys of the items the order says must land before this one, as JSON. Empty when none.
+  answers:
+    default: "None."
+    description: Decisions an operator already made on this item, oldest first.
   admit_policy:
     default: ""
     description: The pack setting of the same name, declared here so a workflow that includes this block can pass it through.
@@ -127,11 +130,20 @@ nodes:
     script: |
       import { emit, input, item } from 'archon:script';
       let said = '';
-      try { said = JSON.parse(input('admit') || '{}').admit ?? ''; } catch {}
+      let unjudged = false;
+      try {
+        const admit = JSON.parse(input('admit') || '{}');
+        said = admit.admit ?? '';
+        // With no policy the answer is an ask by rule, not a judgment of the item: counted
+        // by itself, so it does not read as "the judgment would have asked".
+        unjudged = String(admit.criterion ?? '').trim().toLowerCase() === 'no policy';
+      } catch {}
       const subject = item()?.item.key ?? null;
       const count = (name: string, value: number) => ({ name, unit: 'items', subject, kind: 'count', value });
       emit({
         would: said,
-        metrics: said ? [count('sf.admit_would_start', said === 'auto' ? 1 : 0), count('sf.admit_would_ask', said === 'ask' ? 1 : 0)] : [],
+        metrics: !said ? []
+          : unjudged ? [count('sf.admit_no_policy', 1)]
+          : [count('sf.admit_would_start', said === 'auto' ? 1 : 0), count('sf.admit_would_ask', said === 'ask' ? 1 : 0)],
       });
     output_format: { type: object }

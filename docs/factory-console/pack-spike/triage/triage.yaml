@@ -17,12 +17,16 @@ inputs:
   depends_on:
     default: "[]"
     description: Keys of the items the order says must land before this one, as JSON. The order stage's result carries them.
+  answers:
+    default: "None."
+    description: Decisions an operator already made on this item, oldest first. An answer in the operator's own words on this stage's ask starts it again with them.
 
 # Every judgment but `build`, `narrow` and `split` is a call a maintainer has to make
 # (shape it, close it, fold it, park it), so the `verdict` node leaves an ask with the
 # judgment, its reason and its options. The ask shows in attention; its answer starts
 # the next stage: `build` the link stage, `split` the split stage, `drop` and `reshape`
-# the close stage, which ends the item or leaves it waiting to be shaped.
+# the close stage, which ends the item or leaves it waiting to be shaped. An answer in the
+# operator's own words starts this stage again with it.
 returns:
   node: verdict
   outcome: outcome
@@ -63,6 +67,7 @@ display:
     split: { label: split }
     drop: { label: dropped by you }
     reshape: { label: needs shaping }
+    other: { label: something else }
   phases:
     - label: Decide
       cards:
@@ -83,6 +88,7 @@ nodes:
       triage_policy: $INPUTS.triage_policy
       members: $INPUTS.members
       depends_on: $INPUTS.depends_on
+      answers: $INPUTS.answers
       admit_policy: $INPUTS.admit_policy
 
   # Builds the ask for a judgment that does not start the next stage by itself.

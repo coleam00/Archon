@@ -20,7 +20,7 @@ const PACK = 'Wirasm.archon-software-factory';
 const MERGED_RECENT = [itemOn('m1', 'landed', 'done'), itemOn('m2', null, 'done')];
 /** One merged before those days: the Table lists it, the Merged column and the map do not. */
 const MERGED_EARLIER = [itemOn('m3', 'landed', 'done')];
-const PATH = '/packs/Wirasm/archon-software-factory/af6d0b4a/.shared/factory-view.json';
+const PATH = '/packs/Wirasm/archon-software-factory/dd30226/.shared/factory-view.json';
 
 let unmount: (() => Promise<void>) | undefined;
 afterEach(async () => {
@@ -140,16 +140,19 @@ describe('the one check where the map is drawn', () => {
       'link',
       'split',
       'complexity',
+      'survey',
       'plan',
       'attend',
       'stage-build',
       'stage-check',
       'stage-host',
       'catchup',
+      'inspect',
       'landgate',
       'land',
       'discoveries',
       'close',
+      'order-done',
       'landed',
     ]);
     expect(page.querySelector('div[data-flow]')).toBeNull();

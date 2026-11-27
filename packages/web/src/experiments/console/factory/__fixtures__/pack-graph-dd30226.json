@@ -281,6 +281,9 @@
           },
           "reshape": {
             "label": "needs shaping"
+          },
+          "other": {
+            "label": "something else"
           }
         },
         "phases": [
@@ -723,6 +726,16 @@
             "display": {
               "label": "Stopped at planning",
               "story": "Plan stopped it"
+            }
+          },
+          {
+            "value": "dropped",
+            "startsNothing": true,
+            "ends": true,
+            "stops": false,
+            "display": {
+              "label": "dropped by you",
+              "story": "Your answer on the plan's ask dropped the item"
             }
           }
         ]
@@ -2227,6 +2240,475 @@
       }
     },
     {
+      "name": "Wirasm/archon-software-factory:inspect",
+      "workflow": "inspect",
+      "entry": true,
+      "roles": [
+        {
+          "role": "@reviewer",
+          "fallback": "large"
+        },
+        {
+          "role": "@test-checker",
+          "fallback": "large"
+        },
+        {
+          "role": "@verdict",
+          "fallback": "small"
+        },
+        {
+          "role": "@reporter",
+          "fallback": "medium"
+        }
+      ],
+      "inFlow": true,
+      "returns": "verdict__verdict",
+      "outcome": {
+        "field": "outcome",
+        "form": "enum",
+        "values": [
+          {
+            "value": "approve",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would approve",
+              "story": "The review found the pull request ready and said so in its report"
+            }
+          },
+          {
+            "value": "return",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "changes asked",
+              "story": "The review found what must change and posted it on the pull request"
+            }
+          },
+          {
+            "value": "replan",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "needs another approach",
+              "story": "The review found the pull request needs a different approach and said so in its report"
+            }
+          },
+          {
+            "value": "ask",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "question for the maintainer",
+              "story": "The review left a question for the maintainer in its report"
+            }
+          }
+        ]
+      },
+      "observes": true,
+      "asks": false,
+      "waits": false,
+      "nodes": [
+        {
+          "id": "read",
+          "kind": "exec",
+          "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null,
+          "display": {
+            "label": "Reads the pull request"
+          }
+        },
+        {
+          "id": "base",
+          "kind": "exec",
+          "dependsOn": ["read"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null,
+          "display": {
+            "label": "Checks out the proposed commit"
+          }
+        },
+        {
+          "id": "review__review",
+          "kind": "agent",
+          "dependsOn": ["base"],
+          "loopGroup": null,
+          "blocks": [
+            {
+              "include": "review",
+              "workflow": "Wirasm/archon-software-factory:review"
+            }
+          ],
+          "fanOut": null,
+          "display": {
+            "label": "Code review"
+          }
+        },
+        {
+          "id": "tests__tests",
+          "kind": "agent",
+          "dependsOn": ["base"],
+          "loopGroup": null,
+          "blocks": [
+            {
+              "include": "tests",
+              "workflow": "Wirasm/archon-software-factory:tests"
+            }
+          ],
+          "fanOut": null,
+          "display": {
+            "label": "Test check"
+          }
+        },
+        {
+          "id": "verdict__verdict",
+          "kind": "agent",
+          "dependsOn": ["review__review", "tests__tests"],
+          "loopGroup": null,
+          "blocks": [
+            {
+              "include": "verdict",
+              "workflow": "Wirasm/archon-software-factory:verdict"
+            }
+          ],
+          "fanOut": null,
+          "display": {
+            "label": "Verdict"
+          }
+        },
+        {
+          "id": "report__report",
+          "kind": "agent",
+          "dependsOn": ["verdict__verdict"],
+          "loopGroup": null,
+          "blocks": [
+            {
+              "include": "report",
+              "workflow": "Wirasm/archon-software-factory:report"
+            }
+          ],
+          "fanOut": null,
+          "display": {
+            "label": "Writes the report"
+          }
+        }
+      ],
+      "display": {
+        "label": "Inspect",
+        "short": "Reviews others' PRs",
+        "blurb": "Reviews a pull request someone else proposed, with the review and the test check, and posts one report on it. It changes nothing in the pull request and decides nothing for the maintainer.",
+        "phases": [
+          {
+            "label": "Read",
+            "cards": [
+              {
+                "title": "Read the pull request",
+                "text": "Reads the pull request, its description and its discussion, as the item",
+                "icon": "git-pull-request",
+                "kind": "script",
+                "covers": ["read"]
+              },
+              {
+                "title": "Check it out",
+                "text": "Checks out the proposed commit and finds the commit it was built on",
+                "icon": "git-branch",
+                "kind": "script",
+                "covers": ["base"]
+              }
+            ]
+          },
+          {
+            "label": "Check",
+            "cards": [
+              {
+                "title": "Code review",
+                "text": "Reviews the change",
+                "icon": "search-code",
+                "kind": "check",
+                "covers": ["review__review"]
+              },
+              {
+                "title": "Test check",
+                "text": "Checks the tests prove the change",
+                "icon": "flask-conical",
+                "kind": "check",
+                "covers": ["tests__tests"]
+              }
+            ]
+          },
+          {
+            "label": "Verdict",
+            "cards": [
+              {
+                "title": "Verdict",
+                "text": "Sorts what the checks found into one verdict",
+                "icon": "gavel",
+                "kind": "check",
+                "covers": ["verdict__verdict"]
+              }
+            ]
+          },
+          {
+            "label": "Report",
+            "cards": [
+              {
+                "title": "Report",
+                "text": "Posts the report on the pull request with findings on their lines",
+                "icon": "message-square",
+                "kind": "agent",
+                "covers": ["report__report"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "Wirasm/archon-software-factory:survey",
+      "workflow": "survey",
+      "entry": true,
+      "roles": [
+        {
+          "role": "@judge",
+          "fallback": "medium"
+        }
+      ],
+      "inFlow": true,
+      "returns": "judge__judge",
+      "outcome": {
+        "field": "recommend",
+        "form": "enum",
+        "values": [
+          {
+            "value": "build",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would build",
+              "story": "The survey judged it worth building"
+            }
+          },
+          {
+            "value": "narrow",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would narrow",
+              "story": "The survey judged it worth building, in a narrower form"
+            }
+          },
+          {
+            "value": "split",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would split",
+              "story": "The survey judged it is more than one change"
+            }
+          },
+          {
+            "value": "shape",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would need shaping",
+              "story": "The survey judged it worth doing, once a maintainer settles its open questions"
+            }
+          },
+          {
+            "value": "recipe",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "handled another way",
+              "story": "The survey judged it is handled another way"
+            }
+          },
+          {
+            "value": "native",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "handled another way",
+              "story": "The survey judged it is handled another way"
+            }
+          },
+          {
+            "value": "fold",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would fold",
+              "story": "The survey judged it belongs in another item"
+            }
+          },
+          {
+            "value": "park",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would park",
+              "story": "The survey judged it should be parked for later"
+            }
+          },
+          {
+            "value": "deprecate",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would close",
+              "story": "The survey judged it should be deprecated"
+            }
+          },
+          {
+            "value": "decline",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would close",
+              "story": "The survey judged it should be declined"
+            }
+          },
+          {
+            "value": "close",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "would close",
+              "story": "The survey judged it should be closed"
+            }
+          }
+        ]
+      },
+      "observes": true,
+      "asks": false,
+      "waits": false,
+      "nodes": [
+        {
+          "id": "read",
+          "kind": "exec",
+          "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null,
+          "display": {
+            "label": "Reads the issue"
+          }
+        },
+        {
+          "id": "judge__judge",
+          "kind": "agent",
+          "dependsOn": ["read"],
+          "loopGroup": null,
+          "blocks": [
+            {
+              "include": "judge",
+              "workflow": "Wirasm/archon-software-factory:judge"
+            }
+          ],
+          "fanOut": null,
+          "display": {
+            "label": "Decides whether to build"
+          }
+        },
+        {
+          "id": "judge__admit",
+          "kind": "agent",
+          "dependsOn": ["judge__judge"],
+          "loopGroup": null,
+          "blocks": [
+            {
+              "include": "judge",
+              "workflow": "Wirasm/archon-software-factory:judge"
+            }
+          ],
+          "fanOut": null,
+          "display": {
+            "label": "Would it start on its own"
+          }
+        },
+        {
+          "id": "judge__admitted",
+          "kind": "exec",
+          "dependsOn": ["judge__admit"],
+          "loopGroup": null,
+          "blocks": [
+            {
+              "include": "judge",
+              "workflow": "Wirasm/archon-software-factory:judge"
+            }
+          ],
+          "fanOut": null,
+          "display": {
+            "label": "Records the admit measurement"
+          }
+        }
+      ],
+      "display": {
+        "label": "Survey",
+        "short": "Would triage build it?",
+        "blurb": "Judges a newly opened issue the way triage would, on an item of its own, and stops there. It starts nothing and writes nothing on the issue: its judgments are read together.",
+        "phases": [
+          {
+            "label": "Read",
+            "cards": [
+              {
+                "title": "Read the issue",
+                "text": "Reads the issue and its discussion, or the item given by hand",
+                "icon": "inbox",
+                "kind": "script",
+                "covers": ["read"]
+              }
+            ]
+          },
+          {
+            "label": "Decide",
+            "cards": [
+              {
+                "title": "Decide",
+                "text": "Decides whether the item is worth building, and how, as triage would",
+                "icon": "scale",
+                "kind": "agent",
+                "covers": ["judge__judge"]
+              },
+              {
+                "title": "Would it start on its own",
+                "text": "Decides whether it would start without you",
+                "icon": "ruler",
+                "kind": "agent",
+                "covers": ["judge__admit"]
+              },
+              {
+                "title": "Record",
+                "text": "Records the measurement",
+                "icon": "database",
+                "kind": "script",
+                "covers": ["judge__admitted"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "name": "Wirasm/archon-software-factory:close",
       "workflow": "close",
       "entry": false,
@@ -2315,6 +2797,156 @@
                 "icon": "git-pull-request",
                 "kind": "script",
                 "covers": ["close"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "Wirasm/archon-software-factory:order-done",
+      "workflow": "order-done",
+      "entry": false,
+      "roles": [
+        {
+          "role": "@reporter",
+          "fallback": "medium"
+        }
+      ],
+      "inFlow": true,
+      "returns": "end",
+      "outcome": {
+        "field": "outcome",
+        "form": "enum",
+        "values": [
+          {
+            "value": "open",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "members still open",
+              "story": "A member of the work order is still open; nothing was reported"
+            }
+          },
+          {
+            "value": "already",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "already reported",
+              "story": "The work order was reported before; nothing changed"
+            }
+          },
+          {
+            "value": "unknown",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "could not tell",
+              "story": "The factory could not read whether every member is done"
+            }
+          },
+          {
+            "value": "reported",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "reported",
+              "story": "Every member is done; the work order was reported"
+            }
+          },
+          {
+            "value": "proposed",
+            "startsNothing": true,
+            "ends": false,
+            "stops": false,
+            "display": {
+              "label": "proposed for landing",
+              "story": "Every member is done; their shared branch was proposed, and the land gate decides"
+            }
+          }
+        ]
+      },
+      "observes": true,
+      "asks": false,
+      "waits": false,
+      "nodes": [
+        {
+          "id": "read",
+          "kind": "exec",
+          "dependsOn": [],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null,
+          "display": {
+            "label": "Reads the order's members"
+          }
+        },
+        {
+          "id": "report",
+          "kind": "agent",
+          "dependsOn": ["read"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null,
+          "display": {
+            "label": "Reports the order"
+          }
+        },
+        {
+          "id": "end",
+          "kind": "exec",
+          "dependsOn": ["read", "report"],
+          "loopGroup": null,
+          "blocks": [],
+          "fanOut": null,
+          "display": {
+            "label": "Hands the order on"
+          }
+        }
+      ],
+      "display": {
+        "label": "Order done",
+        "short": "Reports finished orders",
+        "blurb": "When the last member of a work order is done, reports the order, and proposes the members' shared branch for the land gate when they landed together.",
+        "phases": [
+          {
+            "label": "Read",
+            "cards": [
+              {
+                "title": "Read the order",
+                "text": "Reads whether every member is done, and the branch they shared",
+                "icon": "clipboard-list",
+                "kind": "script",
+                "covers": ["read"]
+              }
+            ]
+          },
+          {
+            "label": "Report",
+            "cards": [
+              {
+                "title": "Report",
+                "text": "Reports the order, and proposes the shared branch when the members landed on one",
+                "icon": "message-square",
+                "kind": "agent",
+                "covers": ["report"]
+              }
+            ]
+          },
+          {
+            "label": "Hand on",
+            "cards": [
+              {
+                "title": "Hand on",
+                "text": "Hands a proposed branch to the land gate",
+                "icon": "send",
+                "kind": "script",
+                "covers": ["end"]
               }
             ]
           }
@@ -2435,146 +3067,6 @@
           "fanOut": null,
           "display": {
             "label": "Reads CI and PR reviews"
-          }
-        }
-      ]
-    },
-    {
-      "name": "Wirasm/archon-software-factory:inspect",
-      "workflow": "inspect",
-      "entry": false,
-      "roles": [
-        {
-          "role": "@reviewer",
-          "fallback": "large"
-        },
-        {
-          "role": "@test-checker",
-          "fallback": "large"
-        },
-        {
-          "role": "@verdict",
-          "fallback": "small"
-        },
-        {
-          "role": "@reporter",
-          "fallback": "medium"
-        }
-      ],
-      "inFlow": false,
-      "returns": "verdict__verdict",
-      "outcome": {
-        "field": "outcome",
-        "form": "enum",
-        "values": [
-          {
-            "value": "approve",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "return",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "replan",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "ask",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          }
-        ]
-      },
-      "observes": true,
-      "asks": false,
-      "waits": false,
-      "nodes": [
-        {
-          "id": "read",
-          "kind": "exec",
-          "dependsOn": [],
-          "loopGroup": null,
-          "blocks": [],
-          "fanOut": null
-        },
-        {
-          "id": "base",
-          "kind": "exec",
-          "dependsOn": ["read"],
-          "loopGroup": null,
-          "blocks": [],
-          "fanOut": null
-        },
-        {
-          "id": "review__review",
-          "kind": "agent",
-          "dependsOn": ["base"],
-          "loopGroup": null,
-          "blocks": [
-            {
-              "include": "review",
-              "workflow": "Wirasm/archon-software-factory:review"
-            }
-          ],
-          "fanOut": null,
-          "display": {
-            "label": "Code review"
-          }
-        },
-        {
-          "id": "tests__tests",
-          "kind": "agent",
-          "dependsOn": ["base"],
-          "loopGroup": null,
-          "blocks": [
-            {
-              "include": "tests",
-              "workflow": "Wirasm/archon-software-factory:tests"
-            }
-          ],
-          "fanOut": null,
-          "display": {
-            "label": "Test check"
-          }
-        },
-        {
-          "id": "verdict__verdict",
-          "kind": "agent",
-          "dependsOn": ["review__review", "tests__tests"],
-          "loopGroup": null,
-          "blocks": [
-            {
-              "include": "verdict",
-              "workflow": "Wirasm/archon-software-factory:verdict"
-            }
-          ],
-          "fanOut": null,
-          "display": {
-            "label": "Verdict"
-          }
-        },
-        {
-          "id": "report__report",
-          "kind": "agent",
-          "dependsOn": ["verdict__verdict"],
-          "loopGroup": null,
-          "blocks": [
-            {
-              "include": "report",
-              "workflow": "Wirasm/archon-software-factory:report"
-            }
-          ],
-          "fanOut": null,
-          "display": {
-            "label": "Writes the report"
           }
         }
       ]
@@ -2774,129 +3266,6 @@
       ]
     },
     {
-      "name": "Wirasm/archon-software-factory:survey",
-      "workflow": "survey",
-      "entry": false,
-      "roles": [
-        {
-          "role": "@judge",
-          "fallback": "medium"
-        }
-      ],
-      "inFlow": false,
-      "returns": "judge__judge",
-      "outcome": {
-        "field": "recommend",
-        "form": "enum",
-        "values": [
-          {
-            "value": "build",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "narrow",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "split",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "shape",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "recipe",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "native",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "fold",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "park",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "deprecate",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "decline",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          },
-          {
-            "value": "close",
-            "startsNothing": true,
-            "ends": false,
-            "stops": false
-          }
-        ]
-      },
-      "observes": true,
-      "asks": false,
-      "waits": false,
-      "nodes": [
-        {
-          "id": "judge__judge",
-          "kind": "agent",
-          "dependsOn": [],
-          "loopGroup": null,
-          "blocks": [],
-          "fanOut": null,
-          "display": {
-            "label": "Decides whether to build"
-          }
-        },
-        {
-          "id": "judge__admit",
-          "kind": "agent",
-          "dependsOn": ["judge__judge"],
-          "loopGroup": null,
-          "blocks": [],
-          "fanOut": null,
-          "display": {
-            "label": "Would it start on its own"
-          }
-        },
-        {
-          "id": "judge__admitted",
-          "kind": "exec",
-          "dependsOn": ["judge__admit"],
-          "loopGroup": null,
-          "blocks": [],
-          "fanOut": null,
-          "display": {
-            "label": "Records the admit measurement"
-          }
-        }
-      ]
-    },
-    {
       "name": "Wirasm/archon-software-factory:tests",
       "workflow": "tests",
       "entry": false,
@@ -3019,12 +3388,22 @@
       "binding": "order-on-label",
       "kind": "event",
       "stage": "Wirasm/archon-software-factory:order"
+    },
+    {
+      "binding": "inspect-on-label",
+      "kind": "event",
+      "stage": "Wirasm/archon-software-factory:inspect"
+    },
+    {
+      "binding": "survey-on-opened",
+      "kind": "event",
+      "stage": "Wirasm/archon-software-factory:survey"
     }
   ],
   "document": {
     "path": "how-it-works.md",
     "problems": [],
-    "text": "# How the factory works\n\nWork comes in as a work order, or as an issue someone adds the `factory` label to. Agents also find work while they do other work. Triage decides whether it is worth building. The link stage places it among the project's other work. Plan writes down how to build it. Build writes the change and opens a draft pull request. Three checks read it, then the project's own CI and the reviews on the pull request. The land gate lets it land or asks you, and the change lands on its branch.\n\nYou are asked only when a decision is yours. Each ask comes with its options, what each costs, and a recommendation when the stage has a basis for one.\n\n## How work gets in\n\n- **A work order.** Handed to the factory by an operator: one item, or several that belong together.\n- **An issue.** Someone adds the `factory` label to it.\n- **Found by agents.** Noticed outside their own task, and filed as new work after a change lands.\n\n## Triage\n\nTriage reads a new item and decides what should happen to it, the way the project's maintainers would.\n\n- **The item.** A work order, a labelled issue or a finding.\n- **Judge.** Decides what happens, as maintainers would.\n- **The call.** Build, narrow, split, shape, park or close. A call that does not start a build is shown to you; nothing is closed behind your back.\n\n## Link\n\nLink decides whether the item can be built now.\n\n- **Place it.** Sets it among the project's other open work and records what it depends on.\n- **Wait.** An item that cannot be built before another lands waits, and goes on by itself when that one lands.\n- **You.** Asked when what it waits on will not land: keep waiting, start anyway, or drop it.\n\n## Plan\n\nPlan reads the project and writes down how to build the item. It changes nothing. When it asks you, your answer starts it again with the answer in hand.\n\n- **Read the project.** Code, rules and history.\n- **Weigh the ways.** The smallest, the complete, and any other.\n- **The plan.** What a builder needs, with no questions left.\n- **You.** Asked when the choice is yours.\n\n## Build\n\nBuild writes the change in its own checkout and opens a draft pull request. What the checks and CI find comes back to the same builder to fix. A plan that cannot be built as written goes back to Plan.\n\n- **Build the change.** Writes and tests it in its own checkout.\n- **Draft pull request.** The change, ready to be read.\n- **What comes back.** Findings from the checks and from CI.\n\n## Checks\n\nThree checks read every change. The verdict approves it, sends it back to the same builder with what they found, or sends it back to Plan when it needs a different approach. After three rounds it asks you.\n\n- **Review.** Reads the code.\n- **Tests.** Judges the tests the change adds.\n- **Product.** Tries what a user sees.\n- **Verdict.** Approve, send back, or replan.\n\n## CI and reviews\n\nThe host round reads what the project's own CI and the reviewers on the pull request say, and sends what must change back to the builder.\n\n## Landing\n\n- **Land gate.** Decides whether the change lands without asking you. With no land policy it asks every time.\n- **Land.** Merges the change into its landing branch: the project's base branch, or the branch its work order names.\n- **Landed check.** Looks at the branch after the landing, and starts a fix when the change broke it.\n- **Discoveries.** What the agents noticed along the way becomes new work.\n- **Close.** A change you dropped is closed with your reason; one you sent back to shaping is closed too, its branch kept, and the item waits to be shaped again.\n\n## You\n\nAnswer what the factory asks. An answer is a decision: it starts what comes next and reaches that stage as already made.\n\n---\n\nThe explainer this page grew from was written by Cole Medin for the factory's first Console view.\n",
+    "text": "# How the factory works\n\nWork comes in as a work order, or as an issue someone adds the `factory` label to. Agents also find work while they do other work. Triage decides whether it is worth building. The link stage places it among the project's other work. Plan writes down how to build it. Build writes the change and opens a draft pull request. Three checks read it, then the project's own CI and the reviews on the pull request. The land gate lets it land or asks you, and the change lands on its branch.\n\nYou are asked only when a decision is yours. Each ask comes with its options, what each costs, and a recommendation when the stage has a basis for one.\n\n## How work gets in\n\n- **A work order.** Handed to the factory by an operator: one item, or several that belong together.\n- **An issue.** Someone adds the `factory` label to it.\n- **Found by agents.** Noticed outside their own task, and filed as new work after a change lands.\n\n## Triage\n\nTriage reads a new item and decides what should happen to it, the way the project's maintainers would.\n\n- **The item.** A work order, a labelled issue or a finding.\n- **Judge.** Decides what happens, as maintainers would.\n- **The call.** Build, narrow, split, shape, park or close. A call that does not start a build is shown to you; nothing is closed behind your back.\n\n## Link\n\nLink decides whether the item can be built now.\n\n- **Place it.** Sets it among the project's other open work and records what it depends on.\n- **Wait.** An item that cannot be built before another lands waits, and goes on by itself when that one lands.\n- **You.** Asked when what it waits on will not land: keep waiting, start anyway, or drop it.\n\n## Plan\n\nPlan reads the project and writes down how to build the item. It changes nothing. When it asks you, your answer starts it again with the answer in hand.\n\n- **Read the project.** Code, rules and history.\n- **Weigh the ways.** The smallest, the complete, and any other.\n- **The plan.** What a builder needs, with no questions left.\n- **You.** Asked when the choice is yours.\n\n## Build\n\nBuild writes the change in its own checkout and opens a draft pull request. What the checks and CI find comes back to the same builder to fix. A plan that cannot be built as written goes back to Plan.\n\n- **Build the change.** Writes and tests it in its own checkout.\n- **Draft pull request.** The change, ready to be read.\n- **What comes back.** Findings from the checks and from CI.\n\n## Checks\n\nThree checks read every change. The verdict approves it, sends it back to the same builder with what they found, or sends it back to Plan when it needs a different approach. After three rounds it asks you.\n\n- **Review.** Reads the code.\n- **Tests.** Judges the tests the change adds.\n- **Product.** Tries what a user sees.\n- **Verdict.** Approve, send back, or replan.\n\n## CI and reviews\n\nThe host round reads what the project's own CI and the reviewers on the pull request say, and sends what must change back to the builder.\n\n## Landing\n\n- **Land gate.** Decides whether the change lands without asking you. With no land policy it asks every time.\n- **Land.** Merges the change into its landing branch: the project's base branch, or the branch its work order names.\n- **Landed check.** Looks at the branch after the landing, and starts a fix when the change broke it.\n- **Discoveries.** What the agents noticed along the way becomes new work.\n- **Close.** A change you dropped is closed with your reason; one you sent back to shaping is closed too, its branch kept, and the item waits to be shaped again.\n- **Order done.** When the last member of a work order is done, the order is reported: each member and how it ended. Members that landed together on a branch of their own are proposed against the base branch as one change, which goes to the land gate.\n\n## You\n\nAnswer what the factory asks. An answer is a decision: it starts what comes next and reaches that stage as already made.\n\n---\n\nThe explainer this page grew from was written by Cole Medin for the factory's first Console view.\n",
     "words": {
       "round": "check round",
       "rounds": "check rounds",
@@ -3093,8 +3472,8 @@
   "groups": [
     {
       "name": "Intake",
-      "blurb": "Order, triage, split and link",
-      "stages": ["order", "triage", "split", "link", "complexity"],
+      "blurb": "Order, triage, split and link, and surveying new issues",
+      "stages": ["order", "triage", "split", "link", "complexity", "survey"],
       "kind": "intake"
     },
     {
@@ -3105,14 +3484,14 @@
     },
     {
       "name": "Checks",
-      "blurb": "Checks, CI and PR reviews, and catching up",
-      "stages": ["stage-check", "stage-host", "catchup"],
+      "blurb": "Checks, CI and PR reviews, catching up, and reviewing others' PRs",
+      "stages": ["stage-check", "stage-host", "catchup", "inspect"],
       "kind": "check"
     },
     {
       "name": "Landing",
       "blurb": "Gate, merge, and what follows the merge",
-      "stages": ["landgate", "land", "landed", "discoveries", "close"],
+      "stages": ["landgate", "land", "landed", "discoveries", "close", "order-done"],
       "kind": "merge"
     }
   ],
@@ -3601,6 +3980,24 @@
     },
     {
       "from": {
+        "stage": "Wirasm/archon-software-factory:plan",
+        "outcome": "dropped"
+      },
+      "to": "Wirasm/archon-software-factory:link",
+      "linked": {
+        "kind": "depends_on",
+        "holder": "from",
+        "entries": {}
+      },
+      "active": false,
+      "declared": {
+        "binding": "link-after-blocker-plan-dropped",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
         "stage": "Wirasm/archon-software-factory:triage",
         "settled": "answered",
         "option": "build"
@@ -3625,6 +4022,21 @@
       "active": false,
       "declared": {
         "binding": "split-after-triage-answers",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:triage",
+        "settled": "answered",
+        "option": "other"
+      },
+      "to": "Wirasm/archon-software-factory:triage",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "triage-after-triage-answers",
         "problems": []
       },
       "installed": null
@@ -4087,6 +4499,110 @@
       "active": false,
       "declared": {
         "binding": "discoveries-after-land",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:land",
+        "outcome": "landed"
+      },
+      "to": "Wirasm/archon-software-factory:order-done",
+      "linked": {
+        "kind": "part_of",
+        "holder": "to",
+        "entries": {}
+      },
+      "active": false,
+      "declared": {
+        "binding": "order-done-after-member-landed",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:close",
+        "outcome": "dropped"
+      },
+      "to": "Wirasm/archon-software-factory:order-done",
+      "linked": {
+        "kind": "part_of",
+        "holder": "to",
+        "entries": {}
+      },
+      "active": false,
+      "declared": {
+        "binding": "order-done-after-member-closed",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:link",
+        "outcome": "dropped"
+      },
+      "to": "Wirasm/archon-software-factory:order-done",
+      "linked": {
+        "kind": "part_of",
+        "holder": "to",
+        "entries": {}
+      },
+      "active": false,
+      "declared": {
+        "binding": "order-done-after-member-dropped",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:plan",
+        "outcome": "dropped"
+      },
+      "to": "Wirasm/archon-software-factory:order-done",
+      "linked": {
+        "kind": "part_of",
+        "holder": "to",
+        "entries": {}
+      },
+      "active": false,
+      "declared": {
+        "binding": "order-done-after-member-plan-dropped",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:order-done",
+        "outcome": "reported"
+      },
+      "to": "Wirasm/archon-software-factory:order-done",
+      "linked": {
+        "kind": "part_of",
+        "holder": "to",
+        "entries": {}
+      },
+      "active": false,
+      "declared": {
+        "binding": "order-done-after-member-reported",
+        "problems": []
+      },
+      "installed": null
+    },
+    {
+      "from": {
+        "stage": "Wirasm/archon-software-factory:order-done",
+        "outcome": "proposed"
+      },
+      "to": "Wirasm/archon-software-factory:landgate",
+      "linked": null,
+      "active": false,
+      "declared": {
+        "binding": "landgate-after-order-done",
         "problems": []
       },
       "installed": null
