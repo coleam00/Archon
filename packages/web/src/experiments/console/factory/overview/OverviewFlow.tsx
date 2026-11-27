@@ -158,24 +158,37 @@ export const OverviewFlow = memo(function OverviewFlow({
   );
 });
 
-/** A move's dot and its halo, one group moving and fading on the view's timeline. */
-function FlowDot({
+/**
+ * A move's dot and its halo, one group moving and fading on the view's timeline. The map's
+ * quieter dots (`MapFlow`, `MapSendBacks`) pass a smaller `r` and `haloR` and a lower `peak`.
+ */
+export function FlowDot({
   move,
   period,
   dur,
   colour,
+  r = DOT_R,
+  haloR = HALO_R,
+  peak = 1,
+  data = { 'data-flow-move': `${move.from}->${move.to}` },
 }: {
   move: FlowMove;
   period: number;
   dur: string;
-  /** The kind colour of the card it travels to. */
+  /** How it works: the kind colour of the card it travels to. */
   colour: string;
+  r?: number;
+  haloR?: number;
+  /** Its opacity while it travels. */
+  peak?: number;
+  /** The attribute a test finds it by. */
+  data?: Record<`data-${string}`, string>;
 }): ReactElement {
-  const fade = opacityAnimation(move.start, move.end, 1, period, DOT_FADE);
+  const fade = opacityAnimation(move.start, move.end, peak, period, DOT_FADE);
   return (
-    <g data-flow-move={`${move.from}->${move.to}`} fill={colour} opacity={0}>
-      <circle r={HALO_R} opacity={HALO_OPACITY} />
-      <circle r={DOT_R} />
+    <g {...data} fill={colour} opacity={0}>
+      <circle r={haloR} opacity={HALO_OPACITY} />
+      <circle r={r} />
       {/* Linear, not the default paced: paced ignores keyTimes, which hold the dot still outside its leg. */}
       <animateMotion
         path={rounded(move.points)}

@@ -13,6 +13,7 @@ import {
   type FitPad,
   fitCamera,
   fittedHeight,
+  grownHeight,
   MAP_ROOM_Y,
   MIN_FRAME_HEIGHT,
   LIVE_MIN_K,
@@ -93,18 +94,24 @@ const frameOf = (el: HTMLElement): Frame => ({ width: el.clientWidth, height: el
  * unless the person has moved the map. `fitting` sets the fit's padding, its least and most
  * scale (`fitCamera`) and the bottom band it leaves clear; the live map takes the defaults.
  * Where the drawing does not fit, a fit opens (and Fit returns) at the drawing's start.
+ * `below` is how far under the drawing (world units) must show too, now: the frame grows under
+ * the drawing to hold it (`grownHeight`) while the fit, and so the cards, stay where they are.
  */
 export function useMapCamera(
   bounds: Box,
   focus: Box | null,
-  fitting: Fitting = LIVE_FITTING
+  fitting: Fitting = LIVE_FITTING,
+  below = 0
 ): MapCamera {
   const { pad, minK, maxK, reserveBottom, maxFrameVh } = fitting;
-  /** The part of the frame a fit fills. */
+  /**
+   * The part of the frame a fit fills: the frame as the drawing alone sizes it (`base`, its
+   * border box), not as a grown `below` makes it, so showing what is below never moves the map.
+   */
   const fitFrame = useCallback(
-    (el: HTMLElement): Frame => ({
+    (el: HTMLElement, base: number): Frame => ({
       width: el.clientWidth,
-      height: Math.max(0, el.clientHeight - reserveBottom),
+      height: Math.max(0, base - (el.offsetHeight - el.clientHeight) - reserveBottom),
     }),
     [reserveBottom]
   );
@@ -122,22 +129,31 @@ export function useMapCamera(
     setCamera(next);
   }, []);
 
+  /** The frame's border-box height for the drawing alone, before `below` grows it. */
+  const baseOf = useCallback(
+    (el: HTMLElement): number => {
+      const row = el.parentElement ?? el;
+      // The height set is the frame's border box; the fit is to its client box, inside the
+      // border. Adding the border makes the client box the fitted height, so the drawing sits
+      // centred with the whole pad above and below it rather than top-aligned and short.
+      const border = el.offsetHeight - el.clientHeight;
+      const fitted = fittedHeight(bounds, row.clientWidth, pad, minK, maxK) + border;
+      return maxFrameVh === undefined
+        ? fitted
+        : cappedHeight(fitted, window.innerHeight, maxFrameVh);
+    },
+    [bounds, pad, minK, maxK, maxFrameVh]
+  );
+
   const place = useCallback(() => {
     const el = frameRef.current;
     if (el === null) return;
-    const row = el.parentElement ?? el;
-    // The height set is the frame's border box; the fit is to its client box, inside the
-    // border. Adding the border makes the client box the fitted height, so the drawing sits
-    // centred with the whole pad above and below it rather than top-aligned and short.
-    const border = el.offsetHeight - el.clientHeight;
-    const fitted = fittedHeight(bounds, row.clientWidth, pad, minK, maxK) + border;
-    setHeight(
-      maxFrameVh === undefined ? fitted : cappedHeight(fitted, window.innerHeight, maxFrameVh)
-    );
+    const base = baseOf(el);
     const target = focused.current;
     if (target !== null) put(reveal(current.current, target, frameOf(el)));
-    else if (!moved.current) put(fitCamera(bounds, fitFrame(el), pad, minK, maxK));
-  }, [bounds, pad, minK, maxK, maxFrameVh, fitFrame, put]);
+    else if (!moved.current) put(fitCamera(bounds, fitFrame(el, base), pad, minK, maxK));
+    setHeight(grownHeight(base, current.current, bounds, below));
+  }, [bounds, below, pad, minK, maxK, baseOf, fitFrame, put]);
 
   useEffect(() => {
     focused.current = focus;
@@ -193,7 +209,9 @@ export function useMapCamera(
     const el = frameRef.current;
     if (el === null) return;
     moved.current = false;
-    put(fitCamera(bounds, fitFrame(el), pad, minK, maxK));
+    const base = baseOf(el);
+    put(fitCamera(bounds, fitFrame(el, base), pad, minK, maxK));
+    setHeight(grownHeight(base, current.current, bounds, below));
   };
 
   const onPointerDown = (event: PointerEvent<HTMLElement>): void => {

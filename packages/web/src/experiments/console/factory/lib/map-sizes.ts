@@ -1,12 +1,12 @@
 /**
  * The factory map's sizes, in world units (px at zoom 1, the map's least fitted zoom: its
  * smallest text is the type floor's 12 px, `map-camera.ts`). Their own module because the
- * layout (`map-layout.ts`) and the feedback lane (`map-feedback-lane.ts`) both size from them,
- * and the layout imports the lane.
+ * layout (`map-layout.ts`), the send-backs (`map-send-backs.ts`) and the pills (`map-pill.ts`)
+ * all size from them, and the layout imports the other two.
  *
  * A card is in the Visual standard's card language (rule 2), its height fixed by construction
- * so every card shares one and the lane under them is straight (rows top to bottom, 8 px
- * apart, inside 12 px padding and the 3 px accent bar's 4 px):
+ * so every card shares one and every send-back's legs leave one straight bottom edge (rows top
+ * to bottom, 8 px apart, inside 12 px padding and the 3 px accent bar's 4 px):
  *
  * - a card of one stage: the icon and kind row (16), the stage label on up to two lines (40),
  *   its short line on up to two (36) and the chips on one row (20): 16 + 16 + 8 + 40 + 8 + 36
@@ -46,5 +46,7 @@ export const PILL_CLEAR = 8;
 export const PILL_GAP = 6;
 /** From one line of a stacked pill to the next. */
 export const PILL_LINE = 16;
-/** From a card's bottom edge to the feedback lane. */
-export const LANE = 32;
+/** From a card's bottom edge to a card's shallowest send-back track. */
+export const LANE = 24;
+/** From one send-back track of a card to the next one down. */
+export const TRACK = 10;

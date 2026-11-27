@@ -58,6 +58,16 @@ const length = (points: readonly Point[]): number =>
 const travelAtTempo1 = (points: readonly Point[]): number =>
   Math.min(FLOW_MAX_TRAVEL, Math.max(FLOW_MIN_TRAVEL, Math.round(length(points) / FLOW_SPEED)));
 
+/**
+ * How long a dot takes along `points` at `tempo`, in ms. The factor applies after the clamps, so
+ * they scale with every other duration. The map's dots (`map-flow.ts`) travel at this speed too.
+ */
+export const travelMs = (points: readonly Point[], tempo = FLOW_TEMPO): number =>
+  travelAtTempo1(points) * tempo;
+
+/** The pause after the last dot arrives, before a loop starts again, at `tempo`. */
+export const flowRestMs = (tempo = FLOW_TEMPO): number => FLOW_REST_BASE * tempo;
+
 /** Points with no two in a row the same: a zero-length run has no direction to round a bend by. */
 function distinct(points: readonly Point[]): Point[] {
   return points.filter((p, i) => {
@@ -76,8 +86,7 @@ export function overviewFlow(
   layout: OverviewLayout,
   tempo = FLOW_TEMPO
 ): OverviewFlow | undefined {
-  // The factor applies after the clamps, so they scale with every other duration.
-  const travel = (points: readonly Point[]): number => travelAtTempo1(points) * tempo;
+  const travel = (points: readonly Point[]): number => travelMs(points, tempo);
   const dwell = FLOW_DWELL_BASE * tempo;
   const kindOf = new Map(view.cards.map(card => [card.id, card.kind]));
   const isInput = (id: string): boolean => {
@@ -129,7 +138,7 @@ export function overviewFlow(
   }
 
   const last = Math.max(...moves.map(move => move.end), ...glows.map(glow => glow.end));
-  return { period: last + FLOW_REST_BASE * tempo, moves, glows };
+  return { period: last + flowRestMs(tempo), moves, glows };
 }
 
 /**

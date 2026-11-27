@@ -10,7 +10,7 @@ import { testFile, testGraph } from './curated.test-fixtures';
 import { asksOn, itemOn, MOVING_ITEMS } from './items.test-fixtures';
 import { installDom } from './test-dom.test-helpers';
 
-const { mount: mountTree, settle } = await installDom();
+const { mount: mountTree, settle, dom } = await installDom();
 // Loaded after the window exists: react-dom reads it when it loads.
 const { PackMap } = await import('./PackMap');
 
@@ -26,6 +26,7 @@ let unmount: (() => Promise<void>) | undefined;
 afterEach(async () => {
   await unmount?.();
   unmount = undefined;
+  dom.happyDOM.settings.device.prefersReducedMotion = 'no-preference';
   for (const prefix of ['pack-view', 'pack-graph', 'board']) invalidate(prefix);
 });
 
@@ -345,5 +346,202 @@ describe('the stage modal', () => {
       dialog().querySelector(selector)?.textContent?.match(/\d+/g) ?? [];
     expect(numbersIn('[data-items-here] h6')).toEqual(['2']);
     expect(dialog().querySelector('[data-items-here]')?.textContent).not.toContain('landed');
+  });
+});
+
+describe("the map's send-backs and flow", () => {
+  const routes = (page: ParentNode): string[] =>
+    [...page.querySelectorAll('[data-route]')].map(route => route.getAttribute('data-route') ?? '');
+  const routePills = (page: ParentNode): string[] =>
+    [...page.querySelectorAll('[data-route-pill] [data-pill]')].map(
+      pill => pill.getAttribute('data-pill') ?? ''
+    );
+  const card = (page: ParentNode, id: string): Element => {
+    const found = page.querySelector(`[data-card="${id}"]`);
+    if (found === null) throw new Error(`no card ${id}`);
+    return found;
+  };
+  /** React reads enter and leave from mouseover and mouseout. */
+  const pointer = async (target: Element, kind: 'mouseover' | 'mouseout'): Promise<void> => {
+    await act(async () => {
+      target.dispatchEvent(
+        new dom.MouseEvent(kind, {
+          bubbles: true,
+          relatedTarget: dom.document.body,
+        }) as unknown as Event
+      );
+    });
+  };
+  const click = async (target: Element): Promise<void> => {
+    await act(async () => {
+      target.dispatchEvent(new dom.MouseEvent('click', { bubbles: true }) as unknown as Event);
+    });
+  };
+
+  // Checks holds stage-check and stage-host, which both send back to stage-build: two routes.
+  const CHECKS_ROUTES = ['stage-check>plan', 'stage-check>stage-build', 'stage-host>stage-build'];
+
+  test('by default the map draws no send-back and no send-back pill', async () => {
+    const page = await mount(CURATED);
+    expect(routes(page)).toEqual([]);
+    expect(routePills(page)).toEqual([]);
+  });
+
+  test("each card's badge counts the send-back routes leaving it, one per pair of stages", async () => {
+    const page = await mount(CURATED);
+    const badges = Object.fromEntries(
+      [...page.querySelectorAll('[data-send-back-badge]')].map(badge => [
+        badge.getAttribute('data-send-back-badge'),
+        badge.textContent,
+      ])
+    );
+    expect(badges).toEqual({
+      intake: '↺ 5',
+      'plan-and-build': '↺ 3',
+      checks: '↺ 3',
+      landing: '↺ 4',
+      landed: '↺ 1',
+    });
+  });
+
+  test('hovering a card draws exactly its routes, each with its pill; leaving it hides them', async () => {
+    const page = await mount(CURATED);
+    await pointer(card(page, 'checks'), 'mouseover');
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    expect(routePills(page)).toEqual([
+      'plan again Checks → Plan',
+      'returned +3 Checks → Build',
+      'returned CI and review → Build',
+    ]);
+    await pointer(card(page, 'checks'), 'mouseout');
+    expect(routes(page)).toEqual([]);
+  });
+
+  test("focus on a card's link shows its routes", async () => {
+    const page = await mount(CURATED);
+    const link = card(page, 'checks').querySelector('a');
+    await act(async () => (link as unknown as HTMLElement | null)?.focus());
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+  });
+
+  test('the badge pins them; a press that starts a pan keeps the pin, a click elsewhere drops it', async () => {
+    const page = await mount(CURATED);
+    const badge = card(page, 'checks').querySelector('[data-send-back-badge]') as Element;
+    await click(badge);
+    expect(badge.getAttribute('aria-pressed')).toBe('true');
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    // A press on the frame starts a pan; the pin holds.
+    const frame = page.querySelector('.factory-canvas') as Element;
+    await act(async () => {
+      frame.dispatchEvent(
+        new dom.PointerEvent('pointerdown', { bubbles: true }) as unknown as Event
+      );
+    });
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    // Only the pinned card's shortened pill ("returned +3") gets a tip: no other route pill.
+    const routeTips = [...page.querySelectorAll('[data-pill-tip]')].filter(button =>
+      button.getAttribute('aria-label')?.includes(' back to ')
+    );
+    expect(routeTips.map(button => button.getAttribute('aria-label')?.split(':')[0])).toEqual([
+      'Checks back to Build',
+    ]);
+    const tip = routeTips[0];
+    // A click on the tip keeps the pin.
+    await click(tip as Element);
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    await click(frame);
+    expect(routes(page)).toEqual([]);
+  });
+
+  test('on touch, a second press on the badge hides the routes though the tap left the card hovered', async () => {
+    const page = await mount(CURATED);
+    const badge = card(page, 'checks').querySelector('[data-send-back-badge]') as Element;
+    // A tap sends an emulated mouseover before its click.
+    await pointer(badge, 'mouseover');
+    await click(badge);
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    await pointer(badge, 'mouseover');
+    await click(badge);
+    expect(badge.getAttribute('aria-pressed')).toBe('false');
+    expect(routes(page)).toEqual([]);
+  });
+
+  test('pressing a focused badge twice, as the keyboard does, hides the routes too', async () => {
+    const page = await mount(CURATED);
+    const badge = card(page, 'checks').querySelector('[data-send-back-badge]') as HTMLElement;
+    // Script focus is focus-visible in happy-dom, as Tab is in a browser.
+    await act(async () => badge.focus());
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    await click(badge);
+    await click(badge);
+    expect(routes(page)).toEqual([]);
+  });
+
+  test('Escape that closes the stage modal keeps the pin; with nothing else open it unpins', async () => {
+    const page = await mount(CURATED, '?stage=stage-check');
+    const badge = card(page, 'checks').querySelector('[data-send-back-badge]') as Element;
+    await click(badge);
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    const escape = async (): Promise<void> => {
+      await act(async () => {
+        window.dispatchEvent(
+          new dom.KeyboardEvent('keydown', { key: 'Escape' }) as unknown as Event
+        );
+      });
+      await settle();
+    };
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    await escape();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    await escape();
+    expect(routes(page)).toEqual([]);
+  });
+
+  test('the frame hugs the cards and grows under them while a card shows its send-backs', async () => {
+    const page = await mount(CURATED);
+    const frame = page.querySelector('.factory-canvas') as HTMLElement;
+    const hugged = Number.parseFloat(frame.style.height);
+    await pointer(card(page, 'checks'), 'mouseover');
+    expect(Number.parseFloat(frame.style.height)).toBeGreaterThan(hugged);
+    await pointer(card(page, 'checks'), 'mouseout');
+    expect(Number.parseFloat(frame.style.height)).toBe(hugged);
+  });
+
+  test('the Full workflow legend names no hover, badge or moving dot: that view has none', async () => {
+    const full = await mount(CURATED, '?map=full');
+    const lines = full.querySelector('[aria-label="Lines"]');
+    expect(lines).not.toBeNull();
+    const legend = lines?.textContent ?? '';
+    expect(legend).not.toContain('↺');
+    expect(legend).not.toContain('dot');
+    await unmount?.();
+    const curated = await mount(CURATED);
+    expect(curated.querySelector('[aria-label="Lines"]')?.textContent).toContain('↺');
+  });
+
+  test('with motion allowed, a dot follows the forward flow and one leaves along each shown route', async () => {
+    const page = await mount(CURATED);
+    // The fixture has a run working on build: its running dot is drawn.
+    expect(page.querySelector('.map-flow-dot')).not.toBeNull();
+    expect(page.querySelectorAll('[data-map-flow] [data-map-flow-move]')).toHaveLength(
+      page.querySelectorAll('[data-arrow]').length
+    );
+    await pointer(card(page, 'checks'), 'mouseover');
+    expect(
+      [...page.querySelectorAll('[data-branch-dot]')].map(dot =>
+        dot.getAttribute('data-branch-dot')
+      )
+    ).toEqual(CHECKS_ROUTES);
+  });
+
+  test('under reduced motion no dot is drawn, even while a card shows its routes', async () => {
+    dom.happyDOM.settings.device.prefersReducedMotion = 'reduce';
+    const page = await mount(CURATED);
+    await pointer(card(page, 'checks'), 'mouseover');
+    expect(routes(page)).toEqual(CHECKS_ROUTES);
+    expect(page.querySelector('[data-map-flow]')).toBeNull();
+    expect(page.querySelector('.map-flow-dot')).toBeNull();
+    expect(page.querySelector('[data-branch-dot]')).toBeNull();
   });
 });

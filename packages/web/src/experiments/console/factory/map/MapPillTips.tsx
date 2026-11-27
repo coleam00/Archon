@@ -1,35 +1,70 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
-import type { ArrowPath, Box, PlacedCard } from '../lib/map-layout';
+import type { Box, MapLayout } from '../lib/map-layout';
 import { tipShift } from '../lib/tip-shift';
 
+/** A pill on the map that shows fewer outcomes than its line carries ("built +2"). */
+export interface ShortPill {
+  id: string;
+  pill: Box;
+  /** What the line joins, for its button's name. */
+  name: string;
+  outcomes: readonly string[];
+}
+
 /**
- * Every outcome of a forward hand-off whose pill shows fewer than it has ("built +2"): a
- * button laid exactly over the pill, which opens a tip listing them on hover, on focus and on a
- * tap. HTML rather than part of the SVG: the map's lines are `aria-hidden` and take no pointer,
- * and a tap or the keyboard has to reach the list. Drawn after the cards, so no card's box
- * covers a button. A press on one still starts a pan of the map: it is not stopped here.
+ * The map's short pills: every forward hand-off's whose pill shows fewer outcomes than it
+ * carries, and those of the send-backs of `pinned`, the card pinned by its ↺ badge and shown.
+ * Only a pinned card's: a hovered or focused card's routes go as the pointer or focus leaves
+ * the card for a pill, so a tip there could never be reached.
  */
-export function MapPillTips({
-  cards,
-  arrows,
-}: {
-  cards: readonly PlacedCard[];
-  arrows: readonly ArrowPath[];
-}): ReactElement {
-  const label = (id: string): string => cards.find(card => card.id === id)?.label ?? id;
+export function shortPills(
+  layout: Pick<MapLayout, 'cards' | 'arrows' | 'sendBacks'>,
+  pinned: string | null,
+  stageLabel: (stage: string) => string
+): ShortPill[] {
+  const label = (id: string): string => layout.cards.find(card => card.id === id)?.label ?? id;
+  const forward = layout.arrows.flatMap(arrow =>
+    arrow.pill === undefined || arrow.outcomes.length <= arrow.lines.length
+      ? []
+      : [
+          {
+            id: arrow.id,
+            pill: arrow.pill,
+            name: `${label(arrow.from)} to ${label(arrow.to)}`,
+            outcomes: arrow.outcomes,
+          },
+        ]
+  );
+  const routes = pinned === null ? [] : (layout.sendBacks.get(pinned)?.routes ?? []);
+  const back = routes.flatMap(route =>
+    route.pill === undefined || !route.pill.shortened
+      ? []
+      : [
+          {
+            id: route.id,
+            pill: route.pill.box,
+            name: `${stageLabel(route.from)} back to ${stageLabel(route.to)}`,
+            outcomes: route.words,
+          },
+        ]
+  );
+  return [...forward, ...back];
+}
+
+/**
+ * Every outcome of a line whose pill shows fewer than it has: a forward hand-off's, and a
+ * shown send-back's. A button laid exactly over the pill, which opens a tip listing them on
+ * hover, on focus and on a tap. HTML rather than part of the SVG: the map's lines are
+ * `aria-hidden` and take no pointer, and a tap or the keyboard has to reach the list. Drawn
+ * after the cards, so no card's box covers a button. A press on one still starts a pan of the
+ * map: it is not stopped here.
+ */
+export function MapPillTips({ pills }: { pills: readonly ShortPill[] }): ReactElement {
   return (
     <>
-      {arrows.map(arrow =>
-        arrow.pill === undefined || arrow.outcomes.length <= arrow.lines.length ? null : (
-          <PillTip
-            key={arrow.id}
-            id={arrow.id}
-            pill={arrow.pill}
-            name={`${label(arrow.from)} to ${label(arrow.to)}`}
-            outcomes={arrow.outcomes}
-          />
-        )
-      )}
+      {pills.map(pill => (
+        <PillTip key={pill.id} {...pill} />
+      ))}
     </>
   );
 }

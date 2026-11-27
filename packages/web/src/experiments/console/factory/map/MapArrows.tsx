@@ -1,29 +1,18 @@
 import { type ReactElement, useId } from 'react';
-import {
-  BACK,
-  BACK_DASH,
-  BACK_OPACITY,
-  FlowGradient,
-  HeadMarker,
-  LINE_TO,
-  LinePill,
-  MAIN_STROKE,
-  rounded,
-  STROKE,
-} from '../canvas-lines';
+import { FlowGradient, HeadMarker, LINE_TO, LinePill, MAIN_STROKE } from '../canvas-lines';
 import type { MapLayout } from '../lib/map-layout';
 
 /**
- * The map's lines in the Visual standard's rule 4: each forward hand-off solid, brightening
- * along the flow, its label on a pill above it; the feedback lane dashed in the send-back
- * colour, each of its pieces drawn once, and one pill per stage it returns to.
+ * The map's forward lines in the Visual standard's rule 4: each hand-off solid, brightening
+ * along the flow, its label on a pill above it. A card's send-backs are drawn apart, only
+ * while it shows them (`MapSendBacks`).
  */
 export function MapArrows({
   layout,
 }: {
-  layout: Pick<MapLayout, 'arrows' | 'feedback' | 'bounds'>;
+  layout: Pick<MapLayout, 'arrows' | 'bounds'>;
 }): ReactElement {
-  const { arrows, feedback, bounds } = layout;
+  const { arrows, bounds } = layout;
   // Unique per mount, so two maps on one page never share a gradient.
   const gradient = `${useId()}-flow`;
   return (
@@ -35,7 +24,6 @@ export function MapArrows({
     >
       <defs>
         <HeadMarker id="factory-map-head" colour={LINE_TO} />
-        <HeadMarker id="factory-map-head-back" colour={BACK} />
         {arrows.map((arrow, i) => (
           <FlowGradient
             key={arrow.id}
@@ -55,24 +43,6 @@ export function MapArrows({
             markerEnd="url(#factory-map-head)"
           />
           {arrow.pill === undefined ? null : <LinePill pill={arrow.pill} lines={arrow.lines} />}
-        </g>
-      ))}
-      {feedback.strokes.map(stroke => (
-        <path
-          key={stroke.points.map(p => `${p.x.toString()},${p.y.toString()}`).join(' ')}
-          data-lane="feedback"
-          d={rounded(stroke.points)}
-          fill="none"
-          stroke={BACK}
-          strokeWidth={STROKE}
-          strokeDasharray={BACK_DASH}
-          strokeOpacity={BACK_OPACITY}
-          markerEnd={stroke.head ? 'url(#factory-map-head-back)' : undefined}
-        />
-      ))}
-      {feedback.pills.map(pill => (
-        <g key={pill.stage} data-lane-pill={pill.stage}>
-          <LinePill pill={pill.box} lines={[pill.text]} />
         </g>
       ))}
     </svg>

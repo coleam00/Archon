@@ -27,10 +27,7 @@ export function segments(d: string): Segment[] {
   return out;
 }
 
-export const horizontal = (s: Segment): boolean => s.y1 === s.y2;
-
-export const inside = (box: Box, p: { x: number; y: number }): boolean =>
-  p.x > box.x && p.x < box.x + box.w && p.y > box.y && p.y < box.y + box.h;
+const horizontal = (s: Segment): boolean => s.y1 === s.y2;
 
 /** Whether an axis-aligned segment enters the box's interior, shrunk by half a pixel. */
 export function enters(box: Box, s: Segment): boolean {
@@ -53,12 +50,20 @@ export function crosses(p: Segment, q: Segment): boolean {
   return strictlyBetween(v.x1, h.x1, h.x2) && strictlyBetween(h.y1, v.y1, v.y2);
 }
 
-/** A polyline of axis-aligned points as its straight segments. */
-export function pointSegments(points: readonly { x: number; y: number }[]): Segment[] {
-  return points.slice(1).map((p, i) => {
-    const q = points[i] as { x: number; y: number };
-    return { x1: q.x, y1: q.y, x2: p.x, y2: p.y };
-  });
+/**
+ * Whether two segments on one line share more than a point: two routes drawn on top of each
+ * other along a run, which `crosses` does not count.
+ */
+export function overlaps(p: Segment, q: Segment): boolean {
+  const [ph, qh] = [horizontal(p), horizontal(q)];
+  if (ph !== qh) return false;
+  if (ph ? p.y1 !== q.y1 : p.x1 !== q.x1) return false;
+  const span = (s: Segment): [number, number] =>
+    ph
+      ? [Math.min(s.x1, s.x2), Math.max(s.x1, s.x2)]
+      : [Math.min(s.y1, s.y2), Math.max(s.y1, s.y2)];
+  const [[a, b], [c, d]] = [span(p), span(q)];
+  return Math.min(b, d) - Math.max(a, c) > 0;
 }
 
 /** Whether two boxes overlap, edges touching not counted. */

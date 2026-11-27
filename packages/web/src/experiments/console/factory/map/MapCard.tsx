@@ -7,6 +7,7 @@ import type { StageModalLink } from '../lib/views';
 import { cardTone, TONES } from '../tones';
 import { chipWords, HereChip, NeedsYouChip } from './MapChips';
 import { MapStageRow } from './MapStageRow';
+import type { ShownSendBacks } from './useShownSendBacks';
 
 interface MapCardProps {
   card: PlacedCard;
@@ -22,6 +23,9 @@ interface MapCardProps {
   stageLink: (stage: string) => StageModalLink;
   /** The details button: the map shows or hides this card's details panel. */
   onDetails: (card: string) => void;
+  /** How many send-back routes leave the card, and which card's the map shows. */
+  sendBacks: number;
+  show: ShownSendBacks;
 }
 
 /**
@@ -59,6 +63,8 @@ export function MapCard({
   selected,
   stageLink,
   onDetails,
+  sendBacks,
+  show,
 }: MapCardProps): ReactElement {
   const [only] = stages;
   const box = {
@@ -83,6 +89,13 @@ export function MapCard({
       data-card={card.id}
       className="absolute"
       style={{ left: card.box.x, top: card.box.y, width: card.box.w, height: card.box.h }}
+      // Hovering the card, or keyboard focus anywhere in it, shows its send-backs
+      // (`MapSendBacks`). Not focus a click leaves on a link or the badge, nor focus the stage
+      // modal hands back on closing: that would keep the routes on after the pointer left.
+      onMouseEnter={() => show.hover(card.id)}
+      onMouseLeave={() => show.hover(null)}
+      onFocus={event => show.focus(event.target.matches(':focus-visible') ? card.id : null)}
+      onBlur={() => show.focus(null)}
     >
       {stages.length === 1 && only !== undefined ? (
         <Link
@@ -132,7 +145,49 @@ export function MapCard({
       >
         ⓘ
       </button>
+      {sendBacks === 0 ? null : (
+        <SendBackBadge
+          card={card}
+          count={sendBacks}
+          pinned={show.pinned === card.id}
+          toggle={show.toggle}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * How many ways back leave the card, beside its details button: a press pins its send-backs
+ * on the map, or unpins them, for touch and the keyboard; hovering or focusing the card shows
+ * them anyway.
+ */
+function SendBackBadge({
+  card,
+  count,
+  pinned,
+  toggle,
+}: {
+  card: PlacedCard;
+  count: number;
+  pinned: boolean;
+  toggle: (card: string) => void;
+}): ReactElement {
+  const words = `${count.toString()} ${count === 1 ? 'way' : 'ways'} back from ${card.label}: hover, focus or press to show ${count === 1 ? 'it' : 'them'}`;
+  return (
+    <button
+      type="button"
+      data-send-back-badge={card.id}
+      aria-label={words}
+      aria-pressed={pinned}
+      title={words}
+      // A press on the badge must not start a pan of the map under it.
+      onPointerDown={event => event.stopPropagation()}
+      onClick={() => toggle(card.id)}
+      className="absolute right-8 top-3 rounded px-1 text-console-12 leading-4 tabular-nums text-text-tertiary hover:bg-surface-hover hover:text-text-primary aria-pressed:bg-surface-hover aria-pressed:text-text-primary"
+    >
+      ↺ {count}
+    </button>
   );
 }
 
@@ -140,7 +195,7 @@ export function MapCard({
 function KindRow({ card }: { card: PlacedCard }): ReactElement {
   const { Icon, kind, color } = TONES[card.tone];
   return (
-    <span className="flex h-4 items-center gap-1.5 pr-6">
+    <span className="flex h-4 items-center gap-1.5 pr-16">
       <Icon aria-hidden="true" className="size-4 shrink-0" style={{ color }} />
       <span className="truncate text-console-12 font-medium uppercase tracking-console-label text-text-tertiary">
         {kind}

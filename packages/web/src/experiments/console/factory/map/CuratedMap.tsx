@@ -14,9 +14,11 @@ import { MapDetails } from './MapDetails';
 import { MapFlow } from './MapFlow';
 import { MapLegend } from './MapLegend';
 import { MapNotOnMap } from './MapNotOnMap';
-import { MapPillTips } from './MapPillTips';
+import { MapPillTips, shortPills } from './MapPillTips';
+import { MapSendBacks } from './MapSendBacks';
 import { StageModal } from './StageModal';
-import { useMapCamera } from './useMapCamera';
+import { LIVE_FITTING, useMapCamera } from './useMapCamera';
+import { useShownSendBacks } from './useShownSendBacks';
 
 interface CuratedMapProps {
   projectId: string;
@@ -92,7 +94,15 @@ function MapCanvas({
   const { cards, bounds } = layout;
   const [selected, setSelected] = useState<string | null>(null);
   const selectedCard = cards.find(card => card.id === selected);
-  const camera = useMapCamera(bounds, selectedCard?.box ?? null);
+  // While the details panel is open, Escape closes it and keeps a pin.
+  const show = useShownSendBacks(selected !== null);
+  const shownRoutes = show.shown === null ? undefined : layout.sendBacks.get(show.shown);
+  // The frame hugs the cards and grows under them while a card's send-backs show.
+  const below =
+    shownRoutes === undefined
+      ? 0
+      : shownRoutes.extent.y + shownRoutes.extent.h - (bounds.y + bounds.h);
+  const camera = useMapCamera(bounds, selectedCard?.box ?? null, LIVE_FITTING, below);
 
   useEffect(() => {
     if (selected === null) return;
@@ -135,17 +145,29 @@ function MapCanvas({
                 selected={card.id === selected}
                 stageLink={stage => stageModalLink(projectId, stage)}
                 onDetails={id => setSelected(current => (current === id ? null : id))}
+                sendBacks={layout.sendBacks.get(card.id)?.routes.length ?? 0}
+                show={show}
               />
             ))}
+            {shownRoutes === undefined ? null : (
+              <MapSendBacks key={show.shown} bounds={bounds} card={shownRoutes} />
+            )}
             <MapFlow
               cards={cards}
               arrows={layout.arrows}
+              bounds={bounds}
               working={card =>
                 typeof live !== 'string' &&
                 card.stages.some(stage => (live.stages.get(stage)?.working ?? 0) > 0)
               }
             />
-            <MapPillTips cards={cards} arrows={layout.arrows} />
+            <MapPillTips
+              pills={shortPills(
+                layout,
+                show.shown === show.pinned ? show.pinned : null,
+                id => view.stages.find(stage => stage.id === id)?.label ?? id
+              )}
+            />
           </div>
           <MapControls zoomIn={camera.zoomIn} zoomOut={camera.zoomOut} fit={camera.fit} />
         </div>
@@ -162,7 +184,7 @@ function MapCanvas({
           />
         )}
       </div>
-      <MapLegend tones={cards.map(card => card.tone)} />
+      <MapLegend tones={cards.map(card => card.tone)} map="curated" />
       <MapNotOnMap projectId={projectId} entries={typeof live === 'string' ? [] : live.notOnMap} />
     </div>
   );
@@ -182,7 +204,9 @@ function MapControls({
 }): ReactElement {
   return (
     <div
-      // A press on the controls must not start a pan of the map under them.
+      // A press on the controls must not start a pan of the map under them, nor unpin a card's
+      // send-backs (`useShownSendBacks`).
+      data-map-controls=""
       onPointerDown={event => event.stopPropagation()}
       className="absolute bottom-2 right-2 flex items-center gap-0.5 rounded-console-12 border border-border bg-surface px-1 py-0.5"
     >

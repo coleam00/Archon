@@ -274,7 +274,7 @@ export function DerivedFlow({
           </button>
         </div>
       </div>
-      <MapLegend tones={layout.columns.map((_, index) => toneOf(index))} />
+      <MapLegend tones={layout.columns.map((_, index) => toneOf(index))} map="full" />
     </div>
   );
 }

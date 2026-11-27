@@ -113,6 +113,18 @@ export function fittedHeight(
 }
 
 /**
+ * The frame's height `base`, grown as much as it must so `below` world units under the
+ * drawing's bottom edge (`bounds`) show inside it, `FIT_PAD` clear of its bottom, at `camera`
+ * as it stands: the curated map's frame hugs its cards and grows under them while a card shows
+ * its send-backs (the owner's ruling on #289). It never shrinks below `base`.
+ */
+export function grownHeight(base: number, camera: Camera, bounds: Box, below: number): number {
+  if (below <= 0) return base;
+  const bottom = camera.y + (bounds.y + bounds.h + below) * camera.k + FIT_PAD;
+  return Math.max(base, Math.ceil(bottom));
+}
+
+/**
  * A frame `fitted` tall held to `maxVh` of a window `viewport` tall, never under
  * `MIN_FRAME_HEIGHT` for the cap; a shorter `fitted` stands.
  */

@@ -7,9 +7,17 @@ const ITEM = 'flex items-center gap-1.5 text-console-12 text-text-secondary';
 
 /**
  * The colour groups the map's cards are in, named in plain words in the order work reaches
- * them, and what each kind of line means, each drawn as the map draws it.
+ * them, and what each kind of line means, each drawn as the map draws it. `map` says which
+ * map it sits under: the curated map shows a card's send-backs on demand and moves its dots;
+ * the Full workflow draws every send-back and moves nothing, so it names neither.
  */
-export function MapLegend({ tones }: { tones: readonly ColumnTone[] }): ReactElement {
+export function MapLegend({
+  tones,
+  map,
+}: {
+  tones: readonly ColumnTone[];
+  map: 'curated' | 'full';
+}): ReactElement {
   const shown = [...new Set(tones)];
   return (
     <div className="flex flex-col gap-1">
@@ -46,17 +54,35 @@ export function MapLegend({ tones }: { tones: readonly ColumnTone[] }): ReactEle
               strokeOpacity={BACK_OPACITY}
             />
           </svg>
-          Sends it back, labelled where it returns to
+          {map === 'curated'
+            ? 'Sends it back: hover or focus a card, or press its ↺, to see its ways back'
+            : 'Sends it back, labelled where it returns to'}
         </li>
-        {/* No dot moves under reduced motion, so the legend does not say one does. */}
-        <li className={`${ITEM} motion-reduce:hidden`}>
-          <span
-            aria-hidden="true"
-            className="map-flow-swatch inline-block size-2.5 rounded-full bg-[color:var(--running)]"
-          />
-          A dot moves along a line while a run works an item there
-        </li>
+        {map === 'curated' ? <FlowDots /> : null}
       </ul>
     </div>
+  );
+}
+
+/** The curated map's dots. No dot moves under reduced motion, so the legend does not say one does. */
+function FlowDots(): ReactElement {
+  return (
+    <>
+      <li className={`${ITEM} motion-reduce:hidden`}>
+        <span
+          aria-hidden="true"
+          className="inline-block size-1.5 rounded-full"
+          style={{ background: LINE_TO }}
+        />
+        A faint dot follows the flow from the first card to the last
+      </li>
+      <li className={`${ITEM} motion-reduce:hidden`}>
+        <span
+          aria-hidden="true"
+          className="map-flow-swatch inline-block size-2.5 rounded-full bg-[color:var(--running)]"
+        />
+        A bright dot runs into a card while a run works an item there
+      </li>
+    </>
   );
 }

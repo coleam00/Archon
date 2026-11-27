@@ -3,6 +3,8 @@ import {
   cappedHeight,
   FIT_PAD,
   fitCamera,
+  fittedHeight,
+  grownHeight,
   MIN_FRAME_HEIGHT,
   MIN_ZOOM,
   READABLE_K,
@@ -45,6 +47,24 @@ describe('the map camera', () => {
       const camera = fitCamera(bounds, { width, height: 2000 }, pad, minK);
       expect(camera.k).toBe(minK);
       expect(camera.x).toBe(FIT_PAD);
+    }
+  });
+
+  test("at 1440x900 the frame hugs the cards and, grown for any card's send-backs, still fits the window", () => {
+    // The owner's ruling on #289: once the map is in view, a hovered card's pills all show
+    // inside the frame, and the whole grown frame fits a 900 px tall window.
+    const layout = layoutMap(testView, testArrows);
+    const { bounds } = layout;
+    const { pad, minK, maxK } = LIVE_FITTING;
+    const base = fittedHeight(bounds, 1110, pad, minK, maxK);
+    const camera = fitCamera(bounds, { width: 1110, height: base }, pad, minK, maxK);
+    expect(grownHeight(base, camera, bounds, 0)).toBe(base);
+    for (const { extent } of layout.sendBacks.values()) {
+      const below = extent.y + extent.h - (bounds.y + bounds.h);
+      const grown = grownHeight(base, camera, bounds, below);
+      // Every pill inside the grown frame, the frame inside the window.
+      expect(camera.y + (extent.y + extent.h) * camera.k).toBeLessThanOrEqual(grown);
+      expect(grown).toBeLessThanOrEqual(900);
     }
   });
 

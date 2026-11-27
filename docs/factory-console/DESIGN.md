@@ -24,7 +24,7 @@ http://127.0.0.1:3195/console). Rules:
   - **Words** live in the workflow YAML in an optional, generic `display:` block (spike-a, PR #229): a workflow's `label`, `short`, `blurb` (and its group's words come from the document); a node's `label` (served under its expanded id for included nodes); a `returns` outcome's `label` and `story`; ask options keep their own `label`/`does`. The graph serves them; the console reads them; a missing word falls back to a humanised id and `archon validate` warns.
   - **Meaning** the console needs (which outcome sends an item back or approves, where rounds and the PR live in a run's result, retired workflows) is declared generically in the YAML too (on `returns`/`display`), not in a side file.
   - **The view file shrinks to the How it works explainer** (prose and its hand-laid picture, which Rasmus accepts as an explainer), or goes entirely if the explainer moves.
-- **The Overview map is drawn from the pack graph; the view file carries words and meaning only (owner, 11/26, after the JSON spike #226-#233).** The map's cards, their stages and their edges come from the graph (`GET /api/packs/{pack}/graph`): one card per group, stages in flow order, forward edges from `arrows`, a send-back lane for every arrow that goes backward in flow order. The pack-shipped view file (`<pack>/.shared/factory-view.json`, read through `packages/workflows/src/pack-declarations.ts`) has no `map` and no hand positions. It carries words (stage, step and outcome words, answers, summary), meaning (`retired`, `rounds`, `returns`, `approves`, `change`) and the How it works explainer, and no groups (#276): the groups, their names, blurbs, order and stages come from the pack's document through the graph (the rule above). Each group may declare a `kind` in the document's front matter, an opaque slug the engine serves as written; the console draws intake, build, check and merge, and a group card's colour and kind label come from it, never from the card's position. A group without one, `neutral`, or a kind the console does not draw reads neutral (owner ruling on #237); the last is listed as a problem on the Overview. The board's columns are the same groups as the map's. The engine drops a stale stage from its group, and the console lists the document's problems above the map and on How it works. *Superseded on `combined` by the rule above (#277): the words and the meaning are in each workflow's `display:` block and the document's front matter (`words`, `exit`), served by the graph; the view file holds only the summary and the How it works explainer.*
+- **The Overview map is drawn from the pack graph; the view file carries words and meaning only (owner, 11/26, after the JSON spike #226-#233).** The map's cards, their stages and their edges come from the graph (`GET /api/packs/{pack}/graph`): one card per group, stages in flow order, forward edges from `arrows`, a send-back lane for every arrow that goes backward in flow order (*on `combined` since #289: each send-back is its own route, drawn only while its card is hovered, focused or pinned; "The map"*). The pack-shipped view file (`<pack>/.shared/factory-view.json`, read through `packages/workflows/src/pack-declarations.ts`) has no `map` and no hand positions. It carries words (stage, step and outcome words, answers, summary), meaning (`retired`, `rounds`, `returns`, `approves`, `change`) and the How it works explainer, and no groups (#276): the groups, their names, blurbs, order and stages come from the pack's document through the graph (the rule above). Each group may declare a `kind` in the document's front matter, an opaque slug the engine serves as written; the console draws intake, build, check and merge, and a group card's colour and kind label come from it, never from the card's position. A group without one, `neutral`, or a kind the console does not draw reads neutral (owner ruling on #237); the last is listed as a problem on the Overview. The board's columns are the same groups as the map's. The engine drops a stale stage from its group, and the console lists the document's problems above the map and on How it works. *Superseded on `combined` by the rule above (#277): the words and the meaning are in each workflow's `display:` block and the document's front matter (`words`, `exit`), served by the graph; the view file holds only the summary and the How it works explainer.*
 - **A stale entry drops only itself, and says so (owner, 11/26).** A view-file entry naming a stage, step, outcome or group the graph lacks is dropped on its own; the rest of the file still draws. Meaning entries (`rounds`, `returns`, `approves`, `change`) that name a workflow the graph lacks are KEPT, treated as retired (old runs carry the old name, and board cards read their rounds from them). Every dropped entry, and every in-flow stage, step or outcome the file gives no words, is (a) shown as a visible warning on the project Overview and the factory's How it works page, and (b) an ERROR from `check:factory-view` so CI fails. The console never refuses the whole file for one entry; a file that does not parse at all falls back to the graph-drawn map with plain names and a visible warning. *Superseded on `combined` (#277): the view file holds only the explainer, so only a key it does not have and a stage or edge its picture names that the graph lacks drop alone (shown, and an error for `check:factory-view`). A stage, step, outcome or settled option with no words is a warning from `archon validate`, and the console shows its id in words. A renamed stage's old runs keep their rounds through a `display.replaces` entry naming the old workflow.*
 - **Speed is a requirement (owner, 11/26).** The board's columns, cards, titles and round progress, the Overview and the Needs you tab must be complete within 3 s on a warm server and 10 s on a freshly started server, measured in the browser at 1440x900 on a live-DB copy. No page waits on another page's read; the pack graph is read once per pack copy and cached; the view file is not re-read through a second graph read.
 - **Board (owner, 11/26):** all pipeline columns are the same width. There is no "Not on a stage" column: every item stands at a stage (deliver-era and retired-workflow items map to their stage through the `display.replaces` of the stage that replaced their workflow), and an item that truly has no stage goes to Set aside. The pack's Setup and Settings links are not on the board. A card's actions are buttons at the bottom of the card, beside the PR link (which is a button too): "Needs you · N" is a clearly clickable button there; the top-right chip is a status LABEL only (Running, Merged, Stopped), styled so it does not look clickable.
@@ -367,8 +367,10 @@ miss on a projector. Intake on the map was purple.
   `--node-prompt` to `--node-wait`, the teal How it works gives a stage. *Owner change 1: more green, purple and pink kept for one thing each.*
 - **Flow dot.** How it works: a dot 10 px across with a halo 20 px across at 0.28 opacity (a second circle in
   the same moving group, not a blur), in the kind colour of the card it travels to. The glow round the card it rests on reaches 6 px out with a 12% fill. The
-  map's dot is 10 px across in `--running` with a soft halo (`.map-flow-dot`; the legend's swatch,
-  `.map-flow-swatch`, wears the same). *Presence on a projector (the #93 operator note), still
+  map's working dot is 10 px across in `--running` with a soft halo (`.map-flow-dot`; the legend's swatch,
+  `.map-flow-swatch`, wears the same). The map's forward-flow dot is 6 px in `--text-secondary`
+  and its send-back branch dots 5 px in `--node-approval`, each with a halo twice across, so
+  the working dot stays the brightest (#289). *Presence on a projector (the #93 operator note), still
   only position and opacity animate.*
 
 **Ruled out:** WebGL; SVG or CSS filters (blur, drop-shadow) on anything; noise images; animated
@@ -542,7 +544,9 @@ One 4/8 px grid: Tailwind's 4 px scale, every value a multiple of 4.
 - How it works flow (the overview's flow loop): SVG (SMIL) animation of position and opacity only,
   on one timeline per view, no frame loop and no filter; pausable. A dot's halo is a second,
   faint circle moving with it, never a blur. CSS cannot stop SMIL, so under
-  `prefers-reduced-motion` it is not rendered at all.
+  `prefers-reduced-motion` it is not rendered at all. The map's forward flow and send-back
+  branch dots are the same kind of loop (#289): SMIL, position and opacity only, not rendered
+  under reduced motion; they have no Pause control.
 - Every animation sits behind `motion-safe:` and is off under `prefers-reduced-motion`. There the
   moved highlight still shows for 1.5 s, statically, with no fade.
 
@@ -662,6 +666,8 @@ The section has **two separate things**, each with its own file:
    graph lacks drops only that card's entry, and a step without a display name is a check error.*
    The live map
    is one row of stages with one feedback lane underneath; clicking a stage opens it.
+   *Superseded on `combined` (#289): no lane by default; a card's send-backs show, each on its
+   own route, while it is hovered, focused or pinned ("The map").*
 
 **Step names, everywhere a person reads:** never a raw engine id such as `build__build` or
 `rounds.review__review`. One function gives a step's display name: the view file's name when it has
@@ -985,7 +991,7 @@ panel). Port the logic and ideas, not the styling: Mission Control used its own 
 
 ## The map
 
-Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row, one clean lane.
+Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row, one clean lane. *Since #289 the lane is gone: a card shows its own send-backs on demand (below).*
 
 - **One card per board column** (owner change 4): the view file's `columns`, in order, each
   card holding the stages of its column that `map.cards` lists, in the column's order; a
@@ -1001,7 +1007,8 @@ Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row,
   so the flow reads left to right from Intake (owner ruling on #71).
 - **Cards in the card language** (rule 2), 184 px wide and at least 168 tall, the height set
   by the card holding the most stages (216 for the shipped file, whose Intake holds Order,
-  Triage and Link), every card one size so the lane under them is straight: a 3 px top bar in the group colour, the group's icon and kind
+  Triage and Link), every card one size so their bottom edges, where the send-backs leave and
+  return, are one straight line: a 3 px top bar in the group colour, the group's icon and kind
   label ("Intake", "Build", "Check", "Merge", "Merged"), then:
   - a card of one stage: the stage label (Card title role, two lines at most), its one short
     line (the stage's `short`, at most 24 characters; without one, its blurb clamped to two lines),
@@ -1037,21 +1044,47 @@ Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row,
   at least 48 px. A hand-off that would skip cards has no route of its own: its outcomes join
   the label of the hand-off from its source card to the next, as "<outcome> → <target card>",
   and where the graph has no such hand-off, one is drawn for it.
-- **One feedback lane** under the row carries every send-back, dashed `6 4` in
-  `--node-approval` (rule 4). A card has one source leg, near its right edge, and one target leg
-  per stage of it something returns to, spread over its left half in its stage order. Each
-  send-back drops from its card's source leg to the lane, runs right to left, and rises into
-  its target stage's leg; every send-back into one stage shares that leg and one pill under the
-  lane, in the outcomes' and options' labels ("returned, sent back, one more round" on Build,
-  "answered, plan again" on Plan). A send-back inside one card (an asked
-  plan answered) is a short U from the card's source leg into its stage's leg. Where runs
-  overlap they are one line, drawn once. Pills sit under the lane, each centred on its leg but
-  never past the row's first or last card (a long label on Intake's leg starts at the row's
-  left edge, where the map opens), on the first band down where it meets no other pill. Nothing crosses: no line crosses a card, a pill or another line.
-- **Flow** (the map's addition to rule 7): while a run works an item on a card, a 10 px dot in
-  the running colour, with a soft halo, travels along the hand-off into that card, over and over, fading as it
-  arrives, where the running chip's pulsing dot holds it. The first card, with no hand-off into
-  it, has none. Off under reduced motion.
+- **Send-backs on demand** (owner direction of 11/27, #289; replaced the one feedback lane under
+  the row, whose merged line and row of pills could not say which stage each way back left
+  from). By default the map draws the forward flow only. A card something leaves backward wears
+  a small badge beside its details button, "↺ n", n its distinct send-back routes; its title
+  says what it is. Hovering the card, or keyboard focus anywhere in it, draws that card's
+  send-backs and no other's; leaving it hides them (focus a click leaves behind does not
+  count, so the routes go when the pointer does). The badge is the touch control: a press pins
+  them; Escape, a click elsewhere or a press on the badge again unpins (the last also hides
+  the routes while the card is still hovered, as a touch tap leaves it); a drag of the map or
+  a press on its zoom controls does not; and hovering another card shows that card's
+  meanwhile. Escape that closes the stage modal or the details panel only closes that: the
+  pin holds (owner ruling on #289).
+  Each send-back is its own route, one per pair of stages (two stages of a card returning to
+  one stage are two lines), dashed `6 4` in `--node-approval` (rule 4): down from its own leg
+  on the source card's bottom edge (spread over the card's right part), along its own track
+  under the row, and up into its own leg on the target card (spread over the target's left
+  part, by target row, then source row). The leftmost target takes the rightmost source leg
+  and the deepest track, so a card's routes nest and never cross; a send-back inside one card
+  (an asked plan answered) is a short U on that card. Each route has its own pill, under the
+  deepest track: its outcomes' and options' words on one line ("returned +3" past two), and,
+  where the source or target card holds several stages, the stages it joins ("Checks →
+  Build"). Each pill sits near its own target leg (owner ruling on #289): centred on it where
+  that is free, else at the nearest free place on its band no more than 120 px from there,
+  else a band down, always within the row's span. A pinned card's shortened pill is a button
+  opening the full list, as a forward pill's is; a hovered card's is not, since its routes go
+  as the pointer leaves the card. The frame hugs the cards and forward pills by default (no
+  empty band under the row) and grows under the cards while a card shows its send-backs, just
+  enough to hold its routes and pills; the cards stay where they are. Owner ruling on #289:
+  at 1440x900, once the map is in view, a hovered card's pills all show inside the frame and
+  the whole grown frame fits the 900 px window; the page does not scroll itself to show them
+  (with the page at its top, a deep card's pills can sit below the fold). Nothing crosses: no line
+  crosses a card, a pill or another line.
+- **Flow** (the map's addition to rule 7), none of it drawn under reduced motion:
+  - a faint dot (6 px, `--text-secondary`, a faint halo) travels every forward hand-off in turn,
+    from the first card to the last, a beat on each card between, on one SVG timeline timed
+    as How it works' flow (`lib/map-flow.ts`), so the map reads as one flow end to end;
+  - while a run works an item on a card, a 10 px dot in the running colour, with a soft halo,
+    travels along the hand-off into that card, over and over, fading as it arrives, where the
+    running chip's pulsing dot holds it. The first card, with no hand-off into it, has none;
+  - while a card shows its send-backs, a smaller dot (5 px, in the send-back colour) leaves it
+    along each route at once, so its ways back read as branches of the flow.
 - Pan by drag, zoom by scroll or buttons, Fit button; opens fitted.
 - **Click** a card or a stage's row: the stage opens as a modal over the Overview (owner
   change of 2026-11-19, point 5). From md up it is centred and sized to its content by CSS: as
@@ -1099,8 +1132,11 @@ Changed by #68 (owner audit of 2026-11-18): the board's columns, always one row,
   workflow").
 - A legend under the map names the cards' colour groups in plain words ("Merging it",
   "Merged"), and draws each kind of line as the map does: solid, "Hands the item on"; dashed,
-  "Sends it back, labelled where it returns to"; the running dot, "A dot moves along a line
-  while a run works an item there".
+  "Sends it back: hover or focus a card, or press its ↺, to see its ways back"; the faint dot,
+  "A faint dot follows the flow from the first card to the last"; the running dot, "A bright
+  dot runs into a card while a run works an item there". The two dots are not listed under
+  reduced motion. The Full workflow's legend, which draws every send-back and moves no dot,
+  keeps "Sends it back, labelled where it returns to" and lists no dot (#289).
 
 ## The board
 

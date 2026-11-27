@@ -20,17 +20,26 @@
  *   outcomes join the label of the hand-off from its source card to the next, as
  *   "<outcome> → <target card>", and when there is no such hand-off, one is drawn for it.
  * - Forward hand-offs between one pair of cards are one line, their outcomes joined, each once.
- * - Every send-back is drawn in the one feedback lane under the row (`map-feedback-lane.ts`).
- *   Send-backs from one card into one stage are one route, their outcomes joined, each once:
- *   two stages of a card that return to the same stage draw one line, not two on top.
+ * - Every send-back is its own route, one per pair of stages (`mapArrows` gives one arrow per
+ *   pair), laid out under the row card by card (`map-send-backs.ts`): two stages of a card that
+ *   return to the same stage are two routes. The map draws a card's routes only while the card
+ *   is hovered, focused or pinned (`MapSendBacks`). The bounds hug the cards and forward pills
+ *   (the owner's ruling on #289): a card's routes lie under them, within the row's span, and
+ *   the frame grows under the cards to hold them while they show (`useMapCamera`'s `below`).
  *
- * Nothing crosses: forward lines run between cards at mid-height, the lane's legs under the
- * cards, and every pill sits in a gap or under the lane, clear of cards, lines and pills.
+ * Nothing crosses: forward lines run between cards at mid-height, a card's send-backs nest
+ * under the cards, and every pill sits in a gap or under the routes, clear of cards, lines and
+ * pills.
  */
 import { mapColumns, type ColumnTone } from './map-columns';
-import { feedbackLane, type FeedbackLane, type LaneCard, type SendBack } from './map-feedback-lane';
-import { cardSize, GAP_MIN, LANE, PILL_CLEAR, PILL_GAP, PILL_LINE } from './map-sizes';
-import { pillWidth, PILL_H } from './overview-layout';
+import { pillOf } from './map-pill';
+import {
+  sendBackRoutes,
+  type CardSendBacks,
+  type RouteCard,
+  type SendBackArrow,
+} from './map-send-backs';
+import { cardSize, GAP_MIN, PILL_CLEAR, PILL_GAP } from './map-sizes';
 import type { MapArrow } from './graph-structure';
 import { isSendBack, type Seat } from './stage-direction';
 import type { CuratedView } from './curated-view';
@@ -88,8 +97,8 @@ export interface MapLayout {
   cards: PlacedCard[];
   /** Every forward hand-off, left to right. */
   arrows: ArrowPath[];
-  /** Every send-back, in the one feedback lane, and one pill per target stage. */
-  feedback: FeedbackLane;
+  /** Each card's send-backs, by card id: a card nothing leaves has none. */
+  sendBacks: Map<string, CardSendBacks>;
   /** The box holding every card, line and pill; empty at the origin when there are no cards. */
   bounds: Box;
 }
@@ -111,44 +120,29 @@ interface Forward {
   parts: string[];
 }
 
-/**
- * Adds a send-back to the lane's, keyed by its card and target stage: a second one from the
- * same card into the same stage joins the first's label, each outcome once.
- */
-function addSendBack(sendBacks: Map<string, SendBack>, entry: SendBack): void {
-  const key = JSON.stringify([entry.from, entry.to]);
-  const held = sendBacks.get(key);
-  if (held === undefined) {
-    sendBacks.set(key, entry);
-    return;
-  }
-  const parts = (held.label ?? '').split(', ').filter(part => part !== '');
-  for (const part of entry.label?.split(', ') ?? []) if (!parts.includes(part)) parts.push(part);
-  held.label = parts.join(', ');
-}
-
 /** The arrows sorted into forward hand-offs and send-backs, by the rules above. */
 function sortArrows(
   arrows: readonly MapArrow[],
   cards: readonly MapCardDecl[]
-): { forward: Forward[]; sendBacks: SendBack[] } {
+): { forward: Forward[]; sendBacks: SendBackArrow[] } {
   const seats = new Map<string, Seat>();
   cards.forEach((card, i) => {
     card.stages.forEach((stage, row) => seats.set(stage, { card: i, row }));
   });
   const forward = new Map<number, Forward>();
-  const sendBacks = new Map<string, SendBack>();
+  const sendBacks: SendBackArrow[] = [];
   arrows.forEach((arrow, index) => {
     const a = seats.get(arrow.from);
     const b = seats.get(arrow.to);
     if (a === undefined || b === undefined) return;
     const id = `decl:${index.toString()}`;
     if (isSendBack(a, b)) {
-      addSendBack(sendBacks, {
+      sendBacks.push({
         id,
-        from: cards[a.card]?.id ?? '',
+        card: cards[a.card]?.id ?? '',
+        from: arrow.from,
         to: arrow.to,
-        label: arrow.label,
+        words: wordsOf(arrow.label),
       });
       return;
     }
@@ -160,7 +154,7 @@ function sortArrows(
   });
   return {
     forward: [...forward.values()].sort((p, q) => p.left - q.left),
-    sendBacks: [...sendBacks.values()],
+    sendBacks,
   };
 }
 
@@ -169,31 +163,15 @@ function sortArrows(
  * for one that skips to the card labelled `skipsTo`, each followed by where it goes.
  */
 function forwardParts(label: string | undefined, skipsTo: string | undefined): string[] {
-  const outcomes = label?.split(', ') ?? [];
+  const outcomes = wordsOf(label);
   if (skipsTo === undefined) return outcomes;
   if (outcomes.length === 0) return [`→ ${skipsTo}`];
   return outcomes.map(outcome => `${outcome} → ${skipsTo}`);
 }
 
-/** The most lines a forward hand-off's pill holds (issue #146). */
-export const PILL_MAX_LINES = 2;
-
-/**
- * A label's pill: one line per outcome, the last without its comma, while they fit in
- * `PILL_MAX_LINES`; past that, one line naming the first outcome and how many more.
- */
-function pillOf(parts: readonly string[]): { lines: string[]; w: number; h: number } | undefined {
-  if (parts.length === 0) return undefined;
-  const lines =
-    parts.length > PILL_MAX_LINES
-      ? [`${parts[0] ?? ''} +${(parts.length - 1).toString()}`]
-      : parts.map((part, i) => (i < parts.length - 1 ? `${part},` : part));
-  return {
-    lines,
-    w: Math.max(...lines.map(line => pillWidth(line))),
-    h: PILL_H + PILL_LINE * (lines.length - 1),
-  };
-}
+/** An arrow's label as its outcomes, in order; none for an unlabelled one. */
+const wordsOf = (label: string | undefined): string[] =>
+  label === undefined || label === '' ? [] : label.split(', ');
 
 function boundsOf(boxes: readonly Box[]): Box {
   if (boxes.length === 0) return { x: 0, y: 0, w: 0, h: 0 };
@@ -241,18 +219,18 @@ export function layoutMap(view: Declaration, drawn: readonly MapArrow[]): MapLay
       },
     ];
   });
-  const laneCards = new Map(
-    cards.map((card): [string, LaneCard] => [card.id, { box: card.box, stages: card.stages }])
+  const routeCards = new Map(
+    cards.map((card): [string, RouteCard] => [card.id, { box: card.box, stages: card.stages }])
   );
-  const feedback = feedbackLane(laneCards, size.h + LANE, sendBacks);
+  const labels = new Map(view.stages.map(stage => [stage.id, stage.label]));
+  const routes = sendBackRoutes(routeCards, sendBacks, stage => labels.get(stage) ?? stage);
   return {
     cards,
     arrows,
-    feedback,
+    sendBacks: routes,
     bounds: boundsOf([
       ...cards.map(card => card.box),
       ...arrows.flatMap(arrow => (arrow.pill === undefined ? [] : [arrow.pill])),
-      ...(feedback.extent === undefined ? [] : [feedback.extent]),
     ]),
   };
 }
