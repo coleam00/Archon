@@ -9,7 +9,7 @@ export const runUsageSchema = z.object({
 });
 export type RunUsageFigures = z.infer<typeof runUsageSchema>;
 
-export function hasUnknownTokenTotal(metadata: WorkflowRun['metadata']): boolean {
+function hasUnknownTokenTotal(metadata: WorkflowRun['metadata']): boolean {
   return Object.hasOwn(metadata, fields.unknown) && metadata[fields.unknown] !== false;
 }
 
@@ -18,7 +18,7 @@ const fields = {
   unknown: 'total_tokens_unknown',
 } as const;
 
-export const RUN_COST_METADATA_KEY = fields.cost;
+export const runCostMetadataShape = { [fields.cost]: runUsageSchema.shape.costUsd };
 
 const persistedTokensSchema = tokenUsageSchema.omit({
   total: true,
@@ -26,6 +26,10 @@ const persistedTokensSchema = tokenUsageSchema.omit({
   calls: true,
   callsPartial: true,
 });
+const partialTokensSchema = persistedTokensSchema.partial();
+type PartialRunUsageFigures = Omit<RunUsageFigures, 'tokens'> & {
+  tokens?: z.infer<typeof partialTokensSchema>;
+};
 const tokenAxes = persistedTokensSchema.keyof().options;
 const tokenFields = {
   input: 'total_tokens_in',
@@ -50,18 +54,30 @@ export function serializeRunUsage(usage: RunUsageFigures): Record<string, unknow
   return metadata;
 }
 
-export function parseRunUsage(metadata: WorkflowRun['metadata']): RunUsageFigures {
+export function parseRunUsage(metadata: WorkflowRun['metadata']): RunUsageFigures;
+/** Present a valid recorded axis independently; aggregation still requires both axes. */
+export function parseRunUsage(
+  metadata: WorkflowRun['metadata'],
+  options: { partialTokens: true }
+): PartialRunUsageFigures;
+export function parseRunUsage(
+  metadata: WorkflowRun['metadata'],
+  options?: { partialTokens: true }
+): PartialRunUsageFigures {
   const input = metadata[tokenFields.input];
   const output = metadata[tokenFields.output];
   const cost = metadata[fields.cost];
   const tokensUnknown =
     hasUnknownTokenTotal(metadata) ||
-    ((Object.hasOwn(metadata, tokenFields.input) || Object.hasOwn(metadata, tokenFields.output)) &&
+    (!options?.partialTokens &&
+      (Object.hasOwn(metadata, tokenFields.input) || Object.hasOwn(metadata, tokenFields.output)) &&
       (typeof input !== 'number' ||
         !Number.isFinite(input) ||
         typeof output !== 'number' ||
         !Number.isFinite(output)));
-  const parsedTokens = persistedTokensSchema.safeParse(
+  const parsedTokens = (
+    options?.partialTokens ? partialTokensSchema : persistedTokensSchema
+  ).safeParse(
     Object.fromEntries(
       tokenAxes.flatMap(axis => {
         const parsed = persistedTokensSchema.shape[axis].safeParse(metadata[tokenFields[axis]]);
@@ -71,7 +87,7 @@ export function parseRunUsage(metadata: WorkflowRun['metadata']): RunUsageFigure
   );
   const tokens = !tokensUnknown && parsedTokens.success ? parsedTokens.data : undefined;
   return {
-    costUsd: typeof cost === 'number' ? cost : undefined,
+    costUsd: typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? cost : undefined,
     ...(tokensUnknown ? { tokensUnknown: true } : { tokens }),
   };
 }

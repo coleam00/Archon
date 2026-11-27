@@ -1,7 +1,7 @@
 import { runFilesReportSchema } from '@archon/core/schemas/run-files';
 import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
 import { operatorPauseSchema } from '@archon/workflows/schemas/operator-pause';
-import { RUN_COST_METADATA_KEY, runUsageSchema } from '@archon/workflows/schemas/run-usage';
+import { runCostMetadataShape } from '@archon/workflows/schemas/run-usage';
 import {
   toolCallAttentionArraySchema,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -178,7 +178,7 @@ export const workflowRunMetadataSchema = z
     approval: approvalContextSchema.optional(),
     wait: workflowWaitContextSchema.optional(),
     [RUN_STOP_REASON_METADATA_KEY]: runStopReasonSchema.optional(),
-    [RUN_COST_METADATA_KEY]: runUsageSchema.shape.costUsd,
+    ...runCostMetadataShape,
   })
   .catchall(z.unknown())
   .openapi('WorkflowRunMetadata');

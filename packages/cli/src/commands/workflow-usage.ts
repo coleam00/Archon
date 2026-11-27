@@ -1,8 +1,8 @@
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { hasUnknownTokenTotal, RUN_COST_METADATA_KEY } from '@archon/workflows/schemas/run-usage';
+import { parseRunUsage } from '@archon/workflows/schemas/run-usage';
 
-function recordedCost(value: unknown): string {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+function recordedCost(value: number | undefined): string {
+  return value !== undefined
     ? `$${value.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 12 })}`
     : 'unknown';
 }
@@ -14,11 +14,11 @@ function recordedTokens(value: unknown): string {
 }
 
 export function formatRunUsage(metadata: WorkflowRun['metadata']): string[] {
-  const tokensUnknown = hasUnknownTokenTotal(metadata);
+  const usage = parseRunUsage(metadata, { partialTokens: true });
   return [
     '  Usage (recorded totals; completeness unknown):',
-    `    Cost: ${recordedCost(metadata[RUN_COST_METADATA_KEY])}`,
-    `    Input tokens: ${tokensUnknown ? 'unknown' : recordedTokens(metadata.total_tokens_in)}`,
-    `    Output tokens: ${tokensUnknown ? 'unknown' : recordedTokens(metadata.total_tokens_out)}`,
+    `    Cost: ${recordedCost(usage.costUsd)}`,
+    `    Input tokens: ${recordedTokens(usage.tokens?.input)}`,
+    `    Output tokens: ${recordedTokens(usage.tokens?.output)}`,
   ];
 }
