@@ -18,7 +18,7 @@ import type { OverviewDeclaration, OverviewView } from './overview-nav';
 const shipped: OverviewDeclaration = ARCHON_SOFTWARE_FACTORY.howItWorks;
 
 /*
- * The map frame on the page at 1440x900, measured in a browser on `bun run dev:console`:
+ * The map frame on the page at 1440x900, measured in a browser:
  * PAGE_WIDTH wide and at most OVERVIEW_PAGE_MAX_H tall.
  */
 const PAGE_WIDTH = 892;

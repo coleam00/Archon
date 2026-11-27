@@ -1,5 +1,5 @@
 worktree:
-  baseBranch: main
+  baseBranch: dev
   # `git worktree add` carries tracked files only, so every gitignored runtime file is
   # absent from a fresh worktree. Agents work inside worktrees, so without this they
   # cannot start the server, run integration tests, or reproduce anything that reads
@@ -18,11 +18,3 @@ aliases:
   '@mini':
     provider: pi
     model: minimax/MiniMax-M3
-
-# The factory that builds the console proof of concept (Wirasm/archon-software-factory).
-# Rasmus's measured defaults: Opus plans and builds; Haiku is strong at checking tests.
-assistant: claude
-tiers:
-  small: { provider: claude, model: claude-haiku-5-5 }
-  medium: { provider: claude, model: claude-sonnet-5-5 }
-  large: { provider: claude, model: claude-opus-5-5 }

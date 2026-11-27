@@ -8,8 +8,6 @@ env/
 venv/
 ENV/
 build/
-# The pack overlay's build stage is a pack workflow, not build output.
-!docs/factory-console/pack-spike/build/
 *.egg-info/
 
 # Node.js
@@ -131,6 +129,3 @@ main/
 
 # Personal per-run config overlays (workflow run --config) — never tracked
 .config.*.yaml
-
-# Throwaway Archon home for `bun run dev:console`
-.console-home/

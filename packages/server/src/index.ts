@@ -10,7 +10,6 @@
 import '@archon/paths/strip-cwd-env-boot';
 // ESM dependencies evaluate before this module's body reads configuration.
 import { envPath } from './boot/load-env';
-import { liveHomeRefusal } from './boot/live-home-guard';
 import { BUNDLED_IS_BINARY, getArchonEnvPath } from '@archon/paths';
 // Pure env→bool boot helper (zero deps) — safe to import before the heavier
 // application imports below. Decides the Claude global-auth sentinel posture.
@@ -156,8 +155,6 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
-  const liveHome = liveHomeRefusal();
-  if (liveHome) throw new Error(liveHome);
   await assertSqlStore();
   // Every host bash and script node leads its own process group, so a run's cancel ends
   // that run's node trees, and each node's watcher ends its tree if the server dies.
