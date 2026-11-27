@@ -458,6 +458,30 @@ export function packWorkflowName(names: readonly string[], declared: string): st
 }
 
 /**
+ * Whether the workflow's own pack declares a wake binding that takes the checkout a run of
+ * this workflow leaves (`wake.checkout: waiting-run`) for one of the waits it leaves, by
+ * name (`events`), as `resolveWake` matches a binding to a wait. Only then does a completion
+ * that leaves waits record that checkout and keep its worktree; a run whose waits only
+ * event-field wakes follow needs neither. A wake binding written into a source plugin's
+ * config by hand, outside a pack, is not seen here, so its start is refused naming the
+ * checkout the waiting run did not record.
+ */
+export function packWakeTakesCheckout(
+  workflow: Pick<ResolvedWorkflow, 'name' | 'pack'>,
+  events: readonly string[]
+): boolean {
+  return Object.values(workflow.pack?.bindings ?? {}).some(binding => {
+    const kinded = kindedPackBinding(binding);
+    const wake = kinded.kind === 'event' ? kinded.binding.wake : undefined;
+    return (
+      wake?.checkout !== undefined &&
+      events.includes(wake.wait) &&
+      packWorkflowName([workflow.name], wake.workflow) === workflow.name
+    );
+  });
+}
+
+/**
  * Every workflow name one binding declares: the workflow it starts, the run it follows,
  * the workflow whose run resets its limit, and the workflow it wakes. `archon pack bindings`
  * resolves each of these with `packWorkflowName`, so a field that names a workflow there

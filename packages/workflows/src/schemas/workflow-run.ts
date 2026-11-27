@@ -27,13 +27,11 @@ export type { SuspendReason } from './node-state';
 // WorkflowRun
 // ---------------------------------------------------------------------------
 
-export const workflowRunOriginSchema = z
-  .object({
-    conversationId: z.string().optional(),
-    parentConversationId: z.string().optional(),
-    userId: z.string().optional(),
-  })
-  .strict();
+export const workflowRunOriginSchema = z.object({
+  conversationId: z.string().optional(),
+  parentConversationId: z.string().optional(),
+  userId: z.string().optional(),
+});
 
 export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
 

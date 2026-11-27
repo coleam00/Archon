@@ -8060,6 +8060,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8130,6 +8131,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8171,6 +8173,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8213,6 +8216,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8262,6 +8266,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8306,6 +8311,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8338,6 +8344,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8401,6 +8408,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8445,6 +8453,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8475,6 +8484,7 @@ export interface components {
             key: string;
             title?: string | null;
           };
+          priority: boolean;
           revision: number;
           labels: {
             [key: string]: string;
@@ -8569,6 +8579,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8639,6 +8650,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8680,6 +8692,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8722,6 +8735,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8771,6 +8785,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8815,6 +8830,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8847,6 +8863,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8910,6 +8927,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8954,6 +8972,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -8984,6 +9003,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9194,6 +9214,15 @@ export interface components {
       waits: {
         event: string;
         about: string;
+        subject: {
+          /**
+           * @description 'pr' for a pull request, 'issue' for an issue.
+           * @enum {string}
+           */
+          kind: 'pr' | 'issue';
+          /** @description The number of the pull request or issue on the forge. */
+          number: number;
+        } | null;
         workflow: string;
         runId: string;
         /** Format: date-time */
@@ -9218,6 +9247,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9288,6 +9318,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9329,6 +9360,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9371,6 +9403,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9420,6 +9453,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9464,6 +9498,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9496,6 +9531,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9559,6 +9595,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9603,6 +9640,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9633,6 +9671,7 @@ export interface components {
               key: string;
               title?: string | null;
             };
+            priority: boolean;
             revision: number;
             labels: {
               [key: string]: string;
@@ -9859,6 +9898,15 @@ export interface components {
                 title?: string | null;
               };
             };
+      } | null;
+      priority: {
+        own: boolean;
+        inheritedFrom: {
+          id: string;
+          projectKey: string;
+          key: string;
+          title?: string | null;
+        }[];
       } | null;
       ended: {
         /** @enum {string} */
@@ -10171,6 +10219,15 @@ export interface components {
         waits: {
           event: string;
           about: string;
+          subject: {
+            /**
+             * @description 'pr' for a pull request, 'issue' for an issue.
+             * @enum {string}
+             */
+            kind: 'pr' | 'issue';
+            /** @description The number of the pull request or issue on the forge. */
+            number: number;
+          } | null;
           workflow: string;
           runId: string;
           /** Format: date-time */
@@ -10195,6 +10252,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10265,6 +10323,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10306,6 +10365,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10348,6 +10408,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10397,6 +10458,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10447,6 +10509,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10479,6 +10542,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10542,6 +10606,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10586,6 +10651,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10616,6 +10682,7 @@ export interface components {
                 key: string;
                 title?: string | null;
               };
+              priority: boolean;
               revision: number;
               labels: {
                 [key: string]: string;
@@ -10842,6 +10909,15 @@ export interface components {
                   title?: string | null;
                 };
               };
+        } | null;
+        priority: {
+          own: boolean;
+          inheritedFrom: {
+            id: string;
+            projectKey: string;
+            key: string;
+            title?: string | null;
+          }[];
         } | null;
         ended: {
           /** @enum {string} */
@@ -11108,6 +11184,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11178,6 +11255,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11219,6 +11297,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11261,6 +11340,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11310,6 +11390,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11360,6 +11441,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11392,6 +11474,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11455,6 +11538,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11499,6 +11583,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;
@@ -11529,6 +11614,7 @@ export interface components {
                   key: string;
                   title?: string | null;
                 };
+                priority: boolean;
                 revision: number;
                 labels: {
                   [key: string]: string;

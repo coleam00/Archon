@@ -125,6 +125,7 @@ function source(world: World = {}): ItemWindowSource {
           ? { type: 'degraded', reason: 'merge_unreadable', itemId }
           : null,
       getItemLanding: async () => null,
+      getItemPriority: async () => null,
       getHoldingItemEnd: async () => null,
       listItemLinks: async itemId =>
         links.filter(link => link.from.id === itemId || link.to.id === itemId),

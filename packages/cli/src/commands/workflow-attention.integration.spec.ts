@@ -831,6 +831,7 @@ test("watch text names a child run's parent and a failure with no recorded error
       kind: 'unreadable',
       ref: 'child',
       project: null,
+      priority: false,
       revision: 1,
       labels: {},
       pausedAt: null,

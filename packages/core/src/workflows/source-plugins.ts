@@ -538,6 +538,7 @@ export function createItemWaitObserver(input: {
         workflowName: wait.workflowName,
         event: wait.event,
         about: wait.about,
+        subject: wait.subject,
         itemKey: item.key,
         remote: await remoteOf(wait.runId),
       };
@@ -566,13 +567,20 @@ export function createItemWaitObserver(input: {
     waits: readonly ObservedItemWait[]
   ): Promise<{ report: ObservedSourceReport; temporary: boolean }> => {
     // The forge is asked only about what an open wait names: the item's invariant, held
-    // here at the boundary rather than trusted to each plugin. A pull request is named when
-    // its number ends the key of an item a wait is on in that repository. How the number is
-    // read from the key is the binding's own mapping, which only the plugin knows; any
-    // prefix-and-number mapping leaves the number at the end, so this holds for each.
+    // here at the boundary rather than trusted to each plugin. A pull request is named when a
+    // wait in that repository names it as its subject, or, for a wait that names none, when
+    // its number ends the key of the wait's item. How the number is read from the key is the
+    // binding's own mapping, which only the plugin knows; any prefix-and-number mapping
+    // leaves the number at the end, so this holds for each.
     const commits = new Set(waits.map(wait => JSON.stringify([wait.remote, wait.about])));
     const namesPullRequest = (remote: string, number: number): boolean =>
-      waits.some(wait => wait.remote === remote && wait.itemKey.endsWith(String(number)));
+      waits.some(
+        wait =>
+          wait.remote === remote &&
+          (wait.subject === null
+            ? wait.itemKey.endsWith(String(number))
+            : wait.subject.kind === 'pr' && wait.subject.number === number)
+      );
     // A label list must be one a declared read names, and a label-added read must be of an
     // issue or pull request such a list returned in this pass, as the kind it was listed as.
     const labelReads = new Set(

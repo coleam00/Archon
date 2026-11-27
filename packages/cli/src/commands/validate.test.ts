@@ -5,7 +5,10 @@ import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
-import { packRunEndedBindingSchema } from '@archon/workflows/schemas/pack-bindings';
+import {
+  packEventBindingSchema,
+  packRunEndedBindingSchema,
+} from '@archon/workflows/schemas/pack-bindings';
 
 const mockDiscoverWorkflowsWithConfig = mock<typeof discoverWorkflowsWithConfig>(() =>
   Promise.resolve({ workflows: [], errors: [] })
@@ -476,6 +479,58 @@ describe('validateWorkflowsCommand', () => {
           'error',
           "stage 'review' display.replaces names 'build', which the pack still has as a stage",
         ],
+      ]);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test('refuses a wake binding that reads an input the waiting workflow does not declare', async () => {
+    // `host` waits and `land` is started; only `land` declares `land_on`, and the read is
+    // of the waiting run.
+    const host = makeTestWorkflowWithSource({
+      name: 'host',
+      inputs: { item: { required: true } },
+      nodes: [{ id: 'run', bash: 'true' }],
+    });
+    const land = makeTestWorkflowWithSource({
+      name: 'land',
+      inputs: { item: { required: true }, land_on: { required: true } },
+      nodes: [{ id: 'run', bash: 'true' }],
+    });
+    const bindings = {
+      'checks-done': packEventBindingSchema.parse({
+        workflow: 'land',
+        resource: 'land',
+        overlap: 'queue',
+        event: { kind: 'check.changed', actions: ['changed'] },
+        wake: { workflow: 'host', wait: 'checks', about: 'check.revision' },
+        inputs: { item: { input: 'item' }, land_on: { input: 'land_on' } },
+      }),
+    };
+    host.workflow.pack = { key: 'example', workflow: 'host', source: 'project', bindings };
+    land.workflow.pack = { key: 'example', workflow: 'land', source: 'project', bindings };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [host, land], errors: [] });
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, undefined, true)).toBe(1);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0])) as {
+        results: { workflowName: string; issues: { field: string }[] }[];
+      };
+      const reported = output.results.flatMap(result =>
+        result.issues
+          .filter(issue => issue.field === 'pack_bindings')
+          .map(issue => ({ workflow: result.workflowName, issue }))
+      );
+      expect(reported).toEqual([
+        {
+          workflow: 'host',
+          issue: expect.objectContaining({
+            level: 'error',
+            message:
+              "binding 'checks-done' in .pack/pack.yaml: input 'land_on' reads 'land_on', which 'host' does not declare",
+          }),
+        },
       ]);
     } finally {
       write.mockRestore();

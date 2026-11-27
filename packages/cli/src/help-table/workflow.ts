@@ -403,6 +403,24 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'priority',
+      spec: 'workflow priority --item <key> [--clear]',
+      description:
+        'Give an item priority. Its queued starts, and those of items part_of it, go ahead of\nordinary queued starts on each resource at the next drain; a held slot is never taken',
+      scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
+        {
+          spec: '--clear',
+          description:
+            "Remove the item's own priority; one it has from a work order stays until\ncleared there",
+        },
+      ],
+    },
+    {
+      command: 'workflow',
       subcommand: 'notice',
       spec: 'workflow notice <text>',
       description:

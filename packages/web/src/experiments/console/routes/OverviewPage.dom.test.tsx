@@ -100,6 +100,7 @@ test('a failed re-read of the asks keeps the asks read before on the Overview, w
     ref: 'ask:a1',
     project: { key: 'acme/p1', codebaseId: 'p1', name: 'p1' },
     item: { id: 'item-a1', projectKey: 'acme/p', key: 'issue-a1' },
+    priority: false,
     revision: 1,
     labels: {},
     pausedAt: null,

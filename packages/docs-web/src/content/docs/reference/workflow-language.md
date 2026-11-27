@@ -1862,6 +1862,12 @@ When a run starts, after any wait for its [resource](/guides/workflow-triggers/#
   `null`. The engine never falls back to an older run; a node that needs an older one reads
   the item's runs itself. The start says on the run's conversation which run each input read,
   or why it is `null`, so a misspelled workflow name shows as "no completed run".
+- In a pack's workflow, a bare name in `result_of` names that pack's own workflow by its
+  `name:`, as `include:` does. In an installed pack the engine reads the runs of the pack's
+  workflow under its installed name (`owner/plugin:<entrypoint>`), so the pack reads the same
+  in the project copy and the installed one, and its own workflow wins over a project workflow
+  of the same name. A name the pack does not hold reads the project's workflow of that name;
+  to read another installed pack's workflow, write its qualified name.
 - A run on the item that the engine cannot read fails the starting run, naming that run: it
   may be the latest one, so no value is read in its place. An unreadable terminal record fails
   the starting run too.
@@ -2440,7 +2446,8 @@ nodes:
 - **`inputs:`**: a map of input name → `{ required?, default?, description?, result_of?, at? }`. `required: true`
   and `default:` are mutually exclusive (a required input has no default; declaring both drops
   the key at load with a warning). `result_of: <workflow>` fills an unsupplied input with what
-  the latest completed run of that workflow on the run's item returned, and excludes both
+  the latest completed run of that workflow on the run's item returned (in a pack, a bare name
+  is the pack's own workflow), and excludes both
   (see [Reading an earlier run's result](#reading-an-earlier-runs-result)). `at: checkout`
   narrows `result_of` to the latest run whose result holds at this run's commit, read as
   `{ commit, result }` (see [The result
@@ -2719,8 +2726,9 @@ What the engine does with them:
 A stage that has to wait for something outside Archon (a change's checks finishing, a review
 arriving, a deploy) ends instead of sleeping, and says what its item now waits for.
 `returns: { node: host, waits: waits }` names the property of the returns node's output that
-holds the waits. The run completes and holds no agent session, checkout or capacity slot while
-the item waits. A source plugin's event binding with `wake` starts the next stage on the item
+holds the waits. The run completes and releases its agent session, capacity slot and claim on
+the checkout while the item waits; its worktree is kept only for a wake binding of its pack that
+takes its checkout (`wake.checkout: waiting-run`). A source plugin's event binding with `wake` starts the next stage on the item
 when the event arrives: see [start a stage when what an item waits for
 happens](/guides/workflow-triggers/#start-a-stage-when-what-an-item-waits-for-happens).
 
@@ -2732,11 +2740,17 @@ out of `output_format`. An empty list means the item waits for nothing. A wait h
   lowercase letters, digits and hyphens. Each name appears once in a set.
 - `about`: the exact value the event will carry, such as the full commit id of the change's
   head. Only an event with this value meets the wait.
+- `subject`: the issue or pull request the event will be about, as `{ kind: pr, number: 34 }`
+  or `{ kind: issue, number: 12 }`, or `null` when the event names none, as checks on a commit
+  do. A review on pull request 34 has subject `{ kind: pr, number: 34 }` also when the item is
+  keyed by its issue. The stage states it; the engine does not default it from the item's
+  links. A model is given it as required. A bash or script returns node may leave it out,
+  and an omitted subject reads as `null`.
 - `within_minutes`: how long after the run completes the event is expected.
 
 The property's description, which the model reads with the schema, reads:
 
-> What the item now waits for outside Archon, such as checks finishing or a review arriving on a change. What happens after: this run ends and holds nothing. Each wait opens on the item the run is for. When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item. An event about any other value (an older commit, say) starts nothing. The waits are alternatives: the first one met closes them all. When the set is still open past the time of any of them, the item is listed for an operator as overdue, naming what it waits for. A later completed run of this workflow on the same item replaces the waits still open. Leave the list empty when the item waits for nothing.
+> What the item now waits for outside Archon, such as checks finishing or a review arriving on a change. What happens after: this run ends, and nothing of it keeps running. Each wait opens on the item the run is for. When an event a binding maps to one of them arrives with exactly the `about` value you named, the set is met and the next stage starts on the item. An event about any other value (an older commit, say) starts nothing. Name the issue or pull request the event will be about as `subject` when the event names one: a review names its pull request, while checks name only a commit. The waits are alternatives: the first one met closes them all. When the set is still open past the time of any of them, the item is listed for an operator as overdue, naming what it waits for. A later completed run of this workflow on the same item replaces the waits still open. Leave the list empty when the item waits for nothing.
 
 The workflow fails to load, naming `returns.waits`, for the same reasons as `returns.asks`:
 no returns node, a returns node with no object `output_format` the engine enforces, a
@@ -2762,6 +2776,12 @@ What the engine does with them:
   recorded on its receipt as not started, with why. The engine does not read the forge's current
   head, so a push alone replaces no wait. Nothing in the event's own payload stands in for this
   check.
+- **A wait that names a subject is met only by an event about it.** For an event that names
+  its subject, a binding that maps `item` matches only a wait on that item, and of those only
+  one whose `subject` is the event's or names none. A binding that maps no item matches only
+  an open wait whose `subject` is the event's, together with `about`, and starts on the wait's
+  own item. That is how an item keyed by its issue waits for a review on its pull request. An
+  event that names no subject, such as a check, meets only a wait that names none.
 - **The deadline raises attention and wakes nothing.** An open set past the deadline of any of
   its waits is listed in the attention queue as an `overdue_wait` item with ref `wait:<run-id>`,
   naming each wait's event and `about` and when it opened. It stays open: a late event still
@@ -3112,9 +3132,10 @@ bindings:
     event:
       kind: check.changed
       actions: [changed]
-    wake: { workflow: review-host, wait: checks, about: check.revision }  # meets an open wait
+    wake: { workflow: review-host, wait: checks, about: check.revision, checkout: waiting-run }  # meets an open wait
     inputs:
       waited: { wait: true }          # the met wait; event bindings with wake only
+      change: { input: change }       # an input of the run that left the wait; wake bindings too
   follow-up:                          # no schedule, event, run_ended or asks_settled: fire-only
     workflow: review-follow-up
     resource: follow-up
@@ -3222,9 +3243,15 @@ An event binding with `wake:` starts its workflow on the item of an open
 [wait](#waits-what-an-item-waits-for-outside-archon): the wait `wake.wait` that a run of
 `wake.workflow`, a workflow of this pack, left, whose `about` is exactly the value of the event
 field `wake.about`. `{ wait: true }` passes the met wait. When the event names its subject (a
-review, a pull request or issue event), the binding also maps `item:`, and only a wait on that
-item matches; the GitHub source plugin refuses the binding without it. A check names no single
-subject and maps no `item:`. See
+review, a pull request or issue event) and the binding maps `item:`, only a wait on that item
+matches, and a wait that names a subject only for an event about it. Without `item:`, only a
+wait whose `subject` is the event's matches, on whichever item it is. A check names no single
+subject and maps no `item:`; it meets only a wait whose `subject` is `null`.
+`{ input: <name> }` reads an input of the run that left the met wait, which `wake.workflow` must
+declare, and `{ item: answers }` the item's answers. There is no `{ result }` mapping: a wake
+start does not read the waiting run's returned value. `wake.checkout: waiting-run` starts the
+stage in the checkout that run recorded when it completed, and takes no `isolation`; a run
+records it only when its own pack declares such a binding on it for a wait it leaves. See
 [start a stage when what an item waits for happens](/guides/workflow-triggers/#start-a-stage-when-what-an-item-waits-for-happens).
 
 A stage that needs both a clock and a hand-off declares two bindings with the
@@ -3242,9 +3269,10 @@ The declaration is validated when the pack loads, and an invalid one fails every
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
 input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an
 event binding, a `{ wait: true }` input to an event binding with `wake:` and at most once, an
-`{ input: <name> }` or `{ result: <pointer> }` input to a run-ended or asks-settled binding, and
-an `{ answers: true }` input to an asks-settled binding, and an `{ item: answers }` input to an
-asks-settled or a run-ended binding without `linked`. Bindings sharing a resource need not agree on its capacity. An `event:` selector
+`{ input: <name> }` input to a run-ended, asks-settled or wake binding, a `{ result: <pointer> }`
+input to a run-ended or asks-settled binding, an `{ answers: true }` input to an asks-settled
+binding, and an `{ item: answers }` input to an asks-settled or wake binding or a run-ended
+binding without `linked`. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 `item:` names the [item](/reference/cli/#items) a start is on, from one field of its event and

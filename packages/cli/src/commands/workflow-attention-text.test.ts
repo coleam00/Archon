@@ -12,7 +12,13 @@ import {
 const scope: AttentionQueueScope = { kind: 'all' };
 const cursor = workflowEventCursor('c');
 const run = { cursor, project: null, runId: 'run-1', workflow: 'deliver', parentRunId: null };
-const base = { project: null, revision: 1, labels: { merge: 'pr', pr: '42' }, pausedAt: null };
+const base = {
+  project: null,
+  priority: false,
+  revision: 1,
+  labels: { merge: 'pr', pr: '42' },
+  pausedAt: null,
+};
 const held = {
   id: 'run-1',
   workflow: 'deliver',
