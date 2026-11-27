@@ -8,11 +8,12 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { spyOnJsonStdout } from '../test-support/workflow-harness-output';
 import {
@@ -134,6 +135,106 @@ async function seedJob(
 }
 
 describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
+  testOnPosixHost.each(['darwin', 'linux'] as const)(
+    '%s malformed alternate definitions refuse every operation without deleting or duplicating jobs',
+    async platform => {
+      const { root, archonHome, schedules } = await fixture(idPrefix);
+      schedules.platform = platform;
+      schedules.systemdUserDirectory = join(root, 'units');
+      const recordedHome = `${archonHome}${sep}`;
+      const installed = await seedJob(schedules, recordedHome, idForHome(idPrefix, recordedHome));
+      const definition =
+        platform === 'linux' ? installed.replace(/\.timer$/, '.service') : installed;
+      await writeFile(definition, 'malformed definition');
+      process.env.ARCHON_HOME = archonHome;
+
+      for (const readableMatch of [false, true]) {
+        if (readableMatch) await seedJob(schedules, archonHome, idForHome(idPrefix, archonHome));
+        const files = (await readdir(dirname(installed))).sort();
+        const contents = await Promise.all(
+          files.map(file => readFile(join(dirname(installed), file)))
+        );
+        const effects: string[][] = [];
+        schedules.runCommand = async (executable, args) => {
+          effects.push([executable, ...args]);
+        };
+        for (const operation of ['status', 'remove', 'install'] as const) {
+          const { exitCode, result } = await invokeResult(command, operation, schedules);
+          expect(exitCode).toBe(1);
+          expect(result).toMatchObject({ ok: false, error: expect.stringContaining(definition) });
+          expect((await readdir(dirname(installed))).sort()).toEqual(files);
+          expect(
+            await Promise.all(files.map(file => readFile(join(dirname(installed), file))))
+          ).toEqual(contents);
+        }
+        expect(effects).toEqual([]);
+      }
+    }
+  );
+
+  describe.each(['darwin', 'linux'] as const)('%s reinstall', platform => {
+    testOnPosixHost.each(['ELOOP', 'EACCES'] as const)(
+      'equivalent-home reinstall ignores unused %s log metadata while status still reads it',
+      async errorCode => {
+        const { root, archonHome, alias, schedules } = await fixture(idPrefix);
+        schedules.platform = platform;
+        schedules.systemdUserDirectory = join(root, 'units');
+        const recordedHome = `${archonHome}${sep}`;
+        process.env.ARCHON_HOME = recordedHome;
+        const installed = await invoke(command, 'install', schedules);
+        const definition = String(installed.path);
+        const files = (await readdir(dirname(definition))).sort();
+        const contents = await Promise.all(
+          files.map(file => readFile(join(dirname(definition), file)))
+        );
+        const log = join(
+          archonHome,
+          'schedules',
+          `${scheduleLabel(idForHome(idPrefix, recordedHome))}.log`
+        );
+        const metadataDirectory = join(root, 'log-metadata');
+        if (errorCode === 'ELOOP') await symlink(log, log);
+        else {
+          await mkdir(metadataDirectory);
+          const entry = join(metadataDirectory, 'entry');
+          await writeFile(entry, 'log');
+          await symlink(entry, log);
+          await chmod(metadataDirectory, 0);
+        }
+        const loaded: string[][] = [];
+        schedules.runCommand = async (executable, args) => {
+          if (args[0] === 'print' || args[1] === 'is-active') throw new Error('Job is not loaded');
+          loaded.push([executable, ...args]);
+        };
+        try {
+          await expect(stat(log)).rejects.toMatchObject({ code: errorCode });
+          for (const spelling of [recordedHome, archonHome, alias]) {
+            process.env.ARCHON_HOME = spelling;
+            expect(await invoke(command, 'install', schedules)).toMatchObject({
+              path: installed.path,
+            });
+            const status = await invokeResult(command, 'status', schedules);
+            expect(status.exitCode).toBe(1);
+            expect(status.result).toMatchObject({
+              ok: false,
+              error: expect.stringContaining(errorCode),
+            });
+          }
+          expect(
+            loaded.filter(args => args.includes(platform === 'darwin' ? 'bootstrap' : 'enable'))
+          ).toHaveLength(3);
+          expect((await readdir(dirname(definition))).sort()).toEqual(files);
+          expect(
+            await Promise.all(files.map(file => readFile(join(dirname(definition), file))))
+          ).toEqual(contents);
+          expect(await invoke(command, 'remove', schedules)).toMatchObject({ removed: true });
+        } finally {
+          if (errorCode === 'EACCES') await chmod(metadataDirectory, 0o700);
+        }
+      }
+    );
+  });
+
   testOnPosixHost.each(['darwin', 'linux'] as const)(
     '%s operations ignore a permission-denied trigger definition',
     async platform => {

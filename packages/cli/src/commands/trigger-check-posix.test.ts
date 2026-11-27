@@ -1,8 +1,8 @@
 // @archon-test-isolated
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { chmod, rm, stat, symlink, writeFile } from 'node:fs/promises';
-import { join, sep } from 'node:path';
+import { chmod, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join, sep } from 'node:path';
 import { triggerCheckFixtures } from '../test-support/trigger-check-fixture';
 import {
   installNativeSchedule,
@@ -124,6 +124,92 @@ test.skipIf(process.platform === 'win32')(
 );
 
 describe('schedule finds the binding timer however ARCHON_HOME is spelled', () => {
+  describe.each(['darwin', 'linux'] as const)('%s backend', platform => {
+    test.skipIf(process.platform === 'win32')(
+      'malformed alternate timers refuse status, removal and a second installation',
+      async () => {
+        const { root, archonHome, schedules, schedule, scheduled } = await scheduleFixture();
+        schedules.platform = platform;
+        schedules.systemdUserDirectory = join(root, 'units');
+        process.env.ARCHON_HOME = `${archonHome}${sep}`;
+        await schedule('install');
+        const installed = await schedule('status');
+        const definition =
+          platform === 'linux'
+            ? String(installed.path).replace(/\.timer$/, '.service')
+            : String(installed.path);
+        await writeFile(definition, 'malformed definition');
+        const files = (await readdir(dirname(definition))).sort();
+        const contents = await Promise.all(
+          files.map(file => readFile(join(dirname(definition), file)))
+        );
+        scheduled.length = 0;
+        process.env.ARCHON_HOME = archonHome;
+        for (const operation of ['status', 'remove', 'install']) {
+          await expect(schedule(operation)).rejects.toThrow();
+          expect((await readdir(dirname(definition))).sort()).toEqual(files);
+          expect(
+            await Promise.all(files.map(file => readFile(join(dirname(definition), file))))
+          ).toEqual(contents);
+        }
+        expect(scheduled).toEqual([]);
+      }
+    );
+
+    test.skipIf(process.platform === 'win32').each(['ELOOP', 'EACCES'] as const)(
+      'equivalent-home timer reinstall ignores unused %s log metadata while status still reads it',
+      async errorCode => {
+        const { root, archonHome, alias, schedules, schedule, registered } =
+          await scheduleFixture();
+        schedules.platform = platform;
+        schedules.systemdUserDirectory = join(root, 'units');
+        const recordedHome = `${archonHome}${sep}`;
+        process.env.ARCHON_HOME = recordedHome;
+        await schedule('install');
+        const installed = await schedule('status');
+        const definition = String(installed.path);
+        const files = (await readdir(dirname(definition))).sort();
+        const contents = await Promise.all(
+          files.map(file => readFile(join(dirname(definition), file)))
+        );
+        const log = String(installed.log);
+        const metadataDirectory = join(root, 'log-metadata');
+        if (errorCode === 'ELOOP') await symlink(log, log);
+        else {
+          await mkdir(metadataDirectory);
+          const entry = join(metadataDirectory, 'entry');
+          await writeFile(entry, 'log');
+          await symlink(entry, log);
+          await chmod(metadataDirectory, 0);
+        }
+        registered.clear();
+        const loaded: string[][] = [];
+        schedules.runCommand = async (executable, args) => {
+          if (args[0] === 'print' || args[1] === 'is-active') throw new Error('Job is not loaded');
+          loaded.push([executable, ...args]);
+        };
+        try {
+          await expect(stat(log)).rejects.toMatchObject({ code: errorCode });
+          for (const spelling of [recordedHome, archonHome, alias]) {
+            process.env.ARCHON_HOME = spelling;
+            await schedule('install');
+            await expect(schedule('status')).rejects.toMatchObject({ code: errorCode });
+          }
+          expect(
+            loaded.filter(args => args.includes(platform === 'darwin' ? 'bootstrap' : 'enable'))
+          ).toHaveLength(3);
+          expect((await readdir(dirname(definition))).sort()).toEqual(files);
+          expect(
+            await Promise.all(files.map(file => readFile(join(dirname(definition), file))))
+          ).toEqual(contents);
+          expect(await schedule('remove')).toMatchObject({ removed: true });
+        } finally {
+          if (errorCode === 'EACCES') await chmod(metadataDirectory, 0o700);
+        }
+      }
+    );
+  });
+
   test.skipIf(process.platform === 'win32')(
     'another job family with an unresolvable home does not block schedule operations',
     async () => {

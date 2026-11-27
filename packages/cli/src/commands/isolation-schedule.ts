@@ -10,6 +10,7 @@ import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import {
   findNativeScheduleTargets,
+  inspectNativeScheduleRegistrationTargets,
   inspectNativeScheduleTargets,
   installNativeSchedule,
   removeNativeSchedule,
@@ -92,7 +93,7 @@ async function install(
   const target =
     targets.length === 1
       ? targets[0]
-      : (await inspectNativeScheduleTargets(targets, schedules)).target;
+      : (await inspectNativeScheduleRegistrationTargets(targets, schedules)).target;
   const config = isolationCleanupScheduleConfig(interval, process.env, target);
   const { path, log } = await installNativeSchedule(config, schedules);
   const every = String(config.schedule.intervalSeconds);

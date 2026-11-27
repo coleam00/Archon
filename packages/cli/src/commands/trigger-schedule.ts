@@ -8,6 +8,7 @@ import { getArchonHome } from '@archon/paths';
 import type { TriggerConfig } from '@archon/workflows/schemas/resource-start';
 import {
   findNativeScheduleTargets,
+  inspectNativeScheduleRegistrationTargets,
   inspectNativeScheduleTargets,
   installNativeSchedule,
   removeNativeSchedule,
@@ -60,7 +61,7 @@ export async function scheduleTimer(request: ScheduleRequest): Promise<void> {
   const target =
     targets.length === 1
       ? targets[0]
-      : (await inspectNativeScheduleTargets(targets, schedules)).target;
+      : (await inspectNativeScheduleRegistrationTargets(targets, schedules)).target;
   await installTimer(request, target);
   await writeJsonLine({ bindingId, schedule: operation });
 }

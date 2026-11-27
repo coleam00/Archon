@@ -518,6 +518,7 @@ export async function listNativeSchedules(
  * the job was installed. The id always comes from the home the job file recorded. With no
  * readable match, the current spelling's target still reaches a job file that cannot be read;
  * a distinct current target also stays beside readable matches so removal cannot orphan it.
+ * An unparseable alternate has no known home, so lookup refuses it with manual recovery steps.
  */
 export async function findNativeScheduleTargets(
   archonHome: string,
@@ -525,6 +526,7 @@ export async function findNativeScheduleTargets(
   options: NativeScheduleOptions = {},
   idPrefix?: string
 ): Promise<[NativeScheduleTarget, ...NativeScheduleTarget[]]> {
+  const current = { id: idForHome(archonHome), archonHome };
   const found: NativeScheduleTarget[] = [];
   for (const job of await listNativeSchedules(
     archonHome,
@@ -532,11 +534,16 @@ export async function findNativeScheduleTargets(
     (entry, label) => label === scheduleLabel(idForHome(entry.archonHome)),
     idPrefix === undefined ? undefined : label => label.startsWith(`${LABEL_PREFIX}${idPrefix}`)
   )) {
-    if (!('archonHome' in job)) continue;
+    if ('unreadable' in job) {
+      if (job.label === scheduleLabel(current.id)) continue;
+      throw new Error(
+        `${job.unreadable}, so its home cannot be determined. ` +
+          `Fix it, or remove the job by hand: ${job.removeByHand}`
+      );
+    }
     const id = idForHome(job.archonHome);
     found.push({ id, archonHome: job.archonHome });
   }
-  const current = { id: idForHome(archonHome), archonHome };
   const [first, ...rest] = found;
   if (!first) return [current];
   if (found.some(target => target.id === current.id && target.archonHome === current.archonHome))

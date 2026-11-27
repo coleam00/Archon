@@ -688,6 +688,61 @@ describe('reading installed jobs back', () => {
     ]);
   });
 
+  itOnPosixHost.each(['darwin', 'linux', 'win32'] as const)(
+    '%s refuses a malformed alternate target even beside a readable match',
+    async platform => {
+      const directory = await scratchDirectory();
+      const archonHome = join(directory, 'home');
+      const recordedHome = `${archonHome}/`;
+      const idForHome = (home: string): string =>
+        home === recordedHome ? 'workflow-wake-alternate' : 'workflow-wake-current';
+      const scheduler: NativeScheduleOptions = {
+        platform,
+        uid: 501,
+        windowsUserId: 'me',
+        launchAgentsDirectory: directory,
+        systemdUserDirectory: directory,
+        runCommand: recorder().runCommand,
+      };
+      const alternate = await installNativeSchedule(
+        config({
+          id: idForHome(recordedHome),
+          archonHome: recordedHome,
+          workingDirectory: recordedHome,
+          schedule: { intervalSeconds: 60, runAtLoad: false },
+        }),
+        scheduler
+      );
+      const definition = alternate.path.replace(
+        /\.(timer|xml)$/,
+        platform === 'linux' ? '.service' : '.cmd'
+      );
+      await writeFile(definition, 'malformed definition');
+
+      for (const readableMatch of [false, true]) {
+        if (readableMatch)
+          await installNativeSchedule(
+            config({
+              id: idForHome(archonHome),
+              archonHome,
+              workingDirectory: archonHome,
+              schedule: { intervalSeconds: 60, runAtLoad: false },
+            }),
+            scheduler
+          );
+        const failure: unknown = await findNativeScheduleTargets(
+          archonHome,
+          idForHome,
+          scheduler,
+          'workflow-wake-'
+        ).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({ message: expect.stringContaining(definition) });
+        expect(await readFile(definition, 'utf8')).toBe('malformed definition');
+      }
+    }
+  );
+
   itOnPosixHost('keeps the requested target beside a readable alternate match', async () => {
     const directory = await scratchDirectory();
     const archonHome = join(directory, 'home');
