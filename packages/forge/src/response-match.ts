@@ -179,6 +179,8 @@ const workitemEvidenceMatchers: { [Op in MutationOp]?: WorkitemEvidenceMatcher<O
   'workitem.labels.set': issueByRef,
   'workitem.close': issueByRef,
   'workitem.edit-body': issueByRef,
+  'workitem.assignee.add': issueByRef,
+  'workitem.assignee.remove': issueByRef,
   'workitem.label.add': bySubject,
   'workitem.label.remove': bySubject,
   'workitem.comment.upsert': bySubject,
@@ -237,6 +239,22 @@ function labelChange(
     sameTarget(value.target, request.subject.ref) &&
     sameSubject(value.workitem, request.subject) &&
     value.labels.includes(request.name) === (request.op === 'workitem.label.add')
+  );
+}
+
+/** Logins are case-insensitive; the forge echoes the case it has registered. */
+function hasLogin(logins: readonly string[], login: string): boolean {
+  return logins.some(observed => observed.toLowerCase() === login.toLowerCase());
+}
+
+function assigneeChange(
+  request: OpRequest<'workitem.assignee.add' | 'workitem.assignee.remove'>,
+  value: OpValue<'workitem.assignee.add' | 'workitem.assignee.remove'>
+): boolean {
+  return (
+    sameTarget(value.target, request.ref) &&
+    sameRef(value.workitem.ref, request.ref) &&
+    hasLogin(value.assignees, request.login) === (request.op === 'workitem.assignee.add')
   );
 }
 
@@ -385,6 +403,11 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     request.labels.every(name => value.labels.includes(name)),
   'workitem.label.add': labelChange,
   'workitem.label.remove': labelChange,
+  'workitem.assignee.add': assigneeChange,
+  'workitem.assignee.remove': assigneeChange,
+  'actor.self': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    normalizeHost(value.actor.host) === normalizeHost(request.repo.host),
   'workitem.close': (request, value) =>
     sameTarget(value.target, request.ref) &&
     sameRef(value.workitem.ref, request.ref) &&

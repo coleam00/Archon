@@ -9,7 +9,11 @@ import { mkdir, open, readFile, readdir, rm, stat, unlink } from 'node:fs/promis
 import { dirname, join, resolve, relative, isAbsolute } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
-import { workflowRunSchema, type WorkflowRun } from '../schemas/workflow-run';
+import {
+  workflowRunOriginSchema,
+  workflowRunSchema,
+  type WorkflowRun,
+} from '../schemas/workflow-run';
 import { workflowEventRowSchema, type WorkflowEventRow } from '../schemas/workflow-event';
 import {
   probeFileStoreFilesystem,
@@ -20,6 +24,8 @@ import {
 
 const log = createLogger('file-store');
 export const persistedRunSchema = workflowRunSchema.extend({
+  // Loose because the store writes the run back: a key a newer binary added survives.
+  origin: workflowRunOriginSchema.loose().nullable(),
   started_at: z.coerce.date(),
   active_phase_started_at: z.coerce.date().nullable().default(null),
   last_activity_at: z.coerce.date().nullable(),

@@ -36,6 +36,7 @@ import {
   startNodeExecution,
 } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import { serializeRunUsage } from '@archon/workflows/schemas/run-usage';
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { workflowRunCommand } from './workflow-run-owned';
@@ -125,7 +126,7 @@ describe('workflowRunCommand — progress rendering', () => {
         // The CLI reads completed_outcome; the legacy column stays empty so it cannot stand in.
         outcome: null,
         completed_outcome: outcome,
-        metadata: { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
+        metadata: serializeRunUsage({ costUsd: 0.024, tokens: { input: 8420, output: 2180 } }),
       });
     }
 
@@ -700,7 +701,7 @@ describe('workflowRunCommand — progress rendering', () => {
   const completionUsageCases = [
     {
       kind: 'numbers',
-      metadata: { total_cost_usd: 0, total_tokens_in: 12, total_tokens_out: 4 },
+      metadata: serializeRunUsage({ costUsd: 0, tokens: { input: 12, output: 4 } }),
       expected: [
         '  Usage (recorded totals; completeness unknown):',
         '    Cost: $0',

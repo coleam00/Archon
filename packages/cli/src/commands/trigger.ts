@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import {
   drainResourceStartHost,
+  findOrRegisterCodebase,
   isPreparationStageFailure,
   ResourceStartDrainError,
   startAdmittedResourceStart,
@@ -91,6 +92,8 @@ type TriggerOptions = {
   input?: readonly string[];
   item?: string;
   noItem?: boolean;
+  /** Give the start's item priority when the fire is first accepted. */
+  priority?: boolean;
 };
 
 /**
@@ -235,6 +238,27 @@ async function inheritedItemKey(
   return item.key;
 }
 
+/**
+ * Whether the fire asks its acceptance to give the item priority. The acceptance that records
+ * the delivery writes it, so the item must be known and its checkout's project registered
+ * first, as preparation would register it. A recorded delivery replays and gives nothing.
+ */
+async function firePriority(
+  host: WorkflowHost,
+  options: TriggerOptions,
+  recorded: boolean,
+  itemKey: string | undefined,
+  cwd: string
+): Promise<boolean> {
+  if (options.priority !== true || recorded) return false;
+  if (itemKey === undefined)
+    throw new Error(
+      '--priority needs an item: pass --item <key>. Nothing was recorded or started.'
+    );
+  await findOrRegisterCodebase(host, cwd);
+  return true;
+}
+
 function assertItemOptions(options: TriggerOptions): void {
   if (options.item === undefined) return;
   if (options.noItem) throw new Error('--item and --no-item are mutually exclusive.');
@@ -347,6 +371,7 @@ async function triggerFire(
     recorded,
     inherited: () => inheritedItemKey(host, sourceActor, config.binding.launch.cwd),
   });
+  const priority = await firePriority(host, options, recorded, itemKey, config.binding.launch.cwd);
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
@@ -365,6 +390,7 @@ async function triggerFire(
         occurredAt: null,
         sourceActor,
         ...(itemKey === undefined ? {} : { itemKey }),
+        ...(priority ? { priority: true as const } : {}),
       },
       outcome: 'matched',
       bindings: [binding],

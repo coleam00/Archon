@@ -251,13 +251,15 @@ describe('toRun — cost', () => {
   test.each([undefined, 'free', null, -1, Number.NaN, Infinity, -Infinity])(
     'cost is null for missing or invalid total_cost_usd %s',
     totalCost => {
+      const metadata: NonNullable<Raw['metadata']> = {};
+      Object.assign(metadata, { total_cost_usd: totalCost });
       expect(
         toRun(
           raw({
             id: 'r1',
             workflow_name: 'plan',
             status: 'completed',
-            metadata: { total_cost_usd: totalCost },
+            metadata,
           })
         ).costUsd
       ).toBeNull();

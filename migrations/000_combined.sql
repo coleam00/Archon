@@ -881,6 +881,14 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_landings (
   recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
 );
 
+-- An item's priority (`archon workflow priority`): the row existing means the item has its
+-- own priority. An item `part_of` one with priority has it too. A queued start of an item
+-- with priority goes ahead of ordinary ones on its resource and host; queue_position on the
+-- start requests is unchanged, so an older binary still admits in its own order.
+CREATE TABLE IF NOT EXISTS remote_agent_item_priorities (
+  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id)
+);
+
 -- One row per item tracker destination ('tracker:<project>'). The row exists once the
 -- destination's activation baseline is committed, so a later activation does not baseline
 -- again. The pass_owner_* columns name the process running the destination's pass, NULL
@@ -993,6 +1001,11 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_waits (
   met_by_binding_id TEXT,
   replaced_by_run_id TEXT
 );
+-- The issue or pull request a wait names (kind 'pr' or 'issue', and its number), so a
+-- binding that maps no item finds it by the event's subject. NULL when the wait names
+-- none, as a check wait does, and on rows written before the columns existed.
+ALTER TABLE remote_agent_item_waits ADD COLUMN IF NOT EXISTS subject_kind TEXT;
+ALTER TABLE remote_agent_item_waits ADD COLUMN IF NOT EXISTS subject_number INTEGER;
 
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.

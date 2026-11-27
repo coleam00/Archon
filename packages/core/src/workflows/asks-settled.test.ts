@@ -270,7 +270,7 @@ describe('asks-settled starts', () => {
       expect(receipt?.reason).toContain(why);
     });
 
-    test("the checkout is read at the asking run's completion only when such a binding matches", async () => {
+    test("the checkout is read at an asking run's completion only when such a binding matches, and at every waiting run's", async () => {
       const run: WorkflowRun = {
         origin: { conversationId: 'conv-plan' },
         id: RUN_ID,
@@ -295,7 +295,7 @@ describe('asks-settled starts', () => {
         checkout_baseline: null,
         item_id: ITEM.id,
       };
-      const readsFor = async (files: Record<string, unknown>) => {
+      const readsFor = async (files: Record<string, unknown>, waits = false) => {
         const directory = await triggersWith(files);
         const reads: string[] = [];
         const checkout = await createAsksCheckout({
@@ -307,7 +307,7 @@ describe('asks-settled starts', () => {
             reads.push(ended.id);
             return { refused: 'read' };
           },
-        })(run);
+        })(run, { waits });
         return { checkout, reads };
       };
       expect(await readsFor(takesCheckout)).toEqual({
@@ -321,6 +321,8 @@ describe('asks-settled starts', () => {
       expect(
         await readsFor({ 'build.json': trigger({}, '/srv/other', { checkout: 'asking-run' }) })
       ).toEqual({ checkout: undefined, reads: [] });
+      // A wake binding is plugin config, which completion cannot see.
+      expect(await readsFor({}, true)).toEqual({ checkout: { refused: 'read' }, reads: [RUN_ID] });
     });
   });
 });

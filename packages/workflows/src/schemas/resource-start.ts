@@ -6,8 +6,10 @@ import {
   entryReadsNeedLinkedItems,
   linkedReadsNoItemAnswers,
   runEndedInputSourceSchema,
+  wakeInputSourceSchema,
 } from './binding-input-source';
 import { itemLinkKindSchema } from './item-link';
+import { itemWaitSubjectSchema } from './item-wait';
 import { handoffRefusalSchema } from './run-metadata';
 import { attentionOptionSchema } from './wait-node';
 import { ITEM_KEY_MAX_LENGTH, itemKeySchema, workflowRunOriginSchema } from './workflow-run';
@@ -24,16 +26,24 @@ export {
 } from './resource-name';
 
 const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
+/**
+ * The launch keeps keys it does not know, so the in-place lane names the worktree lane's
+ * keys to refuse them: an in-place launch with a branch is wrong, not newer.
+ */
+const absent = z.never().optional();
 const preparedIsolationSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('in-place') }).strict(),
-  z
-    .object({
-      kind: z.literal('worktree'),
-      branch: z.string().min(1).optional(),
-      fromBranch: z.string().min(1).optional(),
-      baseOverride: z.string().min(1).optional(),
-    })
-    .strict(),
+  z.looseObject({
+    kind: z.literal('in-place'),
+    branch: absent,
+    fromBranch: absent,
+    baseOverride: absent,
+  }),
+  z.looseObject({
+    kind: z.literal('worktree'),
+    branch: z.string().min(1).optional(),
+    fromBranch: z.string().min(1).optional(),
+    baseOverride: z.string().min(1).optional(),
+  }),
 ]);
 
 const preparedRunShape = {
@@ -47,21 +57,17 @@ const preparedRunShape = {
 };
 // Only what the run row cannot carry: the origin, inputs and sealed run configuration
 // already live on `run`.
-const preparedExecutionSchema = z
-  .object({
-    cwd: z.string().min(1),
-    conversationId: z.string().min(1),
-    isolation: preparedIsolationSchema,
-  })
-  .strict();
+const preparedExecutionSchema = z.looseObject({
+  cwd: z.string().min(1),
+  conversationId: z.string().min(1),
+  isolation: preparedIsolationSchema,
+});
 
-const preparedWorkflowLaunchV2Schema = z
-  .object({
-    version: z.literal(2),
-    run: z.object({ ...preparedRunShape, origin: workflowRunOriginSchema.optional() }).strict(),
-    execution: preparedExecutionSchema,
-  })
-  .strict();
+const preparedWorkflowLaunchV2Schema = z.looseObject({
+  version: z.literal(2),
+  run: z.looseObject({ ...preparedRunShape, origin: workflowRunOriginSchema.loose().optional() }),
+  execution: preparedExecutionSchema,
+});
 
 /**
  * Launches written before runs could omit provenance. A queued one stays readable, and
@@ -70,16 +76,13 @@ const preparedWorkflowLaunchV2Schema = z
 const preparedWorkflowLaunchV1Schema = z
   .object({
     version: z.literal(1),
-    run: z
-      .object({
-        ...preparedRunShape,
-        conversation_id: z.string().min(1),
-        user_id: z.string().min(1),
-      })
-      .strict(),
+    run: z.object({
+      ...preparedRunShape,
+      conversation_id: z.string().min(1),
+      user_id: z.string().min(1),
+    }),
     execution: preparedExecutionSchema,
   })
-  .strict()
   .transform(
     ({ run: { conversation_id, user_id, ...run }, execution }): PreparedWorkflowLaunch => ({
       version: 2,
@@ -116,9 +119,10 @@ export function readAdmissionCheckoutGuard(launch: PreparedWorkflowLaunch): bool
 
 /** Run metadata key naming the receipt binding that requested a resource start. */
 export const RESOURCE_START_METADATA_KEY = 'resource_start';
-export const resourceStartReceiptOriginSchema = z
-  .object({ receiptId: z.string().uuid(), bindingId: z.string().min(1) })
-  .strict();
+export const resourceStartReceiptOriginSchema = z.object({
+  receiptId: z.string().uuid(),
+  bindingId: z.string().min(1),
+});
 export type ResourceStartRunMetadata = z.infer<typeof resourceStartReceiptOriginSchema>;
 
 /** The receipt and binding that requested this run's start, from its `resource_start` metadata. */
@@ -258,11 +262,11 @@ export const resourceStartDispositionSchema = z.discriminatedUnion('status', [
 ]);
 /**
  * A start on an item still waiting for capacity, as the item read lists it. What it waits
- * behind is `ahead`: the queued starts of the same resource and host with an earlier queue
- * position, read when the item is read; at 0 it waits for a free slot on `resource`. A drain
- * admits one host's requests in queue order. It is queue order, not a promise; a start whose
- * checkout is held is passed over. The blocker a request recorded when it queued is not
- * listed: drains do not refresh it, so it soon names a start that has ended.
+ * behind is `ahead`: the queued starts of the same resource and host ahead of it in queue
+ * order (priority items' starts first, each group oldest first), read when the item is read;
+ * at 0 it waits for a free slot on `resource`. A drain admits one host's requests in queue
+ * order. It is not a promise; a start whose checkout is held is passed over. The blocker a
+ * request recorded when it queued is not listed: drains do not refresh it.
  * `workflow` is null when the stored launch does not read.
  */
 export const queuedItemStartSchema = z.object({
@@ -314,10 +318,11 @@ export const sourceReceiptInputSchema = z
         id: z.string().min(1),
         display: z.string().min(1).optional(),
       })
-      .strict()
       .nullable(),
     /** The item this start is for. Every run the receipt starts belongs to it. */
     itemKey: itemKeySchema.optional(),
+    /** Give `itemKey` priority when the receipt is first accepted (`trigger fire --priority`). */
+    priority: z.literal(true).optional(),
   })
   .strict();
 export type SourceReceiptInput = z.infer<typeof sourceReceiptInputSchema>;
@@ -361,13 +366,11 @@ export function mappedItemKey(
  * `runId`. That is the ended run, or, when the ended run worked on a copy, the run the
  * copy was taken from, so a check's end hands on the build's branch and not its own.
  */
-export const checkoutHandoffSchema = z
-  .object({
-    runId: z.string().min(1),
-    branch: z.string().min(1),
-    commit: z.string().regex(/^[0-9a-f]{40,64}$/, 'Expected a full commit id'),
-  })
-  .strict();
+export const checkoutHandoffSchema = z.object({
+  runId: z.string().min(1),
+  branch: z.string().min(1),
+  commit: z.string().regex(/^[0-9a-f]{40,64}$/, 'Expected a full commit id'),
+});
 export type CheckoutHandoff = z.infer<typeof checkoutHandoffSchema>;
 
 /** The checkout a run left when it ended, read for a binding that takes it: the hand-off, or why there is none. */
@@ -383,9 +386,9 @@ export type EndedCheckout = z.infer<typeof endedCheckoutSchema>;
  * of its own cut at the hand-off's commit (a stage with `mutates_checkout: false`).
  */
 export const CHECKOUT_HANDOFF_METADATA_KEY = 'checkout_handoff';
-export const checkoutHandoffRunMetadataSchema = checkoutHandoffSchema
-  .extend({ lane: z.enum(['continue', 'copy']) })
-  .strict();
+export const checkoutHandoffRunMetadataSchema = checkoutHandoffSchema.extend({
+  lane: z.enum(['continue', 'copy']),
+});
 export type CheckoutHandoffRunMetadata = z.infer<typeof checkoutHandoffRunMetadataSchema>;
 
 /**
@@ -405,18 +408,31 @@ export function readCheckoutHandoff(run: {
 }
 
 /**
- * Run metadata key of a run that completed leaving asks while an asks-settled binding
- * with `checkout: "asking-run"` matched it: the checkout it left, read at completion, and
- * the worktree that holds it (the run's own, or for a run that worked on a copy, the one
- * its source left). The settling transaction and the started run's execution each refuse
- * the hand-off when that worktree is gone, so the checkout is never recreated.
+ * Run metadata key of the checkout a run left for the start that follows it later: a run
+ * that completed leaving asks while an asks-settled binding with `checkout: "asking-run"`
+ * matched it, or any run that completed leaving waits, which a wake binding with
+ * `checkout: "waiting-run"` may hand on (the name predates waits). It holds the checkout
+ * read at completion and the worktree that holds it (the run's own, or for a run that
+ * worked on a copy, the one its source left). The settling or waking transaction, and for
+ * asks the started run's execution, refuse the hand-off when that worktree is gone, so the
+ * checkout is never recreated.
  */
 export const ASKS_CHECKOUT_METADATA_KEY = 'asks_checkout';
 
-export const asksCheckoutSchema = z.union([
-  z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }).strict(),
-  z.object({ refused: z.string().min(1) }).strict(),
-]);
+/**
+ * A record that carries `refused` is a refusal, whatever else it carries: its hand-off is
+ * never read, and a refusal without a valid reason does not parse.
+ */
+export const asksCheckoutSchema = z.preprocess(
+  value =>
+    typeof value === 'object' && value !== null && 'refused' in value
+      ? { refused: value.refused }
+      : value,
+  z.union([
+    z.object({ refused: z.string().min(1) }),
+    z.object({ handoff: checkoutHandoffSchema, worktree: z.string().min(1) }),
+  ])
+);
 export type AsksCheckout = z.infer<typeof asksCheckoutSchema>;
 
 /** The metadata that records an asking run's checkout. */
@@ -425,9 +441,10 @@ export function asksCheckoutMetadata(checkout: AsksCheckout): Record<string, Ask
 }
 
 /**
- * The checkout an asking run recorded, or undefined when it recorded none. A value that
- * does not parse reads as a refusal, not a throw: this runs inside the transaction that
- * closes an ask, and a throw there would refuse the operator's answer.
+ * The checkout an asking or waiting run recorded, or undefined when it recorded none. A
+ * value that does not parse reads as a refusal, not a throw: this runs inside the
+ * transaction that closes an ask or accepts a receipt, and a throw there would refuse the
+ * operator's answer or the event.
  */
 export function readAsksCheckout(run: {
   id: string;
@@ -447,7 +464,12 @@ export const bindingWakeSchema = z
     workflowName: z.string().min(1),
     wait: z.string().min(1),
     about: z.string().min(1),
+    subject: itemWaitSubjectSchema.optional(),
+    /** The item an observation of the wait is for, apart from any item the binding maps. */
+    observedItemKey: z.string().min(1).optional(),
     input: z.string().min(1).optional(),
+    inputs: z.record(z.string().min(1), wakeInputSourceSchema).optional(),
+    checkout: z.literal('waiting-run').optional(),
   })
   .strict();
 export type BindingWake = z.infer<typeof bindingWakeSchema>;
@@ -517,9 +539,9 @@ export const resourceStartBindingIntentSchema = z
      */
     itemKey: itemKeySchema.optional(),
     /**
-     * The checkout a run-ended binding with `checkout: "ended-run"` or an asks-settled
-     * binding with `checkout: "asking-run"` hands the started run, recorded when the ended
-     * or asking run completed. Preparation decides the lane from it, not from
+     * The checkout a run-ended binding with `checkout: "ended-run"`, an asks-settled
+     * binding with `checkout: "asking-run"` or a wake binding with `checkout: "waiting-run"`
+     * hands the started run, recorded when the ended, asking or waiting run completed. Preparation decides the lane from it, not from
      * `launch.isolation`, which names the branch only for older binaries. Operator configs
      * omit this field. The SQL store never writes it into the `intent` column; see
      * `storableIntent` in core's start-receipt-writes.
@@ -528,13 +550,18 @@ export const resourceStartBindingIntentSchema = z
     /**
      * A source plugin's binding that wakes waiting work: the open wait `wait` a run of
      * `workflowName` left, on an item of the project this binding launches in, whose `about`
-     * is exactly this `about`. With `itemKey`, the item the event names, only a wait on that
-     * item matches; an event that names its subject (a review names its pull request) must
-     * set it, so another subject at the same commit wakes nothing here. The store resolves
+     * is exactly this `about`, and whose `subject` is the event's `subject`: an event about
+     * another subject at the same commit, or one that names none (a check), meets no wait
+     * that names one. With `itemKey`, the item the event names, only a wait on that item
+     * matches, and that one also when it names no subject. With `observedItemKey`, only the
+     * wait on the item an observation was for matches. The store resolves
      * the wake when it accepts the receipt, in the same transaction: a match closes the set
      * as met and the binding starts on the wait's item, with the met wait as event input
-     * `input` when set; anything else is recorded as not started, with why. It never
-     * reaches the `intent` column.
+     * `input` when set; anything else is recorded as not started, with why. `inputs` maps
+     * event inputs from the run that left the met wait (its own inputs) and from the item's
+     * answers, and `checkout: "waiting-run"` sets `checkoutFrom` to the checkout that run
+     * recorded when it completed; a value or checkout that cannot be read refuses the start
+     * and leaves the wait open. It never reaches the `intent` column.
      */
     wake: bindingWakeSchema.optional(),
     /**
@@ -553,6 +580,24 @@ export const resourceStartBindingIntentSchema = z
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
+
+/**
+ * `binding` handing its started run `handoff`, the checkout another run left, or unchanged
+ * without one. `launch.isolation` names the branch for an older binary, which reads no
+ * hand-off: it runs the stage on that branch or fails to check it out, never on the base
+ * branch.
+ */
+export function withCheckoutFrom<T extends Pick<ResourceStartBindingIntent, 'launch'>>(
+  binding: T,
+  handoff: CheckoutHandoff | undefined
+): T & { checkoutFrom?: CheckoutHandoff } {
+  if (handoff === undefined) return binding;
+  return {
+    ...binding,
+    launch: { ...binding.launch, isolation: { kind: 'worktree' as const, branch: handoff.branch } },
+    checkoutFrom: handoff,
+  };
+}
 
 /**
  * A binding refused at start because its pack's forge needs cannot be met: the pack and

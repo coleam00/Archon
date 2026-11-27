@@ -44,9 +44,25 @@ archon setup        # or: archon provider add <claude|codex|pi>
 
 ### Docker
 
+The published image runs the Archon server under Docker Compose. Set it up
+with the [pre-built image](/deployment/docker/#pre-built-image) steps, then run
+CLI commands inside the running container as `appuser`:
+
 ```bash
-docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest workflow list
+docker compose exec -u appuser app bun run cli version
 ```
+
+Workflow commands act on a git checkout inside the container; pass it with
+`--cwd`. A project Archon cloned from a URL is checked out at
+`/.archon/workspaces/<owner>/<repo>/source` (see the
+[directory layout](/reference/archon-directories/#directory-structure)):
+
+```bash
+docker compose exec -u appuser app bun run cli workflow list --cwd /.archon/workspaces/<owner>/<repo>/source
+```
+
+The image has no `archon` executable on its `PATH`, and the container starts the
+server whatever arguments `docker run` passes.
 
 ## Providers
 

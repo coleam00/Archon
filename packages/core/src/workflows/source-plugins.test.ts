@@ -388,6 +388,7 @@ function waitStore(waits: Partial<StoredItemWait>[], itemKey = 'pr-7'): ItemWait
         position: 0,
         event: 'checks',
         about: REVISION,
+        subject: null,
         openedAt: '2026-01-01T00:00:00.000Z',
         deadlineAt: new Date(Date.now() + 86_400_000).toISOString(),
         closed: null,
