@@ -564,29 +564,18 @@ describe('validateWorkflowsCommand', () => {
   });
 
   test('refuses a binding to a workflow the pack folder manifest does not list, from anywhere', async () => {
-    // Discovery reads a pack folder's every workflow; only its manifest says what binds.
-    const bindings = {
-      'plan-after-triage': packRunEndedBindingSchema.parse({
-        workflow: 'plan',
-        resource: 'plan',
-        overlap: 'queue',
-        run_ended: { workflow: 'triage', outcome: 'done' },
-      }),
-    };
-    const stage = (name: string) => {
-      const entry = makeTestWorkflowWithSource(
-        { name, nodes: [{ id: 'run', bash: 'true' }] },
-        'project'
-      );
-      entry.workflow.pack = { key: 'factory', source: 'project', workflow: name, bindings };
-      return entry;
-    };
+    // The pack's own manifest and declaration decide, not which workflows discovery loaded.
     mockDiscoverWorkflowsWithConfig.mockResolvedValue({
-      workflows: [stage('plan'), stage('triage')],
+      workflows: [
+        makeTestWorkflowWithSource(
+          { name: 'plan', nodes: [{ id: 'run', bash: 'true' }] },
+          'project'
+        ),
+      ],
       errors: [],
     });
     const source = await mkdtemp(join(tmpdir(), 'archon-cli-validate-pack-'));
-    for (const dir of [source, validationCwd])
+    for (const dir of [source, validationCwd]) {
       await writeFile(
         join(dir, 'archon-plugin.json'),
         JSON.stringify({
@@ -597,6 +586,12 @@ describe('validateWorkflowsCommand', () => {
           entrypoints: { plan: 'plan/plan.yaml' },
         })
       );
+      await mkdir(join(dir, '.pack'), { recursive: true });
+      await writeFile(
+        join(dir, '.pack', 'pack.yaml'),
+        'bindings:\n  plan-after-triage:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'
+      );
+    }
     const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
     const refusal = async (pluginRoot: string, workflowSource?: string) => {
       write.mockClear();

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -10,12 +10,10 @@ import {
   buildPackGraph,
   declaredStops,
   type InstalledArrow,
-  packBindingScope,
+  manifestBindingRefusals,
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
-import { makeTestWorkflowWithSource } from './test-utils';
-import { liveSourceRoots } from './workflow-source';
 import {
   packAsksSettledBindingSchema,
   packEventBindingSchema,
@@ -651,22 +649,18 @@ describe('bindingWorkflowNames', () => {
   });
 });
 
-describe('the names a pack lets its bindings name', () => {
+describe("a pack's bindings checked against its manifest", () => {
   const trackTempRoot = trackTempRoots();
-  const stage = (name: string) => {
-    const entry = makeTestWorkflowWithSource(
-      { name, nodes: [{ id: 'a', bash: 'true' }] },
-      'project'
-    );
-    entry.workflow.pack = { key: 'factory', source: 'project', workflow: name, bindings: {} };
-    return entry;
-  };
 
-  test("are a pack folder's manifest entrypoints, or every stage without a manifest", async () => {
-    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'pack-bindable-')));
-    const stages = [stage('plan'), stage('triage')];
-    const names = async () => (await packBindingScope(liveSourceRoots(dir), stages))?.names;
-    expect(await names()).toEqual(['plan', 'triage']);
+  test('refuse only what the manifest does not list, and nothing without a manifest', async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'pack-bindings-manifest-')));
+    await mkdir(join(dir, '.pack'));
+    // `plan` is listed though no workflow file exists: loading it is not this rule's business.
+    await writeFile(
+      join(dir, '.pack', 'pack.yaml'),
+      'bindings:\n  plan-after-triage:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'
+    );
+    expect(await manifestBindingRefusals(dir)).toBeUndefined();
     await writeFile(
       join(dir, 'archon-plugin.json'),
       JSON.stringify({
@@ -677,6 +671,11 @@ describe('the names a pack lets its bindings name', () => {
         entrypoints: { plan: 'plan/plan.yaml' },
       })
     );
-    expect(await names()).toEqual(['plan']);
+    expect(await manifestBindingRefusals(dir)).toEqual({
+      key: 'factory',
+      refusals: [
+        "Binding 'plan-after-triage' names workflow 'triage', which pack 'factory' does not provide.",
+      ],
+    });
   });
 });

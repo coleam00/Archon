@@ -57,6 +57,7 @@ import {
   packCopies,
   type PackGraph,
   type PackGraphLink,
+  bindingWorkflowNames,
   packBindingScope,
   packBindingWorkflowMissing,
   packWorkflowName,
@@ -685,6 +686,9 @@ async function generateChecked(
     const binding = pack.bindings[id];
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
+    // A workflow the pack does not provide is refused before its inputs are read, as
+    // validate and an installed copy refuse it.
+    for (const name of bindingWorkflowNames(binding)) workflowNameFor(pack, id, name);
     assertWakeInputs(id, binding, pack);
     for (const item of generate(id, binding, pack, target)) {
       const check = assertLoadable(item, target);

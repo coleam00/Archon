@@ -773,14 +773,29 @@ describe('archon pack: a pack folder as the workflow source', () => {
       'fixture-helper',
       'name: fixture-helper\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
     );
+    // It wakes the unlisted workflow and reads an input that workflow does not declare: the
+    // refusal comes first, as validate and an installed copy give it.
     await writeFile(
       join(source, '.pack', 'pack.yaml'),
-      'bindings:\n  helper:\n    workflow: fixture-helper\n    resource: helper\n    overlap: queue\n'
+      `bindings:
+  helper:
+    workflow: fixture-sweep
+    resource: helper
+    overlap: queue
+    event: { kind: check.changed, actions: [changed] }
+    wake: { workflow: fixture-helper, wait: checks, about: check.revision }
+    inputs:
+      issue: { input: undeclared }
+`
     );
     await mkdir(cwd, { recursive: true });
 
     await expect(
-      packCommand('bindings', ['fixture'], options({ workflowSource: source }))
+      packCommand(
+        'bindings',
+        ['fixture'],
+        options({ workflowSource: source, repo: 'github.com/acme/widgets' })
+      )
     ).rejects.toThrow(
       "Binding 'helper' names workflow 'fixture-helper', which pack 'fixture' does not provide."
     );

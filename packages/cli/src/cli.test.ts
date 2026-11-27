@@ -3266,6 +3266,15 @@ it('validate refuses an unlisted pack binding from any directory, once', async (
   const nested = join(project, '.archon', 'workflows', 'factory');
   pack(nested, 'factory', ['plan']);
   pack(join(project, 'plugins', 'kit'), 'kit', ['plan']);
+  // A pack none of whose workflows loads is still checked; one whose manifest cannot be read
+  // is reported, once.
+  const empty = join(project, '.archon', 'workflows', 'empty');
+  pack(empty, 'empty', ['plan']);
+  writeFileSync(join(empty, 'plan', 'plan.yaml'), 'name: [unclosed\n');
+  writeFileSync(join(empty, 'triage', 'triage.yaml'), 'name: [unclosed\n');
+  const broken = join(project, '.archon', 'workflows', 'broken');
+  pack(broken, 'broken', ['plan']);
+  writeFileSync(join(broken, 'archon-plugin.json'), '{unclosed');
   const checkout = join(root, 'checkout');
   repo(checkout);
   pack(checkout, 'factory', ['plan', 'triage']);
@@ -3306,6 +3315,8 @@ it('validate refuses an unlisted pack binding from any directory, once', async (
     ]) {
       const { results, refusals } = validate(cwd);
       expect(refusals('factory')).toHaveLength(1);
+      expect(refusals('empty')).toHaveLength(1);
+      expect(refusals('broken')).toHaveLength(1);
       expect(results.some(r => r.workflowName === 'bad' && !r.valid)).toBe(true);
       if (cwd.includes('plugins')) expect(refusals('kit')).toHaveLength(1);
     }
