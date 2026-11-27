@@ -751,10 +751,14 @@ export function createItemWaitObserver(input: {
       log.warn({ ...wait, deadlineAt }, 'source_observe_overdue');
     const fresh = due.map(({ wait, deadlineAt }) => ({
       wait,
-      reason: `deadline passed at ${deadlineAt}; polling stopped`,
+      reason: `deadline passed at ${deadlineAt}; read once more, polling stopped`,
     }));
+    // A wait just found overdue is read one last time: what happened between the previous
+    // pass and its deadline, such as the last check finishing, still meets it. Later passes
+    // in this process do not read it.
+    const read = [...waits, ...due.map(({ wait }) => wait)];
     const idle =
-      waits.length === 0 && source.labels.length === 0 && source.openedIssues.length === 0;
+      read.length === 0 && source.labels.length === 0 && source.openedIssues.length === 0;
     if (idle && source.unservedBindings.length === 0 && fresh.length === 0) return undefined;
     lastObserved.set(source.sourceInstanceId, now.getTime());
     if (idle) {
@@ -763,7 +767,7 @@ export function createItemWaitObserver(input: {
       if (fresh.length > 0) report.unserved = fresh;
       return report;
     }
-    const observed = await observeSource(source, waits);
+    const observed = await observeSource(source, read);
     settleBackoff(source, now, observed.temporary);
     const report = observed.report;
     if (fresh.length > 0) report.unserved = [...report.unserved, ...fresh];

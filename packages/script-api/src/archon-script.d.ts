@@ -108,6 +108,7 @@ declare module 'archon:script' {
           };
         } | null;
         readonly approvalPending?: boolean | null;
+        readonly runsPending?: boolean | null;
       };
     };
     'checks.commit': {
@@ -160,6 +161,7 @@ declare module 'archon:script' {
         readonly branch: string | null;
         readonly revision: string;
         readonly approvalPending?: boolean | null;
+        readonly runsPending?: boolean | null;
       };
     };
     'checks.logs': {

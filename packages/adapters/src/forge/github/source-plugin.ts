@@ -180,8 +180,9 @@ async function targetEvents(
  * The events a webhook would have delivered for the state each open wait names, and the
  * settled state of a commit's checks, as acceptances of the bindings that wake those waits.
  * Only a binding that wakes a wait is evaluated here: observing checks and reviews must not
- * start a binding nobody waits on. On a source that receives webhooks only `checks.settled`
- * wakes are observed; see `planTargets`. (Label bindings start without a wait;
+ * start a binding nobody waits on, which would also start twice on an install that receives
+ * webhooks too. No webhook carries `checks.settled`, so a source that receives webhooks
+ * serves it only by observing. (Label bindings start without a wait;
  * `observeLabels` handles them.) Each acceptance is for one binding and the wait's item, so
  * a wait that opens later on another item, or for another binding, is a new delivery and not
  * a replay of one made before it existed.
@@ -242,14 +243,7 @@ function planTargets(
       itemKey: wait.itemKey,
     };
     const bindings = config.bindings.filter(
-      binding =>
-        binding.wake?.workflow === wait.workflowName &&
-        binding.wake.wait === wait.event &&
-        // A source that receives webhooks gets checks and reviews by webhook. Observing them
-        // too would record the same state under a second delivery id, which can wake a stage
-        // that waits again at the same commit. No webhook carries `checks.settled`, so that
-        // wake is observed on every source. The others are not unserved: the webhook serves them.
-        (config.webhookSecretEnv === undefined || binding.selector.kind === 'checks.settled')
+      binding => binding.wake?.workflow === wait.workflowName && binding.wake.wait === wait.event
     );
     // Another source may serve a wait this one binds nothing to.
     if (bindings.length === 0) continue;

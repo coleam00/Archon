@@ -44,12 +44,16 @@ export function commitCheckEvents(observed: CommitChecksObservation): ObservedEv
   }));
   const result = settledChecks(observed);
   if (result === null) return events;
-  // Keyed by every check's id and outcome, so the same settled state observed again is one
-  // delivery, while a rerun (new check-run ids on GitHub) settles as a new one.
-  const approval = `approvalPending:${String(observed.approvalPending ?? null)}`;
-  const digest = createHash('sha256')
-    .update([...states].sort().concat(approval).join('\n'))
-    .digest('hex');
+  // Keyed by each check's outcome, so the same settled state observed again, in any order,
+  // is one delivery. A check run counts by its id, so a rerun (new ids on GitHub) settles as
+  // a new one. A commit status counts by its case-folded context, as GitHub folds it: a
+  // reporter that posts the same result again makes a new status id, not a new state.
+  const outcomes = observed.units.map(unit =>
+    unit.unit.kind === 'check'
+      ? `check:${unit.unit.id}:${unit.nativeResult ?? ''}`
+      : `commit_status:${unit.unit.name.toLowerCase()}:${unit.nativeResult ?? ''}`
+  );
+  const digest = createHash('sha256').update(outcomes.sort().join('\n')).digest('hex');
   events.push({
     key: `checks-settled:${repo.host}/${repo.path}@${observed.revision}:${result}:${digest}`,
     event: { kind: 'checks.settled', action: 'settled', repo, revision: observed.revision, result },

@@ -33,15 +33,26 @@ describe('settled checks', () => {
     return { state, counts: { total, ...full } };
   };
   test.each([
-    ['one check still pending', summary('pending', { green: 2, pending: 1 }), null, null],
-    ['a failure while another still runs', summary('red', { red: 1, pending: 1 }), null, null],
-    ['all concluded green', summary('green', { green: 3 }), null, 'green'],
-    ['all concluded with a failure', summary('red', { green: 2, red: 1 }), null, 'red'],
-    ['no checks registered yet', summary('none', {}), null, null],
-    ['workflow runs waiting for approval', summary('none', {}), true, 'gated'],
-    ['green with runs waiting for approval', summary('green', { green: 1 }), true, 'gated'],
-  ] as const)('%s', (_name, checks, approvalPending, expected) => {
-    expect(settledChecks({ summary: checks, approvalPending })).toBe(expected);
+    ['one check still pending', summary('pending', { green: 2, pending: 1 }), {}, null],
+    ['a failure while another still runs', summary('red', { red: 1, pending: 1 }), {}, null],
+    ['all concluded green', summary('green', { green: 3 }), {}, 'green'],
+    ['all concluded with a failure', summary('red', { green: 2, red: 1 }), {}, 'red'],
+    ['no checks registered yet', summary('none', {}), {}, null],
+    [
+      'a CI run with no check reported yet',
+      summary('green', { green: 1 }),
+      { runsPending: true },
+      null,
+    ],
+    ['runs waiting for approval to run', summary('none', {}), { approvalPending: true }, null],
+    [
+      'green beside runs waiting for approval',
+      summary('green', { green: 1 }),
+      { approvalPending: true },
+      null,
+    ],
+  ] as const)('%s', (_name, checks, runs, expected) => {
+    expect(settledChecks({ summary: checks, ...runs })).toBe(expected);
   });
 });
 
