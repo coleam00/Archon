@@ -94,8 +94,8 @@ const REPO_SCOPE_REFUSED_KEYS = [
  * A repo-scope file that sets any of {@link REPO_SCOPE_REFUSED_KEYS} is refused before
  * any of its keys apply.
  *
- * A malformed env file is fatal — matches the pre-existing CLI behavior at
- * packages/cli/src/cli.ts:24-30.
+ * An archon env file that exists but cannot be read (a directory, a permission error) stops the
+ * command. A malformed line is not an error: dotenv skips it and loads the rest of the file.
  */
 export function loadArchonEnv(
   cwd: string = process.cwd(),
