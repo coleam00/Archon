@@ -226,7 +226,7 @@ export function findUnpassedPackSettingReads(
       const bound = ownEnvBindings(owner);
       for (const read of scanEnvironmentReads(source.text, source.runtime)) {
         const setting = settingByEnv.get(read.name);
-        if (setting === undefined || passed(setting) || bound.has(setting)) continue;
+        if (setting === undefined || passed(setting) || bound.has(read.name)) continue;
         found.push({
           nodeId: owner.id,
           path: slot.path,
@@ -240,9 +240,13 @@ export function findUnpassedPackSettingReads(
   return found;
 }
 
-/** Mirrors inputEnvVars: only a non-shell exec node's own `with:` reaches its env. */
+/**
+ * Mirrors inputEnvVars: only a non-shell exec node's own `with:` reaches its env, under the
+ * variable `inputEnvKey` names, so `with: { my_policy }` replaces setting `my-policy`.
+ */
 function ownEnvBindings(owner: TemplateSlot['owner']): ReadonlySet<string> {
-  return new Set(isExecNode(owner) && owner.runtime !== 'sh' ? Object.keys(owner.with ?? {}) : []);
+  const names = isExecNode(owner) && owner.runtime !== 'sh' ? Object.keys(owner.with ?? {}) : [];
+  return new Set(names.map(inputEnvKey));
 }
 
 /**
@@ -284,7 +288,7 @@ export function packSettingReads(
       const bound = ownEnvBindings(slot.owner);
       for (const read of scanEnvironmentReads(source.text, source.runtime)) {
         const setting = settingByEnv.get(read.name);
-        if (setting !== undefined && !bound.has(setting)) reads.add(setting);
+        if (setting !== undefined && !bound.has(read.name)) reads.add(setting);
       }
     });
   }

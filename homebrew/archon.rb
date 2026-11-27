@@ -7,28 +7,28 @@
 class Archon < Formula
   desc "Governed agentic automation engine"
   homepage "https://github.com/coleam00/Archon"
-  version "0.16.0"
+  version "0.16.1"
   license "MIT"
 
   on_macos do
     on_arm do
       url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-darwin-arm64"
-      sha256 "c7d30915a8824250c3a34c8b95866964443cab1439b268eca91b1d17ec4c1113"
+      sha256 "ec2fb5e0b443ed2867b9c3aa17a24e6061fb6832b0b01a880e6296bdd1c341a8"
     end
     on_intel do
       url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-darwin-x64"
-      sha256 "3170c2ed69d2e2228bb9febce30038b34f11c7b59c8e045c76e526cba22eebd1"
+      sha256 "133433c1ae1b230cf30902c80617c8044df813d6efc6b9817abb8d2569ad5459"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-linux-arm64"
-      sha256 "4278b6d4580793037efa973c8a257aa9ac76660d58b3028109483f03118cbb46"
+      sha256 "88ba783c88765cb1d70a9c0d04ddbe558345b790b265e3e6d655ee8e4b1d053c"
     end
     on_intel do
       url "https://github.com/coleam00/Archon/releases/download/v#{version}/archon-linux-x64"
-      sha256 "531fbebfb11267386a89843ee6659e0f3c9047b5c6bfb791d7f9ac5e96601f36"
+      sha256 "23b1b2c975a9724afdbbc897aafd0d087a3b61b56334e07c58214b67e6984542"
     end
   end
 

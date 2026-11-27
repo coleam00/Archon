@@ -54,13 +54,14 @@ import {
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
-  nearestPackBindings,
   type PackCopy,
   packCopies,
   type PackGraph,
+  bindingWorkflowNames,
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
+import { packBindingScope, packBindingWorkflowMissing } from '@archon/workflows/pack-binding-rule';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { arrowText, groupLines } from './pack-graph-text';
 import { writeJsonLine } from '../utils/stdout';
@@ -71,6 +72,7 @@ import type {
 } from '@archon/workflows/schemas/binding-input-source';
 import { loadWorkflows } from './workflow-list';
 import { loadedLine, otherCopyLine } from './pack-copies';
+import { checkReplacedFiles } from './pack-replaced-files';
 
 export interface PackBindingsOptions {
   /** The checkout the bindings launch in, and where the pack is discovered from. */
@@ -413,7 +415,7 @@ interface DeclaredPack {
   key: string;
   copies: Awaited<ReturnType<typeof packCopies>>;
   bindings: Readonly<Record<string, PackBinding>>;
-  /** The pack's dispatchable workflow names, as a binding must spell them. */
+  /** The workflow names a binding may name (`packBindingScope`), as it must spell them. */
   workflowNames: readonly string[];
   /** The pack's workflows as loaded, for what a binding reads of them. */
   workflows: readonly ResolvedWorkflow[];
@@ -427,8 +429,8 @@ async function findPack(
   const discovered = await loadWorkflows(cwd);
   const workflows = packWorkflows(discovered, packKey, cwd);
   const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
-  const bindings = nearestPackBindings(workflows);
-  if (bindings === undefined)
+  const scope = await packBindingScope(liveSourceRoots(cwd), workflows);
+  if (scope === undefined)
     throw new Error(
       [
         `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
@@ -438,8 +440,8 @@ async function findPack(
   return {
     key: packKey,
     copies,
-    bindings,
-    workflowNames: workflows.map(entry => entry.workflow.name),
+    bindings: scope.bindings,
+    workflowNames: scope.names,
     workflows: workflows.map(entry => entry.workflow),
   };
 }
@@ -459,10 +461,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
   const name = packWorkflowName(pack.workflowNames, declared);
-  if (name === undefined)
-    throw new Error(
-      `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
-    );
+  if (name === undefined) throw new Error(packBindingWorkflowMissing(pack.key, id, declared));
   return name;
 }
 
@@ -658,15 +657,6 @@ async function assertSiblingFiles(
   }
 }
 
-async function assertNothingOverwritten(generated: readonly Generated[]): Promise<void> {
-  const present: string[] = [];
-  for (const item of generated) if (await exists(item.path)) present.push(item.path);
-  if (present.length === 0) return;
-  throw new Error(
-    `Refusing to overwrite ${present.join(', ')}. Nothing was written. Pass --force to replace ${present.length === 1 ? 'it' : 'them'}.`
-  );
-}
-
 /**
  * A wake binding's `{ input }` reads a run of its `wake.workflow`, so a name that workflow
  * does not declare would map nothing on every start: refused here, before an event arrives.
@@ -696,6 +686,8 @@ async function generateChecked(
     const binding = pack.bindings[id];
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
+    // An unprovided workflow is refused before its inputs are read, as validate refuses it.
+    for (const name of bindingWorkflowNames(binding)) workflowNameFor(pack, id, name);
     assertWakeInputs(id, binding, pack);
     for (const item of generate(id, binding, pack, target)) {
       const check = assertLoadable(item, target);
@@ -720,7 +712,7 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
     target.discoveryCwd !== undefined
   );
   const generated = await generateChecked(pack, selectIds(pack, options.only), target);
-  if (!options.force) await assertNothingOverwritten(generated);
+  await checkReplacedFiles(generated, options.force === true);
 
   await mkdir(target.outDir, { recursive: true });
   for (const item of generated) {

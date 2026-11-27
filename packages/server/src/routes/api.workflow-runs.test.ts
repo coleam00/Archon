@@ -18,6 +18,7 @@ import {
   makeApp,
 } from '../test/api-workflow-runs-harness';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { serializeRunUsage } from '@archon/workflows/schemas/run-usage';
 import {
   RUN_GRAPH_METADATA_KEY,
   terminalRecordSchema,
@@ -45,6 +46,65 @@ import {
   workflowRunSchema as apiWorkflowRunSchema,
 } from './schemas/workflow.schemas';
 import { makeDashboardRunsResult } from '../test/workflow-mock-factories';
+import { toApiDashboardWorkflowRun, toApiWorkflowRun } from './api-serializers';
+
+describe('workflow run API cost metadata', () => {
+  const approvals: (ApprovalContext | undefined)[] = [
+    undefined,
+    { nodeId: 'gate', message: 'Choose' },
+  ];
+  const cases = [
+    { name: 'missing', metadata: {}, expected: {} },
+    { name: 'null', metadata: { total_cost_usd: null }, expected: {} },
+    { name: 'numeric string', metadata: { total_cost_usd: '0' }, expected: {} },
+    { name: 'boolean', metadata: { total_cost_usd: false }, expected: {} },
+    { name: 'object', metadata: { total_cost_usd: {} }, expected: {} },
+    { name: 'array', metadata: { total_cost_usd: [] }, expected: {} },
+    ...[NaN, Infinity, -Infinity].map(costUsd => ({
+      name: String(costUsd),
+      metadata: serializeRunUsage({ costUsd }),
+      expected: {},
+    })),
+    ...[-1, 0, 0.25].map(costUsd => ({
+      name: String(costUsd),
+      metadata: serializeRunUsage({ costUsd }),
+      expected: serializeRunUsage({ costUsd }),
+    })),
+  ];
+
+  test.each(cases)(
+    'projects $name cost through both serializers without mutating metadata',
+    entry => {
+      for (const approval of approvals) {
+        const extra = {
+          custom: { preserved: true },
+          ...serializeRunUsage({ tokens: { input: 12, output: 34 } }),
+          ...(approval ? { approval } : {}),
+        };
+        const metadata = { ...extra, ...entry.metadata };
+        const original = structuredClone(metadata);
+        const run = { ...MOCK_RUNNING_RUN, metadata };
+        for (const [wire, schema] of [
+          [toApiWorkflowRun(run), apiWorkflowRunSchema],
+          [
+            toApiDashboardWorkflowRun(makeDashboardWorkflowRun(run), null),
+            apiDashboardWorkflowRunSchema,
+          ],
+        ] as const) {
+          expect(schema.safeParse(wire).success).toBe(true);
+          expect(wire.metadata).toEqual({
+            ...extra,
+            ...entry.expected,
+            ...(approval
+              ? { approval: { ...approval, decisions: getApprovalDecisions(approval) } }
+              : {}),
+          });
+        }
+        expect(run.metadata).toEqual(original);
+      }
+    }
+  );
+});
 
 describe('workflow run API wait metadata', () => {
   const attentionWait = {

@@ -51,7 +51,7 @@ inputs:
 # `delivered:false` is a valid completion: an honest "no work is owed" is a
 # successful run that shipped nothing, and lifecycle status and work outcome are
 # separate facts.
-returns: { node: build, outcome: delivered }
+returns: { node: build, outcome: delivered, summary: summary }
 
 nodes:
   # The source is history, not a work order. Triage checks it against current

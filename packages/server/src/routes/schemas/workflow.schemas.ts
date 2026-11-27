@@ -1,6 +1,7 @@
 import { runFilesReportSchema } from '@archon/core/schemas/run-files';
 import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
 import { operatorPauseSchema } from '@archon/workflows/schemas/operator-pause';
+import { runCostMetadataShape } from '@archon/workflows/schemas/run-usage';
 import {
   toolCallAttentionArraySchema,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -174,8 +175,8 @@ export const workflowWaitContextSchema = engineWorkflowWaitContextSchema.meta({
 export const runStopReasonSchema = engineRunStopReasonSchema.meta({ id: 'RunStopReason' });
 
 /**
- * Run metadata stays open-ended, but approval, waits, tool advisories and stop reasons are
- * engine-owned and typed.
+ * Run metadata stays open-ended, but approval, waits, tool advisories, cost and stop reasons
+ * are engine-owned and typed.
  */
 export const workflowRunMetadataSchema = z
   .object({
@@ -183,6 +184,7 @@ export const workflowRunMetadataSchema = z
     approval: approvalContextSchema.optional(),
     wait: workflowWaitContextSchema.optional(),
     [RUN_STOP_REASON_METADATA_KEY]: runStopReasonSchema.optional(),
+    ...runCostMetadataShape,
   })
   .catchall(z.unknown())
   .openapi('WorkflowRunMetadata');

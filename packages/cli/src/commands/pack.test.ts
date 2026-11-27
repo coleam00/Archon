@@ -442,6 +442,37 @@ describe('archon pack bindings', () => {
     expect(triggerConfigSchema.safeParse(await readJson(sweep)).success).toBe(true);
   });
 
+  it('says when --force changes or drops the run config its starts will use', async () => {
+    await writePack(DECLARATION);
+    const runConfig = join(root, 'lane.yaml');
+    await writeFile(runConfig, 'assistants: {}\n');
+    const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await packCommand('bindings', ['fixture'], options({ only: 'sweep', config: runConfig }));
+      await packCommand(
+        'bindings',
+        ['fixture'],
+        options({ only: 'sweep', config: runConfig, force: true })
+      );
+      // Rewriting the same config says nothing.
+      expect(warnSpy.mock.calls).toEqual([]);
+
+      // Regenerating without it would otherwise put the lane back on the install's config.
+      await packCommand('bindings', ['fixture'], options({ only: 'sweep', force: true }));
+      expect(warnSpy.mock.calls.flat().join('\n')).toContain('removed its run config');
+      expect(warnSpy.mock.calls.flat().join('\n')).toContain(runConfig);
+      warnSpy.mockClear();
+
+      await packCommand(
+        'bindings',
+        ['fixture'],
+        options({ only: 'sweep', config: runConfig, force: true })
+      );
+      expect(warnSpy.mock.calls.flat().join('\n')).toContain('added run config');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
   it.each([
     [{ only: 'nope' }, "--only names 'nope'"],
     [{ repo: 'acme/widgets' }, '--repo must be <host>/<owner>/<name>'],
@@ -733,6 +764,42 @@ describe('archon pack: a pack folder as the workflow source', () => {
       loaded: [{ source: 'project', key: 'fixture', dir: source }],
       otherCopies: [],
     });
+  });
+
+  it('refuses a binding to a workflow the manifest does not list, as an installed copy does', async () => {
+    const source = await writePackFolder();
+    await writeWorkflow(
+      source,
+      'fixture-helper',
+      'name: fixture-helper\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    // It wakes the unlisted workflow and reads an input that workflow does not declare: the
+    // refusal comes first, as validate and an installed copy give it.
+    await writeFile(
+      join(source, '.pack', 'pack.yaml'),
+      `bindings:
+  helper:
+    workflow: fixture-sweep
+    resource: helper
+    overlap: queue
+    event: { kind: check.changed, actions: [changed] }
+    wake: { workflow: fixture-helper, wait: checks, about: check.revision }
+    inputs:
+      issue: { input: undeclared }
+`
+    );
+    await mkdir(cwd, { recursive: true });
+
+    await expect(
+      packCommand(
+        'bindings',
+        ['fixture'],
+        options({ workflowSource: source, repo: 'github.com/acme/widgets' })
+      )
+    ).rejects.toThrow(
+      "Binding 'helper' names workflow 'fixture-helper', which pack 'fixture' does not provide."
+    );
+    expect(existsSync(out)).toBe(false);
   });
 
   it('with an installed copy too, the hint to use it drops --workflow-source, and following it works', async () => {
