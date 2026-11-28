@@ -3,20 +3,23 @@ import * as workflowEventDb from '@archon/core/db/workflow-events';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
 import {
   ISOLATION_ENV_ID_METADATA_KEY,
+  readOwnedWorktree,
   readRunDispatchMetadata,
 } from '@archon/workflows/schemas/run-metadata';
-import {
-  boundedMessageText,
-  type RunProgress,
-  type RunStep,
-} from '@archon/workflows/schemas/run-progress';
+import { boundedMessageText, type RunProgress } from '@archon/workflows/schemas/run-progress';
 import { NODE_STATE_EVENT_TYPES } from '@archon/workflows/store';
 import { buildRunSteps } from '@archon/workflows/terminal-record';
 import { getLog } from './api-route-kit';
 
+/**
+ * A container run and a child run name their environment under the isolation key; a run
+ * that owns its worktree names it in its ownership proof.
+ */
 async function readRunBranch(run: DashboardWorkflowRun): Promise<string | null> {
-  const environmentId = run.metadata[ISOLATION_ENV_ID_METADATA_KEY];
-  if (typeof environmentId !== 'string') return null;
+  const recorded = run.metadata[ISOLATION_ENV_ID_METADATA_KEY];
+  const environmentId =
+    typeof recorded === 'string' ? recorded : readOwnedWorktree(run.metadata)?.envId;
+  if (environmentId === undefined) return null;
   return (await isolationEnvDb.getById(environmentId))?.branch_name ?? null;
 }
 
@@ -27,7 +30,7 @@ async function readRunBranch(run: DashboardWorkflowRun): Promise<string | null> 
 function readRunSteps(
   run: DashboardWorkflowRun,
   events: Parameters<typeof buildRunSteps>[1]
-): RunStep[] | null {
+): ReturnType<typeof buildRunSteps> | null {
   try {
     return buildRunSteps(run, events);
   } catch (error) {
@@ -66,7 +69,7 @@ export async function readDashboardRunProgress(
       return [
         run.id,
         {
-          steps,
+          ...steps,
           last_observed_at:
             laterOf(run.last_activity_at, eventTimes.get(run.id) ?? null)?.toISOString() ?? null,
           last_message:

@@ -573,14 +573,18 @@ Each run also includes `item_key`, the key of the item the run is on exactly as 
 A running or paused run carries `progress`; it is `null` for any other run, for the `runs` of
 `GET /api/runs/attention`, and for a run whose node records could not be read. `progress.steps`
 lists one entry per top-level node of the run's recorded graph, in authored order, with its
-state, and once it has started its kind, start time, requested model, and its duration once
-every attempt has ended. `progress.last_observed_at` is the later of the run's heartbeat
-(`last_activity_at`) and the time of its newest event. A `bash:` or `script:` node records
-neither while it runs, so a long command leaves that time old without the run having stalled.
-`progress.last_message` is the agent reply block the run stored last, with its node and time;
-its text is cut to 500 characters and marked `truncated` when longer. `progress.branch` is the
-branch of the run's isolation environment and `progress.base_branch` the base branch the run
-was dispatched with; each is `null` when the run recorded none.
+state, and once it has started its start time and requested model, and its duration once it
+has ended. `progress.last_observed_at` is the later of the run's heartbeat
+(`last_activity_at`) and the time of its newest event. Some work records neither while it
+runs: a `bash:` or `script:` node, and a `workflow:` node waiting on its child run.
+`progress.silent_by_design` is `true` while the run has running nodes and all of them, nested
+ones included, are of that kind, so a reader does not take an old `last_observed_at` for a
+stall. `progress.last_message` is the agent message chunk the run stored last, with its node
+and time; it is usually a whole reply block, and the tail of one when the provider flushed the
+block early. Its text is cut to 500 characters and marked `truncated` when longer.
+`progress.branch` is the branch of the run's worktree or container environment and
+`progress.base_branch` the base branch the run was dispatched with; each is `null` when the
+run recorded none.
 
 Process-owner liveness is `owner_observation`, which dashboard runs and the run in
 `GET /api/workflows/runs/{runId}` carry. The server observes it per request, by the rule

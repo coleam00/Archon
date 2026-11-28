@@ -2,16 +2,14 @@ import { z } from 'zod';
 import { nodeStateSchema } from './node-state';
 
 /**
- * One top-level node of a run, as a run list shows its progress. `kind` is the node
- * descriptor's kind and `model` the model the node's latest start requested; both are
- * absent on a node that has not started and on records that predate them. `started_at`
- * is when the node's first attempt started; `duration_ms` sums every attempt's recorded
- * duration and is absent until the last attempt ends.
+ * One top-level node of a run, as a run list shows its progress. `model` is the model the
+ * node's latest start requested, absent when it requested none. `started_at` is when the
+ * node's first attempt started; `duration_ms` sums every attempt's recorded duration and
+ * is present only on a node that has ended, so a node suspended at a gate has none.
  */
 export const runStepSchema = z.object({
   node_id: z.string(),
   state: nodeStateSchema,
-  kind: z.string().optional(),
   started_at: z.string().datetime({ offset: true }).optional(),
   duration_ms: z.number().optional(),
   model: z.string().optional(),
@@ -32,14 +30,23 @@ export type RunLastMessage = z.infer<typeof runLastMessageSchema>;
 /**
  * What an active run is doing, for a run list. `steps` holds one entry per node of the
  * run's recorded graph in authored order. `last_observed_at` is the later of the run's
- * heartbeat (`last_activity_at`) and its newest event; a `bash:` or `script:` node
- * records neither while it runs, so a reader must not take silence under one as a stall.
+ * heartbeat (`last_activity_at`) and its newest event.
  */
 export const runProgressSchema = z.object({
   steps: z.array(runStepSchema),
   last_observed_at: z.string().nullable(),
+  /**
+   * True while the run has running nodes and none of them, at any depth, records anything
+   * while it runs: a `bash:` or `script:` node, or a `workflow:` node waiting on its child
+   * run. However old `last_observed_at` is, such a run has not stalled.
+   */
+  silent_by_design: z.boolean(),
+  /**
+   * The agent message chunk the run stored last. A provider that flushes a reply block
+   * early stores it as several chunks, so this can be the tail of a block.
+   */
   last_message: runLastMessageSchema.nullable(),
-  /** The branch of the run's isolation environment; null for a run with none. */
+  /** The branch of the run's worktree or container environment; null for a run with none. */
   branch: z.string().nullable(),
   /** The base branch the run was dispatched with; null when it recorded none. */
   base_branch: z.string().nullable(),

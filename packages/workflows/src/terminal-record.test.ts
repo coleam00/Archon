@@ -785,7 +785,7 @@ describe('run steps', () => {
   const agent = { node: { id: 'build', kind: 'agent', source: { kind: 'inline' } } };
 
   it('lists the graph nodes in authored order with what each has recorded', () => {
-    const steps = buildRunSteps(run, [
+    const { steps } = buildRunSteps(run, [
       invocation('node_started', 'build', [], { ...agent, model: 'sonnet' }),
       invocation('node_started', 'discover', []),
       invocation('node_completed', 'discover', [], {}, 1500),
@@ -795,14 +795,12 @@ describe('run steps', () => {
       {
         node_id: 'discover',
         state: 'completed',
-        kind: 'exec',
         started_at: '2026-11-16T10:00:00Z',
         duration_ms: 1500,
       },
       {
         node_id: 'build',
         state: 'running',
-        kind: 'agent',
         model: 'sonnet',
         started_at: '2026-11-16T10:00:00Z',
       },
@@ -825,7 +823,7 @@ describe('run steps', () => {
       invocation('node_started', 'build', [], attempt('a2')),
     ];
     const build = (all: TerminalRecordEvent[]) =>
-      buildRunSteps(run, all).find(step => step.node_id === 'build');
+      buildRunSteps(run, all).steps.find(step => step.node_id === 'build');
     expect(build(events)).not.toHaveProperty('duration_ms');
     expect(
       build([...events, invocation('node_completed', 'build', [], attempt('a2', 4))])
@@ -838,20 +836,65 @@ describe('run steps', () => {
       attempt: { id: 'resumed-attempt', startedAt: '2026-11-16T12:00:00Z' },
       timing: { startedAt: '2026-11-16T12:00:00Z' },
     };
-    const steps = buildRunSteps(run, [
+    const { steps } = buildRunSteps(run, [
       invocation('node_failed', 'build', [], { error: 'boom' }, 40),
       invocation('node_started', 'build', [], second),
     ]);
     expect(steps.find(step => step.node_id === 'build')).toEqual({
       node_id: 'build',
       state: 'running',
-      kind: 'exec',
       started_at: '2026-11-16T12:00:00Z',
     });
   });
 
+  it('gives a step suspended at a gate no duration, since it has not ended', () => {
+    const { steps } = buildRunSteps(run, [
+      invocation('node_started', 'build', []),
+      invocation('node_suspended', 'build', [], { suspend_point: 'approval' }, 17),
+    ]);
+    expect(steps.find(step => step.node_id === 'build')).toEqual({
+      node_id: 'build',
+      state: 'running',
+      started_at: '2026-11-16T10:00:00Z',
+    });
+  });
+
+  it('calls a run silent by design only while none of its running nodes records anything', () => {
+    const kind = (id: string, node: Record<string, unknown>) => ({ node: { id, ...node } });
+    const round = [{ groupId: 'build', iteration: 1 }];
+    const group = invocation('node_started', 'build', [], kind('build', { kind: 'loop_group' }));
+    const silent = (events: TerminalRecordEvent[]) => buildRunSteps(run, events).silent_by_design;
+
+    expect(silent([])).toBe(false);
+    expect(silent([invocation('node_started', 'discover', [])])).toBe(true);
+    expect(silent([group, invocation('node_started', 'build.test', round)])).toBe(true);
+    expect(
+      silent([invocation('node_started', 'build', [], kind('build', { kind: 'workflow' }))])
+    ).toBe(true);
+    expect(
+      silent([
+        invocation('node_started', 'discover', []),
+        invocation('node_completed', 'discover', []),
+      ])
+    ).toBe(false);
+    expect(
+      silent([
+        group,
+        invocation('node_started', 'build.review', round, {
+          node: { id: 'review', kind: 'agent', source: { kind: 'inline' } },
+        }),
+      ])
+    ).toBe(false);
+    expect(
+      silent([
+        invocation('node_started', 'discover', []),
+        invocation('node_started', 'build', [], agent),
+      ])
+    ).toBe(false);
+  });
+
   it('drops the timing of a step reset for a re-run', () => {
-    const steps = buildRunSteps(run, [
+    const { steps } = buildRunSteps(run, [
       invocation('node_completed', 'build', [], {}, 40),
       node('node_always_run_reset', 'build'),
     ]);
@@ -862,7 +905,7 @@ describe('run steps', () => {
   });
 
   it('lists every recorded node, in first-appearance order, when the run recorded no graph', () => {
-    const steps = buildRunSteps({ id: 'run-1', metadata: {} }, [
+    const { steps } = buildRunSteps({ id: 'run-1', metadata: {} }, [
       node('node_started', 'second'),
       node('node_completed', 'first'),
       node('node_completed', 'second'),

@@ -57,7 +57,8 @@ describe('run responses', () => {
     const { terminal_record, ...dashboardRun } = detailFixture.run;
     void terminal_record;
     const progress: components['schemas']['RunProgress'] = {
-      steps: [{ node_id: 'a', state: 'running', kind: 'agent' }],
+      steps: [{ node_id: 'a', state: 'running' }],
+      silent_by_design: false,
       last_observed_at: '2026-11-27T10:00:00.000Z',
       last_message: null,
       branch: 'archon/task-1',

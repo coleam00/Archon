@@ -37,6 +37,7 @@ import {
 } from './schemas/node-outcomes';
 import {
   nodeFailureKindSchema,
+  type NodeDescriptor,
   type NodeExecutionMetadata,
   type NodeFailureKind,
   type NodeInvocation,
@@ -44,7 +45,7 @@ import {
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
 import type { SerializedNodeData } from './node-record-serialization';
 import type { LoopRound, LoopRoundNode } from './schemas/loop-rounds';
-import type { RunStep } from './schemas/run-progress';
+import type { RunProgress, RunStep } from './schemas/run-progress';
 
 export interface TerminalRecordEvent {
   event_type: string;
@@ -71,7 +72,7 @@ interface NodeEventFold {
   /** Each key's invocation timing, folded from its attempts; a cache record carries none. */
   timings: Map<string, InvocationTiming>;
   /** What each key's latest execution record says ran it. */
-  executions: Map<string, Pick<RunStep, 'kind' | 'model'>>;
+  executions: Map<string, { kind: NodeDescriptor['kind']; model?: string }>;
 }
 
 /**
@@ -275,30 +276,63 @@ export function buildRunNodeStates(
 }
 
 /**
- * A run's progress as a run list shows it: one step per node of the recorded graph, in
- * authored order, so a loop body or other nested path is not a step of its own. A run
- * recorded before the graph was lists every node its events name, in first-appearance
- * order. A pending node, whether not reached or reset for a re-run, carries no timing:
- * what an earlier invocation took is not this step's progress.
+ * Whether a node of each kind records anything while it runs. An agent turn stores its
+ * provider events and a heartbeat. A command, a wait on a child run, a gate, a timer and
+ * a halt store nothing between their start and their end, and a container's nested nodes
+ * record for themselves.
+ */
+const RECORDS_WHILE_RUNNING: Record<NodeDescriptor['kind'], boolean> = {
+  agent: true,
+  loop: true,
+  exec: false,
+  workflow: false,
+  gate: false,
+  wait: false,
+  halt: false,
+  loop_group: false,
+  compose_fan_out: false,
+  compose_fan_out_instance: false,
+};
+
+/**
+ * A run's progress as a run list shows it. `steps` holds one step per node of the
+ * recorded graph, in authored order, so a loop body or other nested path is not a step of
+ * its own. A run recorded before the graph was lists every node its events name, in
+ * first-appearance order. A pending node, whether not reached or reset for a re-run,
+ * carries no timing: what an earlier invocation took is not this step's progress.
+ *
+ * `silent_by_design` reads every running node, nested ones included. A running node whose
+ * record names no kind counts as one that records, so an old record never hides a stall.
  */
 export function buildRunSteps(
   run: Pick<WorkflowRun, 'id' | 'metadata'>,
   events: readonly TerminalRecordEvent[]
-): RunStep[] {
+): Pick<RunProgress, 'steps' | 'silent_by_design'> {
   const { graph, nodes, timings, executions } = foldNodeEvents(run, events);
   const states = graph ? graph.node_ids.flatMap(id => nodes.get(id) ?? []) : [...nodes.values()];
-  return states.map(({ node_id, state }): RunStep => {
+  const steps = states.map(({ node_id, state }): RunStep => {
     if (state === 'pending') return { node_id, state };
     const timing = timings.get(node_id);
-    const durationMs = invocationDurationMs(timing);
+    const durationMs = state === 'running' ? undefined : invocationDurationMs(timing);
+    const model = executions.get(node_id)?.model;
     return {
       node_id,
       state,
-      ...executions.get(node_id),
+      ...(model !== undefined ? { model } : {}),
       ...(timing ? { started_at: timing.startedAt } : {}),
       ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
     };
   });
+  const running = [...nodes].filter(([, node]) => node.state === 'running').map(([key]) => key);
+  return {
+    steps,
+    silent_by_design:
+      running.length > 0 &&
+      running.every(key => {
+        const kind = executions.get(key)?.kind;
+        return kind !== undefined && !RECORDS_WHILE_RUNNING[kind];
+      }),
+  };
 }
 
 /**

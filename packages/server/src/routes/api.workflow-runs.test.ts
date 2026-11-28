@@ -952,7 +952,9 @@ describe('GET /api/dashboard/runs', () => {
         ...running,
         id: 'run-uuid-9',
         last_activity_at: eventTime,
-        metadata: {},
+        metadata: {
+          owned_worktree: { envId: 'env-2', creationId: '6f1c2a34-5b6d-4e7f-8a9b-0c1d2e3f4a5b' },
+        },
       };
       mockListDashboardRuns.mockImplementationOnce(async () =>
         makeDashboardRunsResult({
@@ -985,9 +987,10 @@ describe('GET /api/dashboard/runs', () => {
             [quietLater.id, null],
           ])
       );
-      mockGetIsolationEnvironment.mockImplementationOnce(async () => ({
-        branch_name: 'archon/task-1',
-      }));
+      for (const branch_name of ['archon/task-1', 'archon/task-2']) {
+        mockGetIsolationEnvironment.mockImplementationOnce(async () => ({ branch_name }));
+      }
+      const environmentReads = mockGetIsolationEnvironment.mock.calls.length;
 
       const [active, completed, other] = await listProgress();
 
@@ -996,6 +999,7 @@ describe('GET /api/dashboard/runs', () => {
           { node_id: 'plan', state: 'completed' },
           { node_id: 'build', state: 'pending' },
         ],
+        silent_by_design: false,
         last_observed_at: eventTime.toISOString(),
         last_message: {
           node_id: 'plan',
@@ -1007,15 +1011,20 @@ describe('GET /api/dashboard/runs', () => {
         base_branch: 'dev',
       });
       expect(completed).toBeNull();
+      // A run that owns its worktree names its environment in the ownership proof.
       expect(other).toEqual({
         steps: [],
+        silent_by_design: false,
         last_observed_at: eventTime.toISOString(),
         last_message: null,
-        branch: null,
+        branch: 'archon/task-2',
         base_branch: null,
       });
+      expect(mockGetIsolationEnvironment.mock.calls.slice(environmentReads)).toEqual([
+        ['env-1'],
+        ['env-2'],
+      ]);
       expect(mockListEventsForRuns.mock.calls.at(-1)?.[0]).toEqual([running.id, quietLater.id]);
-      expect(mockGetIsolationEnvironment.mock.calls.at(-1)).toEqual(['env-1']);
     });
 
     test('serves a run whose node records cannot be read without progress, and the rest with it', async () => {

@@ -361,9 +361,11 @@ export interface LatestAgentMessage {
 }
 
 /**
- * The agent reply block each run stored last; null for a run that has stored none. The
- * database picks the row, one query per run, so a list never loads a run's provider
- * events to show its last message.
+ * The agent message chunk each run stored last; null for a run that has stored none. The
+ * database picks the row by store order, one query per run, so a list never loads a run's
+ * provider events to show its last message. It is one chunk as stored: a provider that
+ * flushes a reply block early continues it in later chunks, and this returns only the
+ * last of them.
  */
 export async function listLatestAgentMessages(
   workflowRunIds: readonly string[]

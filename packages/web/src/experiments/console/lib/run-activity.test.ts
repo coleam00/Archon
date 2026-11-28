@@ -7,9 +7,10 @@ type Progress = NonNullable<Run['progress']>;
 const now = Date.parse('2026-11-27T12:00:00.000Z');
 const observed = (msAgo: number): string => new Date(now - msAgo).toISOString();
 
-function progress(msAgo: number, steps: Progress['steps'] = []): Progress {
+function progress(msAgo: number, silentByDesign = false): Progress {
   return {
-    steps,
+    steps: [],
+    silent_by_design: silentByDesign,
     last_observed_at: observed(msAgo),
     last_message: null,
     branch: null,
@@ -39,14 +40,8 @@ describe('runQuietMs', () => {
     ).toBeNull();
   });
 
-  test('never flags a run inside a bash or script step, which records nothing until it ends', () => {
-    const inStep = (kind: string, state: Progress['steps'][number]['state']) => ({
-      status: 'running' as const,
-      progress: progress(HOUR, [{ node_id: 'test', state, kind }]),
-    });
-    expect(runQuietMs(inStep('exec', 'running'), now)).toBeNull();
-    expect(runQuietMs(inStep('exec', 'completed'), now)).toBe(HOUR);
-    expect(runQuietMs(inStep('agent', 'running'), now)).toBe(HOUR);
+  test('never flags a run the server calls silent by design', () => {
+    expect(runQuietMs({ status: 'running', progress: progress(HOUR, true) }, now)).toBeNull();
   });
 });
 

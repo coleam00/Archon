@@ -7717,13 +7717,13 @@ export interface components {
         node_id: string;
         /** @enum {string} */
         state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-        kind?: string;
         /** Format: date-time */
         started_at?: string;
         duration_ms?: number;
         model?: string;
       }[];
       last_observed_at: string | null;
+      silent_by_design: boolean;
       last_message: {
         node_id: string;
         at: string;
