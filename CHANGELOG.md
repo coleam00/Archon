@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The Console shows a project's repository on its forge. A project whose remote a forge plugin claims gains a tab named after that forge, with the repository's description, stars, forks, latest release and default branch, counts of its issues and pull requests that each link to that exact list on the forge, and the newest open pull requests and issues. A row's Review or Ship action opens the start-run form filled in with `archon-review` or `archon-ship` on that item, when the project has the workflow. The project header links to the repository, and the project rail shows the selected project's open issue and pull request counts. A count the forge does not report is hidden, never shown as zero, and a failed read says why. A folder project, or a remote no plugin claims, has no tab.
+- The forge reads a repository at a glance with `repo.overview`, and a forge plugin's metadata can state the forge's product name and icon under `display`. The server serves the overview for a project at `GET /api/codebases/{id}/forge`. The installed GitHub plugin answers `repo.overview` after `archon plugin update coleam00/Archon/plugins/forge-github` installs a release that includes it; until then the tab says the plugin does not support the operation.
+
 ## [0.16.1] - 2026-11-27
 
 An item or a work order can be given priority, the forge can assign an issue, and stored engine records can gain a field without breaking an older binary.
