@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-28
+
+A project running a pack gets a Factory section in the Console, and every word it shows comes from the pack itself.
+
+### Added
+
+- The Console has a Factory section for a project running a staged pack. Overview shows a map grouped by the pack's own stage groups, with the lines that send work back to an earlier group, a summary and a stage modal. How it works renders the pack's document. Board has one column per group, and each card shows its rounds, how many times it was sent back, its pull request and a Needs you button. Needs you lists the open asks, and Full workflow shows the whole stage graph. A pack with no words of its own still gets the Full workflow graph, labelled by id. (#6438)
+- A workflow can carry an optional `display:` block with a label, a short line and a blurb for its stage, and labels for its steps and outcomes. A bad field is dropped with a warning and never refuses the workflow, and an older engine loads a pack that uses it, with warnings. (#6438)
+- A declared option in `returns.options` can carry a `label`, which the Console shows in place of the option's id. (#6438)
+- A pack's manifest can name its document with `document`, with `how-it-works.md` as the fallback. The document's `groups:` front matter gives the Console its stage groups, each with an optional `blurb` and `kind`. (#6438)
+- `archon validate workflows` checks a pack's display words. A group that names a stage the pack lacks, an in-flow stage in no group, an unknown `means`, a `results` pointer the stage's output does not declare and a conflicting `replaces` are errors. A missing label is a warning. (#6438)
+
+### Changed
+
+- A forge subject the Console reads must belong to the requesting project's remote, and the forge caches are keyed by project and bounded in size. (#6438)
+- An item whose held start cannot be placed shows as degraded (`held_start_unplaced`) instead of vanishing from the item read. (#6438)
+- `/api/codebases` reports a codebase it cannot read instead of failing the whole request, and an unreadable wake pass is reported as unreadable. (#6438)
+
+### Fixed
+
+- `archon pack bindings` and `archon validate workflows` refuse a binding to a workflow the pack's manifest does not list, from the pack root, a subdirectory, `--workflow-source`, and a pack nested under `.archon/workflows`. Both give the same message. Before, a binding generated from the pack's own folder could slip through. (#6444)
+
 ## [0.16.1] - 2026-11-27
 
 An item or a work order can be given priority, the forge can assign an issue, and stored engine records can gain a field without breaking an older binary.
