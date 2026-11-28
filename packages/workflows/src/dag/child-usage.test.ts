@@ -106,9 +106,13 @@ it('keeps malformed legacy token totals unknown in the retained child baseline',
   expect(incremental.tokens).toBeUndefined();
 });
 
+const zeroTokens = [
+  undefined,
+  { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 },
+];
+
 const legacyIdentities = [
   {},
-  { child_run_id: 'a' },
   {
     fan_out_outcome: fanOutOutcome([
       { index: 0, outcome: 'completed', child_run_id: 'a' },
@@ -120,13 +124,11 @@ const legacyIdentities = [
 it.each(
   legacyIdentities.flatMap(attribution =>
     ['node_completed', 'node_failed'].flatMap(eventType =>
-      [undefined, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, cost: 0 }].map(
-        tokens => ({ attribution, eventType, tokens })
-      )
+      zeroTokens.map(tokens => ({ attribution, eventType, tokens }))
     )
   )
 )(
-  'folds legacy zero usage without a child baseline: %j',
+  'folds legacy zero usage without a child to name without a child baseline: %j',
   async ({ attribution, eventType, tokens }) => {
     const snapshot = await foldDagResumeSnapshot(
       [
@@ -145,6 +147,47 @@ it.each(
     );
     expect(snapshot.reportedChildUsage?.size).toBe(0);
     expect(snapshot.unattributedChildUsagePaths?.size).toBe(0);
+  }
+);
+
+it.each(
+  ['node_completed', 'node_failed'].flatMap(eventType =>
+    [...zeroTokens, { input: 0, output: 0, calls: [] }].map(tokens => ({ eventType, tokens }))
+  )
+)(
+  'keeps a zero child baseline for a legacy zero increment that names one child: %j',
+  async ({ eventType, tokens }) => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        {
+          step_name: 'sub',
+          event_type: eventType,
+          data: { type: 'workflow', cost_usd: 0, tokens, child_run_id: 'a' },
+        },
+      ],
+      'parent'
+    );
+    expect(snapshot.costUsd).toBe(0);
+    expect(snapshot.unattributedChildUsagePaths?.size).toBe(0);
+    // Zero is a measurement: the baseline says so where an absent one would not.
+    expect(snapshot.reportedChildUsage?.get('a')).toEqual({
+      costUsd: 0,
+      tokens:
+        tokens === undefined
+          ? undefined
+          : {
+              input: 0,
+              output: 0,
+              ...('calls' in tokens ? { calls: [] } : { cacheRead: 0, cacheWrite: 0 }),
+            },
+      tokensUnknown: false,
+    });
+    // A zero baseline leaves the child's later cumulative total charged in full.
+    const total = { costUsd: 0.03, tokens: { input: 21, output: 9 } };
+    expect(unreportedChildUsage(total, snapshot.reportedChildUsage, 'a')).toEqual({
+      ...total,
+      tokensUnknown: false,
+    });
   }
 );
 

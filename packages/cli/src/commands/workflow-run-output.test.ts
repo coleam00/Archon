@@ -39,6 +39,7 @@ import { serializeNodeStateRecord } from '@archon/workflows/node-record-serializ
 import { serializeRunUsage } from '@archon/workflows/schemas/run-usage';
 import type { NodeStateRecord } from '@archon/workflows/schemas/node-execution';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { usageEvents } from '../test-support/usage-fixtures';
 import { workflowRunCommand } from './workflow-run-owned';
 import { presentRunResult } from './workflow-run-output';
 import { deadlineWaitCursor } from '@archon/workflows/store';
@@ -437,10 +438,10 @@ describe('workflowRunCommand — progress rendering', () => {
   it('renders aligned completed execution and succeeded authored outcome', async () => {
     await runOutcomeFixture({ success: true, workflowRunId: 'run-1' }, 'completed', 'succeeded');
 
-    expect(consoleSpy).toHaveBeenCalledWith('  Usage (recorded totals; completeness unknown):');
-    expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
-    expect(consoleSpy).toHaveBeenCalledWith('    Input tokens: 8420');
-    expect(consoleSpy).toHaveBeenCalledWith('    Output tokens: 2180');
+    const text = consoleSpy.mock.calls.flat().join('\n');
+    expect(text).toContain('cost $0.024');
+    expect(text).toContain('input tokens 8420');
+    expect(text).toContain('output tokens 2180');
     expect(consoleSpy).toHaveBeenCalledWith(
       '\nWorkflow finished.\n  Status: completed\n  Authored outcome: succeeded'
     );
@@ -461,7 +462,7 @@ describe('workflowRunCommand — progress rendering', () => {
     );
 
     expect(resolveCliExitCode(thrown)).toBe(1);
-    expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
+    expect(consoleSpy.mock.calls.flat().join('\n')).toContain('cost $0.024');
   });
 
   it('preserves the existing completion text when authored outcome is null', async () => {
@@ -698,25 +699,24 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('waiting for approval');
   });
 
+  const unrecordedLine = '    no run history was recorded';
+
   const completionUsageCases = [
     {
       kind: 'numbers',
       metadata: serializeRunUsage({ costUsd: 0, tokens: { input: 12, output: 4 } }),
       expected: [
-        '  Usage (recorded totals; completeness unknown):',
-        '    Cost: $0',
-        '    Input tokens: 12',
-        '    Output tokens: 4',
+        '  Usage: cost $0 (unknown; 0/? AI nodes recorded), input tokens 12 (unknown; 0/? AI nodes recorded), output tokens 4 (unknown; 0/? AI nodes recorded).',
+        unrecordedLine,
       ],
     },
     {
       kind: 'empty',
       metadata: {},
       expected: [
-        '  Usage (recorded totals; completeness unknown):',
-        '    Cost: unknown',
-        '    Input tokens: unknown',
-        '    Output tokens: unknown',
+        '  Usage: cost unknown (unknown; 0/? AI nodes recorded), input tokens unknown (unknown; 0/? AI nodes recorded), output tokens unknown (unknown; 0/? AI nodes recorded).',
+        unrecordedLine,
+        '    total was not recorded',
       ],
     },
     {
@@ -761,8 +761,9 @@ describe('workflowRunCommand — progress rendering', () => {
       await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
       expect(lookup.mock.calls.length - readsBefore).toBe(1);
       expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow completed successfully.');
-      expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
-      for (const line of expected) expect(consoleSpy).toHaveBeenCalledWith(line);
+      const text = consoleSpy.mock.calls.flat().join('\n');
+      expect(text).not.toContain('Authored outcome');
+      for (const line of expected) expect(text).toContain(line);
     }
   );
 
@@ -1044,6 +1045,49 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(progressLines()).toEqual([]);
     expect(consoleSpy).toHaveBeenCalledWith('  Usage: unavailable (persisted run unavailable)');
   });
+
+  it.each([false, true])(
+    'prints recorded coverage on completion and keeps failure semantics, failure=%s',
+    async failure => {
+      const { createInMemoryWorkflowStore, createInMemoryWorkflowHostStore } = await import(
+        '../test-support/workflow-store'
+      );
+      const store = createInMemoryWorkflowStore(createInMemoryWorkflowHostStore());
+      const run = await store.createWorkflowRun({
+        workflow_name: 'usage',
+        user_message: '',
+        metadata: { total_cost_usd: 0.25, total_tokens_in: 8, total_tokens_out: 4 },
+      });
+      await store.claimPendingWorkflowRun(run.id, '/tmp/usage-fixture');
+      for (const event of usageEvents(run.id, true)) await store.persistWorkflowEvent(event);
+      if (failure) await store.failWorkflowRun(run.id, 'failed');
+      else await store.completeWorkflowRun(run.id, { duration_ms: 1 });
+      const host = createTestWorkflowHost();
+      host.deps.store = store;
+      const { CLIAdapter } = await import('../adapters/cli-adapter');
+      const result = failure
+        ? { success: false as const, workflowRunId: run.id, error: 'failed' }
+        : { success: true as const, workflowRunId: run.id, summary: 'Authored summary' };
+      const promise = presentRunResult({
+        host,
+        workflow: resolveWorkflow({ name: 'usage', description: '', nodes: [] }),
+        result,
+        adapter: new CLIAdapter(),
+        conversationId: 'conversation',
+        destination: { kind: 'headless', correlationId: 'fixture' },
+        detachedProcessOwner: false,
+      });
+      if (failure) await expect(promise).rejects.toBeInstanceOf(WorkflowRunFailedError);
+      else await promise;
+      const text = consoleSpy.mock.calls.flat().join('\n');
+      expect(text).toContain(
+        '  Usage: cost $0.25 (partial; 1/2 AI nodes recorded), input tokens 8 (complete; 2/2 AI nodes recorded), output tokens 4 (complete; 2/2 AI nodes recorded).'
+      );
+      expect(text).toContain('    review: cost not recorded (unsupported)');
+      expect(text).not.toContain('completeness unknown');
+      expect(text).not.toContain('Usage (recorded totals)');
+    }
+  );
 
   it('renders rows committed before the executor throws', async () => {
     setupWorkflowMocks();
