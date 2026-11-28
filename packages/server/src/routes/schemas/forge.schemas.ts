@@ -29,7 +29,7 @@ export const projectForgeSchema = z
     z.object({ kind: z.literal('unresolved'), error: projectForgeErrorSchema }),
     z.object({
       kind: z.literal('forge'),
-      forge: z.object({ id: z.string(), name: display.name, icon: display.icon }),
+      forge: z.object({ name: display.name, icon: display.icon }),
       repo: z.object({ host: z.string(), path: z.string() }),
       plugin: pluginIdentitySchema,
       overview: z.discriminatedUnion('status', [

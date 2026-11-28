@@ -65,8 +65,18 @@ function overviewOf(host: string, path: string, facts: Partial<RepoOverview> = {
   };
 }
 
+/** What a test breaks before the overview is read. */
+interface Faults {
+  discovery?: Error;
+  resolve?: ForgeError;
+  credential?: Error;
+}
+
 /** A fake forge: two plugins, and an `repo.overview` answer the test chooses. */
-function forgeWorld(overview: (request: ForgeRequest) => RepoOverview | ForgeError) {
+function forgeWorld(
+  overview: (request: ForgeRequest) => RepoOverview | ForgeError,
+  faults: Faults = {}
+) {
   const plugins = [github, gitlab].map(metadata => ({
     metadata,
     command: 'unused',
@@ -87,6 +97,7 @@ function forgeWorld(overview: (request: ForgeRequest) => RepoOverview | ForgeErr
   const deps: ProjectForgeDeps = {
     discover: async () => {
       discoveries++;
+      if (faults.discovery) throw faults.discovery;
       return discovery;
     },
     dispatch: async (request, options) => {
@@ -95,6 +106,7 @@ function forgeWorld(overview: (request: ForgeRequest) => RepoOverview | ForgeErr
         response: { operationId: request.operationId, ...response } as ForgeResponse,
       });
       if (request.op === 'resolve') {
+        if (faults.resolve) return answer({ ok: false, error: faults.resolve });
         const { host, pathname } = new URL(request.remote ?? '');
         const plugin = discovery.byHost.get(host)?.metadata;
         const value = plugin
@@ -112,7 +124,10 @@ function forgeWorld(overview: (request: ForgeRequest) => RepoOverview | ForgeErr
         ? answer({ ok: false, error: result })
         : answer({ ok: true, result: { op: 'repo.overview', value: result } });
     },
-    credentialEnv: async (_codebase, userId) => ({ FORGE_USER: userId }),
+    credentialEnv: async (_codebase, userId) => {
+      if (faults.credential) throw faults.credential;
+      return { FORGE_USER: userId };
+    },
     now: () => new Date(now),
   };
   const read = createProjectForgeReader(deps);
@@ -137,11 +152,13 @@ function forgeWorld(overview: (request: ForgeRequest) => RepoOverview | ForgeErr
   };
 }
 
-const answering = () =>
-  forgeWorld(request =>
-    request.op === 'repo.overview'
-      ? overviewOf(request.repo.host, request.repo.path, { since: request.since })
-      : { kind: 'invalid_request', message: 'unexpected operation' }
+const answering = (faults?: Faults) =>
+  forgeWorld(
+    request =>
+      request.op === 'repo.overview'
+        ? overviewOf(request.repo.host, request.repo.path, { since: request.since })
+        : { kind: 'invalid_request', message: 'unexpected operation' },
+    faults
   );
 const failing = (error: ForgeError) => forgeWorld(() => error);
 
@@ -153,7 +170,7 @@ describe('GET /api/codebases/{id}/forge', () => {
     expect(projectForgeSchema.parse(body)).toEqual(body);
     expect(body).toMatchObject({
       kind: 'forge',
-      forge: { id: 'github', name: 'GitHub', icon: 'PHN2Zy8+' },
+      forge: { name: 'GitHub', icon: 'PHN2Zy8+' },
       repo: { host: 'github.com', path: 'acme/archon' },
       plugin: { name: 'github', version: '1' },
       overview: {
@@ -169,7 +186,7 @@ describe('GET /api/codebases/{id}/forge', () => {
     const { body } = await answering().get('lab');
     expect(body).toMatchObject({
       kind: 'forge',
-      forge: { id: 'gitlab', name: 'GitLab' },
+      forge: { name: 'GitLab' },
       repo: { host: 'gitlab.example', path: 'group/lab' },
       plugin: { name: 'gitlab', version: '3' },
       overview: { status: 'ok', value: { url: 'https://gitlab.example/group/lab' } },
@@ -239,6 +256,50 @@ describe('GET /api/codebases/{id}/forge', () => {
       overview: { status: 'failed', error: { kind: 'process_failed' } },
     });
     expect(JSON.stringify(body)).not.toContain('ghp_leaked');
+  });
+
+  test('a failure the host explains, such as a broken login, keeps its message', async () => {
+    const message = 'gh auth token --hostname github.com failed; repair the gh login';
+    const { body } = await failing({ kind: 'process_failed', message }).get('archon');
+    expect(body).toMatchObject({
+      overview: { status: 'failed', error: { kind: 'process_failed', message } },
+    });
+  });
+
+  test('a credential Archon cannot resolve is a failed overview of the same forge', async () => {
+    const world = answering({ credential: new Error('no installation for acme-secret-org') });
+    const { status, body } = await world.get('archon');
+    expect(status).toBe(200);
+    expect(body).toMatchObject({
+      kind: 'forge',
+      forge: { name: 'GitHub' },
+      repo: { host: 'github.com', path: 'acme/archon' },
+      overview: { status: 'failed', error: { kind: 'no_credential' } },
+    });
+    expect(JSON.stringify(body)).not.toContain('acme-secret-org');
+    expect(world.overviews()).toHaveLength(0);
+  });
+
+  test('a remote Archon cannot resolve is unresolved, never no forge, and is read again', async () => {
+    const stopped = answering({
+      resolve: {
+        kind: 'process_failed',
+        message: 'forge plugin exited 2: token ghp_leaked in stderr',
+        exitCode: 2,
+      },
+    });
+    const { status, body } = await stopped.get('archon');
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ kind: 'unresolved', error: { kind: 'process_failed' } });
+    expect(JSON.stringify(body)).not.toContain('ghp_leaked');
+    await stopped.get('archon');
+    expect(stopped.discoveries()).toBe(2);
+    expect(stopped.overviews()).toHaveLength(0);
+
+    const undiscovered = answering({ discovery: new Error('plugins directory unreadable') });
+    expect((await undiscovered.get('archon')).body).toMatchObject({ kind: 'unresolved' });
+    await undiscovered.get('archon');
+    expect(undiscovered.discoveries()).toBe(2);
   });
 
   test('one read answers a project and user for a minute, and a failure is read again', async () => {

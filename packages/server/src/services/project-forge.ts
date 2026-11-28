@@ -59,13 +59,18 @@ export function hostForgeAccess(
 }
 
 /**
- * The error a client may see. A `process_failed` message can carry a plugin's stderr,
- * so it is replaced; every other kind's message is the one `archon forge` prints.
+ * The error a client may see. Dispatch gives an `exitCode` only to the failure of a
+ * plugin process, whose message can carry what the plugin printed, so that message is
+ * replaced. Every other message is the host's or the forge's own, as `archon forge`
+ * prints it: a broken `gh` login is `process_failed` too, and names its repair.
  */
-function publicError({ kind, message }: ForgeError): { kind: ForgeError['kind']; message: string } {
+function publicError({ kind, message, exitCode }: ForgeError): {
+  kind: ForgeError['kind'];
+  message: string;
+} {
   return {
     kind,
-    message: kind === 'process_failed' ? 'The forge plugin could not be run.' : message,
+    message: exitCode === undefined ? message : 'The forge plugin could not be run.',
   };
 }
 
@@ -76,9 +81,10 @@ async function readProjectForge(
   userId: string | undefined
 ): Promise<ProjectForge> {
   const log = createLogger('server.project-forge');
-  const unresolved = (error: ForgeError): ProjectForge => {
-    log.warn({ codebaseId: codebase.id, kind: error.kind }, 'project_forge.unresolved');
-    return { kind: 'unresolved', error: publicError(error) };
+  const unresolved = (failure: ForgeError): ProjectForge => {
+    const error = publicError(failure);
+    log.warn({ codebaseId: codebase.id, ...error }, 'project_forge.unresolved');
+    return { kind: 'unresolved', error };
   };
 
   let discovery: PluginDiscovery;
@@ -106,28 +112,37 @@ async function readProjectForge(
   const identity = {
     kind: 'forge' as const,
     forge: {
-      id: forge.forge,
       name: metadata?.display?.name ?? forge.forge,
       ...(metadata?.display?.icon ? { icon: metadata.display.icon } : {}),
     },
     repo: { host: forge.repo.host, path: forge.repo.path },
     plugin: { name: forge.plugin.name, version: forge.plugin.version },
   };
-  const failed = (error: ForgeError): ProjectForge => {
+  const failed = (failure: ForgeError, remedy?: string): ProjectForge => {
+    const error = publicError(failure);
     log.warn(
-      { codebaseId: codebase.id, kind: error.kind, exitCode: error.exitCode },
+      { codebaseId: codebase.id, exitCode: failure.exitCode, ...error },
       'project_forge.overview_failed'
     );
-    const remedy =
-      error.kind === 'unsupported_op' || error.kind === 'no_credential'
-        ? metadata?.remedies?.[error.kind]
-        : undefined;
     return {
       ...identity,
-      overview: { status: 'failed', error: publicError(error), ...(remedy ? { remedy } : {}) },
+      overview: { status: 'failed', error, ...(remedy ? { remedy } : {}) },
     };
   };
 
+  let credentialEnv: NodeJS.ProcessEnv;
+  try {
+    credentialEnv = await deps.credentialEnv(codebase, userId);
+  } catch (error) {
+    log.warn({ err: error, codebaseId: codebase.id }, 'project_forge.credential_failed');
+    // No plugin remedy: the plugin's is about its own token, and this credential is Archon's
+    // to resolve. The cause may name an account or an installation, so it stays in the log.
+    return failed({
+      kind: 'no_credential',
+      message:
+        'Archon could not resolve the forge credential for this project. The server log has the cause.',
+    });
+  }
   const overview = (
     await deps.dispatch(
       {
@@ -136,10 +151,16 @@ async function readProjectForge(
         repo: forge.repo,
         since: new Date(deps.now().getTime() - SINCE_MS).toISOString(),
       },
-      { discovery, credentialEnv: await deps.credentialEnv(codebase, userId) }
+      { discovery, credentialEnv }
     )
   ).response;
-  if (!overview.ok) return failed(overview.error);
+  if (!overview.ok) {
+    const { kind } = overview.error;
+    return failed(
+      overview.error,
+      kind === 'unsupported_op' || kind === 'no_credential' ? metadata?.remedies?.[kind] : undefined
+    );
+  }
   if (overview.result.op !== 'repo.overview')
     return failed({ kind: 'invalid_response', message: 'The forge answered another operation' });
   return {

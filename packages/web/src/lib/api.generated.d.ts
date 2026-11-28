@@ -13060,7 +13060,6 @@ export interface components {
           /** @enum {string} */
           kind: 'forge';
           forge: {
-            id: string;
             name: string;
             icon?: string;
           };
