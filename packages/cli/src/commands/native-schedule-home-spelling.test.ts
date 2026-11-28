@@ -332,6 +332,20 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
             lastPassNotRemoved: [record],
           },
         });
+        const stdout = spyOnJsonStdout();
+        try {
+          expect(
+            await workflowWakeScheduleCommand(['schedule', 'remove'], { json: false }, schedules)
+          ).toBe(0);
+          const printed = stdout.mock.calls
+            .map(([chunk]: readonly unknown[]) => String(chunk))
+            .join('');
+          expect(printed).toContain('No wake watcher job is installed.');
+          expect(printed).toContain(record);
+          expect(printed).toContain('Delete it by hand.');
+        } finally {
+          stdout.mockRestore();
+        }
       } finally {
         await chmod(directory, 0o700);
       }

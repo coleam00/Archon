@@ -177,9 +177,14 @@ async function remove(
     recordsLeft.length === 0
       ? ''
       : `, but could not delete its last-pass record: ${recordsLeft.join(', ')}. Delete it by hand`;
+  const text = removed
+    ? `Removed the wake watcher job${left}.`
+    : recordsLeft.length === 0
+      ? NOT_INSTALLED
+      : `${NOT_INSTALLED} Could not delete its last-pass record: ${recordsLeft.join(', ')}. Delete it by hand.`;
   return {
     result: { removed, ...(recordsLeft.length === 0 ? {} : { lastPassNotRemoved: recordsLeft }) },
-    text: removed ? `Removed the wake watcher job${left}.` : NOT_INSTALLED,
+    text,
   };
 }
 
