@@ -149,6 +149,79 @@ it.each(
 );
 
 it.each(
+  legacyIdentities.flatMap(attribution =>
+    ['node_completed', 'node_failed'].map(eventType => ({ attribution, eventType }))
+  )
+)(
+  'preserves legacy empty-call attribution and resumed totals: %j',
+  async ({ attribution, eventType }) => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        {
+          step_name: 'sub',
+          event_type: eventType,
+          data: {
+            type: 'workflow',
+            cost_usd: 0,
+            tokens: { input: 0, output: 0, calls: [] },
+            ...attribution,
+          },
+        },
+      ],
+      'parent'
+    );
+    expect(snapshot.costUsd).toBe(0);
+    expect(snapshot.tokensUnknown).toBe(false);
+    expect(snapshot.tokens).toEqual({ input: 0, output: 0, calls: [] });
+    if ('child_run_id' in attribution) {
+      expect(snapshot.reportedChildUsage).toEqual(
+        new Map([
+          ['a', { costUsd: 0, tokens: { input: 0, output: 0, calls: [] }, tokensUnknown: false }],
+        ])
+      );
+      expect(snapshot.unattributedChildUsagePaths?.size).toBe(0);
+      const incremental = unreportedChildUsage(
+        {
+          costUsd: 0.03,
+          tokens: {
+            input: 21,
+            output: 9,
+            cacheRead: 15,
+            cachePartial: true,
+            callsPartial: true,
+          },
+        },
+        snapshot.reportedChildUsage,
+        'a'
+      );
+      expect(incremental).toEqual({
+        costUsd: 0.03,
+        tokens: {
+          input: 21,
+          output: 9,
+          cacheRead: 15,
+          cachePartial: true,
+          callsPartial: true,
+        },
+        tokensUnknown: false,
+      });
+      expect(sumReportedCost([snapshot, incremental])).toBe(0.03);
+      expect(sumFanOutTokens([snapshot, incremental])).toEqual({
+        input: 21,
+        output: 9,
+        cacheRead: 15,
+        cachePartial: true,
+        calls: [],
+        callsPartial: true,
+      });
+    } else {
+      expect(snapshot.reportedChildUsage?.size).toBe(0);
+      expect(snapshot.unattributedChildUsagePaths).toEqual(new Set(['sub']));
+    }
+  }
+);
+
+it.each(
   [legacyIdentities[0], legacyIdentities[2]].flatMap(attribution =>
     ['node_completed', 'node_failed'].flatMap(eventType =>
       [

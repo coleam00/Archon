@@ -84,7 +84,7 @@ export function sumFanOutTokens(
 export type { RunUsageFigures } from '../schemas/run-usage';
 
 // Float sums taken in a different order differ in the last bits.
-const COST_TOLERANCE_USD = 1e-9;
+export const COST_TOLERANCE_USD = 1e-9;
 
 const RECONCILED_TOKEN_AXES = tokenUsageSchema
   .omit({
@@ -101,8 +101,8 @@ const RECONCILED_TOKEN_AXES = tokenUsageSchema
  * usage reconciliation tests and the debug-level check in `persistRunUsage` both judge
  * with it, so a blind comparison would blind both.
  *
- * Absent cost equals `0`, because the fold reports `0` when no row carried cost. Tokens
- * compare per reconciled schema axis.
+ * Reconciliation intentionally treats absent cost as zero. Tokens compare per
+ * reconciled schema axis.
  */
 export function runUsageMismatch(a: RunUsageFigures, b: RunUsageFigures): ('cost' | 'tokens')[] {
   const mismatched: ('cost' | 'tokens')[] = [];

@@ -1,15 +1,16 @@
 import { readFile } from 'node:fs/promises';
 import { createLogger } from '@archon/paths';
-import { mergeTokenUsage, modelCallUsageSchema, type TokenUsage } from '@archon/provider-contract';
-import { sumFanOutTokens, sumReportedCost } from './dag/usage';
+import {
+  countedUsage,
+  foldDagUsageRecord,
+  foldDeferredUsage,
+  newDagUsageFold,
+  parseDagEventData,
+  type DagUsageFold,
+} from './dag-usage-fold';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
+import { nodeInvocationKey, readNodeRecordEvent } from './node-record-reader';
 import {
-  nodeInvocationKey,
-  readDeferredNodeUsageEvent,
-  readNodeRecordEvent,
-} from './node-record-reader';
-import {
-  nodeCostScope,
   DEFERRED_NODE_USAGE_EVENT_TYPE,
   type SerializedNodeData,
 } from './node-record-serialization';
@@ -17,7 +18,6 @@ import { nodeFailureKindSchema, type NodeExecutionMetadata } from './schemas/nod
 import {
   RUN_BUDGET_WORK_UNIT_EVENT_TYPE,
   addAttemptSpend,
-  attemptSpend,
   emptyRunBudgetUsage,
   type RunBudgetUsage,
 } from './run-budget';
@@ -114,18 +114,8 @@ function parseFanOutSnapshots(value: unknown): FanOutInstanceSnapshot[] | undefi
   return snapshots;
 }
 
-interface UsageContribution {
-  stepName: string;
-  loopBaseline?: Pick<NodeExecutionMetadata, 'invocation' | 'spend'>;
-  tokens?: TokenUsage;
-  tokensUnknown?: boolean;
-  costUsd?: number;
-  costPartial?: boolean;
-}
-
 /** What one fold accumulates across a run's rows. */
-interface ResumeFold {
-  readonly runId: string;
+interface ResumeFold extends DagUsageFold {
   readonly completedNodeOutputs: Map<string, PersistedNodeOutput>;
   readonly failedNodes: Map<string, PriorFailedNode>;
   readonly fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
@@ -134,11 +124,6 @@ interface ResumeFold {
   /** The completion a reusable output belongs to. A prior-success replay row carries no
    * execution facts of its own, so it inherits the completion it replays. */
   readonly completedExecutions: Map<string, NodeExecutionMetadata>;
-  /** Collected and merged once at the end rather than folded pairwise: a pairwise fold
-   * cannot tell "one of five contributions reported" from "one of two" (#2662). */
-  usageContributions: UsageContribution[];
-  readonly reportedChildUsage: NonNullable<DagResumeSnapshot['reportedChildUsage']>;
-  readonly unattributedChildUsagePaths: Set<string>;
   readonly budget: RunBudgetUsage;
   /** Started `agent` attempts with no terminal row yet: attempt id → path. */
   readonly openAgentAttempts: Map<string, string>;
@@ -158,155 +143,8 @@ function isFoldedRow(row: DagResumeEvent): row is FoldedRow {
   );
 }
 
-function isReportedTokens(
-  value: unknown
-): value is { input: number; output: number } & Record<string, unknown> {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'input' in value &&
-    'output' in value &&
-    typeof value.input === 'number' &&
-    typeof value.output === 'number' &&
-    Number.isFinite(value.input) &&
-    Number.isFinite(value.output)
-  );
-}
-
-function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsage | undefined {
-  if (!isReportedTokens(tokens)) {
-    getLog().warn({ runId, stepName, tokens }, 'db.workflow_dag_node_tokens_invalid_ignored');
-    return undefined;
-  }
-  const normalized: TokenUsage = { input: tokens.input, output: tokens.output };
-  for (const axis of ['cacheRead', 'cacheWrite'] as const) {
-    const value = tokens[axis];
-    if (value === undefined) continue;
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      normalized[axis] = value;
-    } else {
-      getLog().warn(
-        { runId, stepName, axis, value },
-        'db.workflow_dag_node_optional_tokens_invalid_ignored'
-      );
-    }
-  }
-  // A node whose own usage was already a floor (a loop total, an OpenCode
-  // multi-agent node) keeps the resumed run a floor. Anything other than `true`
-  // is ignored without a warn: unlike the numeric axes it carries no total.
-  if (tokens.cachePartial === true) normalized.cachePartial = true;
-  if (tokens.callsPartial === true) normalized.callsPartial = true;
-  // The record reader already replaced an unreadable `calls` with `callsPartial`.
-  const calls = modelCallUsageSchema.array().safeParse(tokens.calls);
-  if (calls.success) normalized.calls = calls.data;
-  return normalized;
-}
-
-function readCost(runId: string, stepName: string, costUsd: unknown): number | undefined {
-  // Same guard shape as tokens: a non-finite value from a provider must not
-  // silently poison the total (NaN > 0 is false, which would drop the run's
-  // cost from the persisted metadata with no trace).
-  if (typeof costUsd === 'number' && Number.isFinite(costUsd)) return costUsd;
-  getLog().warn({ runId, stepName, costUsd }, 'db.workflow_dag_node_cost_invalid_ignored');
-  return undefined;
-}
-
-function readUsage(
-  fold: ResumeFold,
-  stepName: string,
-  rawUsage: NodeRecord['rawUsage'],
-  execution?: Pick<NodeExecutionMetadata, 'spend'>
-): UsageContribution {
-  const costPartial =
-    execution !== undefined
-      ? attemptSpend(execution).kind === 'unavailable'
-      : rawUsage.costPartial === true;
-  const contribution: UsageContribution = {
-    stepName,
-    ...(costPartial ? { costPartial: true } : {}),
-    ...(rawUsage.tokensUnknown ? { tokensUnknown: true } : {}),
-  };
-  if (rawUsage.tokens !== undefined) {
-    const tokens = readTokens(fold.runId, stepName, rawUsage.tokens);
-    if (tokens !== undefined) contribution.tokens = tokens;
-    else contribution.tokensUnknown = true;
-  }
-  if (rawUsage.costUsd !== undefined) {
-    const costUsd = readCost(fold.runId, stepName, rawUsage.costUsd);
-    if (costUsd !== undefined) contribution.costUsd = costUsd;
-  }
-  return contribution;
-}
-
-function addUsage(
-  fold: ResumeFold,
-  stepName: string,
-  rawUsage: NodeRecord['rawUsage'],
-  execution?: Pick<NodeExecutionMetadata, 'spend'>
-): void {
-  const contribution = readUsage(fold, stepName, rawUsage, execution);
-  if (
-    contribution.costPartial ||
-    contribution.tokensUnknown ||
-    contribution.tokens !== undefined ||
-    contribution.costUsd !== undefined
-  ) {
-    fold.usageContributions.push(contribution);
-  }
-}
-
-function foldDeferredUsage(fold: ResumeFold, row: FoldedRow): void {
-  let usage: ReturnType<typeof readDeferredNodeUsageEvent>;
-  try {
-    usage = readDeferredNodeUsageEvent({ workflow_run_id: fold.runId, ...row, data: row.data });
-  } catch (parseErr) {
-    throw new Error(`Invalid deferred usage record for '${row.step_name}' in run ${fold.runId}`, {
-      cause: parseErr,
-    });
-  }
-  if (!usage || nodeCostScope(usage.data) === 'total') return;
-  if (usage.data.loopBaseline !== undefined && usage.data.invocation !== undefined) {
-    replaceLoopBaseline(fold, row.step_name, usage.data.invocation.id);
-    const spend = usage.data.loopBaseline;
-    const baseline = readUsage(
-      fold,
-      row.step_name,
-      {
-        tokens: spend.tokens.source === 'provider' ? spend.tokens.value : undefined,
-        tokensUnknown:
-          spend.tokens.source === 'unavailable' && spend.tokens.reason === 'incomplete',
-        costUsd: spend.costUsd.source === 'provider' ? spend.costUsd.value : undefined,
-      },
-      { spend }
-    );
-    baseline.loopBaseline = { invocation: usage.data.invocation, spend: usage.data.loopBaseline };
-    fold.usageContributions.push(baseline);
-  } else {
-    replaceLoopBaseline(fold, row.step_name, usage.data.invocation?.id);
-  }
-  addUsage(
-    fold,
-    row.step_name,
-    usage.rawUsage,
-    usage.data.spend === undefined ? undefined : { spend: usage.data.spend }
-  );
-}
-
-/** The row's data, or undefined after a warn when its JSON cannot be parsed. */
-function parseRowData(fold: ResumeFold, row: FoldedRow): Record<string, unknown> | undefined {
-  try {
-    return typeof row.data === 'string' ? JSON.parse(row.data) : (row.data ?? {});
-  } catch (parseErr) {
-    getLog().warn(
-      { err: parseErr as Error, runId: fold.runId, stepName: row.step_name },
-      'db.workflow_dag_node_output_parse_failed'
-    );
-    return undefined;
-  }
-}
-
 function foldFanOutInstances(fold: ResumeFold, row: FoldedRow): void {
-  const rawData = parseRowData(fold, row);
+  const rawData = parseDagEventData(row, fold.runId);
   if (rawData === undefined || fold.fanOutSnapshots.has(row.step_name)) return;
   const snapshots = parseFanOutSnapshots(rawData.instances);
   if (snapshots !== undefined) fold.fanOutSnapshots.set(row.step_name, snapshots);
@@ -473,106 +311,6 @@ async function readCompletedOutput(
   };
 }
 
-// Configuration failures and interrupted continuations can report carried gate spend.
-// A later cumulative report replaces that baseline, leaving paid interrupted attempts.
-function replaceLoopBaseline(
-  fold: ResumeFold,
-  stepName: string,
-  invocationId: string | undefined
-): void {
-  if (invocationId === undefined) return;
-  fold.usageContributions = fold.usageContributions.filter(
-    contribution =>
-      contribution.stepName !== stepName ||
-      contribution.loopBaseline?.invocation.id !== invocationId
-  );
-}
-
-function foldNodeUsage(fold: ResumeFold, row: FoldedRow, record: NodeRecord): void {
-  // Each instance terminal owns only the preceding segment. Later inner rows
-  // remain counted until a subsequent terminal replaces that segment.
-  const isAuthoritativeInstanceUsage =
-    record.data.type === 'compose_fan_out_instance' &&
-    (row.event_type === 'node_completed' || row.event_type === 'node_failed');
-  if (isAuthoritativeInstanceUsage) {
-    const prefix = `${row.step_name}__`;
-    fold.usageContributions = fold.usageContributions.filter(
-      contribution => !contribution.stepName.startsWith(prefix)
-    );
-  }
-  // Other aggregate rows merely restate usage already carried by their leaves.
-  if (nodeCostScope(record.data) === 'total' && !isAuthoritativeInstanceUsage) return;
-  if (row.event_type !== 'node_skipped_prior_success') {
-    const metadata = record.metadata;
-    if (metadata?.node.kind === 'loop') {
-      replaceLoopBaseline(fold, row.step_name, metadata.invocation.id);
-      const contribution = readUsage(fold, row.step_name, record.rawUsage, metadata);
-      if (metadata.lifecycle.status === 'failed' && metadata.lifecycle.failureKind === 'config') {
-        contribution.loopBaseline = metadata;
-      }
-      fold.usageContributions.push(contribution);
-    } else {
-      addUsage(fold, row.step_name, record.rawUsage, metadata);
-    }
-  }
-}
-
-function foldReportedChildUsage(
-  fold: ResumeFold,
-  usages: NonNullable<NodeRecord['data']['child_usage']>
-): void {
-  for (const usage of usages) {
-    const prior = fold.reportedChildUsage.get(usage.childRunId);
-    const hasTokenMeasurement = usage.tokens !== undefined || usage.tokensUnknown === true;
-    fold.reportedChildUsage.set(usage.childRunId, {
-      ...usage,
-      costUsd: usage.costUsd ?? prior?.costUsd,
-      tokens:
-        usage.tokens !== undefined
-          ? { ...prior?.tokens, ...usage.tokens }
-          : hasTokenMeasurement
-            ? undefined
-            : prior?.tokens,
-      tokensUnknown: hasTokenMeasurement ? usage.tokensUnknown : prior?.tokensUnknown,
-    });
-  }
-}
-
-function foldChildUsage(fold: ResumeFold, record: NodeRecord): void {
-  const { data, path } = record;
-  if (data.child_usage !== undefined) {
-    foldReportedChildUsage(fold, data.child_usage);
-    return;
-  }
-  if (data.type !== 'workflow') return;
-  const usage = readUsage(fold, path, record.rawUsage);
-  if (
-    (usage.costUsd ?? 0) === 0 &&
-    !usage.tokensUnknown &&
-    Object.values(usage.tokens ?? {}).every(value => value === undefined || value === 0)
-  )
-    return;
-  const ids = new Set(
-    data.fan_out_outcome?.slots.flatMap(slot => ('child_run_id' in slot ? [slot.child_run_id] : []))
-  );
-  if (data.child_run_id !== undefined) ids.add(data.child_run_id);
-  // Historical fan-out increments cannot be allocated among children. Keep their
-  // node-level spend readable without inventing cumulative child baselines.
-  if (ids.size !== 1) {
-    fold.unattributedChildUsagePaths.add(path);
-    return;
-  }
-  // Legacy workflow rows report increments, unlike child_usage's cumulative baselines.
-  for (const id of ids) {
-    const contributions = [fold.reportedChildUsage.get(id) ?? {}, usage];
-    fold.reportedChildUsage.set(id, {
-      costUsd: sumReportedCost(contributions),
-      tokens: sumFanOutTokens(contributions),
-      tokensUnknown: contributions.some(value => value.tokensUnknown),
-    });
-  }
-}
-
 async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   const nodeStateType = NODE_STATE_EVENT_TYPES.find(type => type === row.event_type);
   if (nodeStateType) foldActiveNodeIds(fold.unresolvedNodeStarts, row.step_name, nodeStateType);
@@ -580,7 +318,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   // carries no output (or its data cannot be recovered). Only success restores it.
   fold.completedNodeOutputs.delete(row.step_name);
   fold.failedNodes.delete(row.step_name);
-  const rawData = parseRowData(fold, row);
+  const rawData = parseDagEventData(row, fold.runId);
   if (rawData === undefined) return;
   const record = readRecord(fold, row, rawData);
   if (!record) return;
@@ -588,6 +326,7 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
   foldInvocation(fold, record);
   const data = record.data;
   recordPriorFailure(fold.failedNodes, row.event_type, row.step_name, data);
+  foldDagUsageRecord(fold, row, record);
   if (
     row.event_type !== 'node_completed' &&
     row.event_type !== 'node_skipped_prior_success' &&
@@ -600,8 +339,6 @@ async function foldNodeRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
       await readCompletedOutput(fold, row.step_name, data, data.node_output)
     );
   }
-  if (row.event_type !== 'node_skipped_prior_success') foldChildUsage(fold, record);
-  foldNodeUsage(fold, row, record);
 }
 
 async function foldRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
@@ -618,25 +355,6 @@ async function foldRow(fold: ResumeFold, row: FoldedRow): Promise<void> {
     default:
       await foldNodeRow(fold, row);
   }
-}
-
-function countedUsage(
-  fold: ResumeFold
-): Pick<DagResumeSnapshot, 'tokens' | 'tokensUnknown' | 'costUsd' | 'costPartial'> {
-  const counted = fold.usageContributions;
-  const tokensUnknown = counted.some(contribution => contribution.tokensUnknown);
-  return {
-    tokensUnknown,
-    tokens: tokensUnknown
-      ? undefined
-      : mergeTokenUsage(
-          counted.flatMap(contribution =>
-            contribution.tokens === undefined ? [] : [contribution.tokens]
-          )
-        ),
-    costUsd: sumReportedCost(counted),
-    costPartial: counted.some(contribution => contribution.costPartial),
-  };
 }
 
 /**
@@ -692,16 +410,13 @@ export async function foldDagResumeSnapshot(
   workflowRunId: string
 ): Promise<DagResumeSnapshot> {
   const fold: ResumeFold = {
-    runId: workflowRunId,
+    ...newDagUsageFold(workflowRunId),
     completedNodeOutputs: new Map(),
     failedNodes: new Map(),
     fanOutSnapshots: new Map(),
     unresolvedNodeStarts: new Set(),
     unfinishedInvocations: new Map(),
     completedExecutions: new Map(),
-    usageContributions: [],
-    reportedChildUsage: new Map(),
-    unattributedChildUsagePaths: new Set(),
     budget: emptyRunBudgetUsage(),
     openAgentAttempts: new Map(),
     settledAgentAttempts: new Set(),
