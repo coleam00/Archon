@@ -56,6 +56,7 @@ mock.module('@archon/core/workflows/definition-source', () => ({
   startsPinnedInPlace: () => {
     throw new Error('startsPinnedInPlace is not mocked here');
   },
+  withOneDefinitionsRead: <T>(deps: T): T => deps,
   baseRefName: (base: { remote?: string; branch: string }) =>
     base.remote === undefined ? base.branch : `${base.remote}/${base.branch}`,
   resolveDefinitionsBase: async () => {
