@@ -370,6 +370,20 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'title',
+      spec: 'workflow title --item <key> --text <title>',
+      description:
+        'Set what an item is called. Every read of the item returns it beside the key.\nSetting it again replaces it',
+      scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
+        { spec: '--text <title>', description: 'The title' },
+      ],
+    },
+    {
+      command: 'workflow',
       subcommand: 'landing',
       spec: 'workflow landing --item <key> --branch <name> [--from <start-point>]',
       description:
@@ -384,6 +398,24 @@ export const workflowHelp: HelpGroup = {
           spec: '--from <start-point>',
           description:
             "Create the branch on the remote from this commit or branch (<remote>/main for the\nremote's tip) before recording; an existing branch is left as it is",
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'priority',
+      spec: 'workflow priority --item <key> [--clear]',
+      description:
+        'Give an item priority. Its queued starts, and those of items part_of it, go ahead of\nordinary queued starts on each resource at the next drain; a held slot is never taken',
+      scopedFlags: [
+        {
+          spec: '--item-of <run-id>',
+          description: 'In place of --item: the item the run is on, in its own project',
+        },
+        {
+          spec: '--clear',
+          description:
+            "Remove the item's own priority; one it has from a work order stays until\ncleared there",
         },
       ],
     },

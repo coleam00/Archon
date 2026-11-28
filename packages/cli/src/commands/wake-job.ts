@@ -9,10 +9,10 @@ import { statSync } from 'node:fs';
 import { nativeScheduleDefinition } from '../triggers/native-schedule';
 import {
   wakeLastPassPath,
-  workflowWakeScheduleTarget,
   writeWakeLastPass,
   type WakeLastPass,
-} from './wake-schedule';
+} from '@archon/core/workflows/wake-last-pass';
+import { workflowWakeScheduleTarget } from './wake-schedule';
 
 /**
  * The wake job's definition file as this watch found it: its path and the file's identity.

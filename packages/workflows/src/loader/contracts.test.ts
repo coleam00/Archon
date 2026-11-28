@@ -583,7 +583,60 @@ nodes:${node}
   });
 });
 
+describe('display: is no part of the result contract', () => {
+  it('passes a definition whose display names an outcome it cannot take, as dispatch checks it', () => {
+    const { workflow, error } = parseWorkflow(
+      `
+name: decides
+description: decides
+returns: { node: decide, outcome: outcome }
+nodes:
+  - id: decide
+    bash: echo '{"outcome":"go"}'
+    output_format:
+      type: object
+      properties: { outcome: { type: string, enum: [go, stop] } }
+      required: [outcome]
+`,
+      'decides.yaml'
+    );
+    expect(error).toBeNull();
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    // Built by hand, past the loader that drops stale words: words never refuse a run.
+    const stale = resolveWorkflow({
+      ...workflow,
+      display: {
+        label: 'Decides',
+        outcomes: { gone: { label: 'Gone' } },
+        phases: [
+          {
+            label: 'P',
+            cards: [{ title: 'A', text: 'a', icon: 'send', kind: 'script', covers: ['nope'] }],
+          },
+        ],
+      },
+    });
+    expect(validateWorkflowResultContract(stale)).toBeNull();
+  });
+});
+
 describe('workflow result contract: returns.options', () => {
+  it('loads labelled options; the label stays out of the schema the model writes to', () => {
+    const { workflow, error } = parse(`{ node: decide, asks: asks, options: [
+      { id: send-back, label: sent back, does: The builder continues., cost: A round. },
+      { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }
+    ] }`);
+    expect(error).toBeNull();
+    if (workflow === null) throw new Error('Expected the workflow to load');
+    const declared = workflow.result?.options ?? [];
+    expect(declared[0]?.label).toBe('sent back');
+    const resolved = resolveWorkflow(workflow);
+    expect(validateWorkflowResultContract(resolved)).toBeNull();
+    expect(itemAsksJsonSchema(declared)).toEqual(
+      itemAsksJsonSchema(declared.map(({ label: _label, ...option }) => option))
+    );
+  });
+
   const OPTIONS = `[
       { id: send-back, does: The builder continues., cost: A round. },
       { id: take-as-is, does: The change goes on as it is., cost: Nothing more is built. }
@@ -697,10 +750,11 @@ nodes:
     if (workflow === null) throw new Error('Expected the workflow to load');
     const resolved = resolveWorkflow(workflow);
     const node = resolved.nodes.find(candidate => candidate.id === 'host');
-    expect(node?.output_format?.properties).toEqual({
+    if (node === undefined) throw new Error('Expected the host node');
+    expect(node.output_format?.properties).toEqual({
       summary: { type: 'string' },
       asks: itemAsksJsonSchema(),
-      waits: itemWaitsJsonSchema(),
+      waits: itemWaitsJsonSchema(node),
     });
     expect(node?.output_format?.required).toEqual(['asks', 'waits']);
     expect(validateWorkflowResultContract(resolved)).toBeNull();

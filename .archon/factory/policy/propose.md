@@ -1,1 +1,0 @@
-Present a change the way this project asks: follow `.github/pull_request_template.md` (keep its required sections, drop the instructional comments and the conditional sections that do not apply) and the Pull requests section of `AGENTS.md`. Link the source issue with a closing keyword.

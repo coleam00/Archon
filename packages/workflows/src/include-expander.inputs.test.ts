@@ -709,6 +709,28 @@ describe("expandWorkflowIncludes — an included block's raw reads of its pack s
     expect(errors).toHaveLength(0);
   });
 
+  test('an own with: key binds a hyphenated setting under the name the runtime gives it', () => {
+    const hyphenated = { ...betaPack, settings: { 'my-tone': { type: 'string' as const } } };
+    const { errors } = expandWorkflowIncludes(
+      mapOf(
+        wf(
+          'beta-block',
+          [
+            {
+              id: 'shell',
+              runtime: 'bun',
+              script: 'console.log(process.env.INPUTS_MY_TONE)',
+              with: { my_tone: 'own' },
+            },
+          ],
+          { pack: hyphenated }
+        ),
+        wf('host', [{ id: 'blk', include: 'beta-block' }])
+      )
+    );
+    expect(errors).toHaveLength(0);
+  });
+
   test('a raw read of a name that is not a pack setting is not this check', () => {
     const { errors } = expand([{ id: 'shell', bash: 'echo "$INPUTS_MOOD"' }]);
     expect(errors).toHaveLength(0);
@@ -974,6 +996,30 @@ describe('expandWorkflowIncludes — the file settings a workflow reads', () => 
       shadowed: [],
       passed: ['policy'],
     });
+  });
+
+  test('a with: key replaces a hyphenated setting under the name the runtime binds', () => {
+    const hyphenated: WorkflowPack = {
+      key: 'p',
+      source: 'project',
+      settings: { 'my-policy': { type: 'string', file: true } },
+    };
+    const readsMyPolicy = (bound: Record<string, string>) => ({
+      id: 'a',
+      script: 'console.log(process.env.INPUTS_MY_POLICY)',
+      runtime: 'bun',
+      with: bound,
+    });
+    expect(
+      readsOf(
+        mapOf(
+          wf('shadowed', [readsMyPolicy({ my_policy: './fixed.md' })], { pack: hyphenated }),
+          wf('passed', [readsMyPolicy({ my_policy: '$INPUTS.my-policy' })], {
+            pack: hyphenated,
+          })
+        )
+      )
+    ).toEqual({ shadowed: [], passed: ['my-policy'] });
   });
 
   test('a command body it cannot read counts as reading every file setting', () => {

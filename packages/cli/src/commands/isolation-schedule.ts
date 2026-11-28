@@ -120,22 +120,20 @@ async function status(
   schedules: NativeScheduleOptions
 ): Promise<Outcome> {
   const { status: installed } = await inspectNativeScheduleTargets(targets, schedules);
-  if (installed) {
-    const result = { installed: true, ...installed };
-    if (!installed.registered)
-      return {
-        result,
-        text:
-          `The merged cleanup timer is installed, but the scheduler has not loaded it: ${installed.path}. ` +
-          'Install it again with the same --interval to load it, or remove it.',
-      };
-    const ran = installed.lastRunAt ? `Last ran ${installed.lastRunAt}` : 'It has not run yet';
+  if (!installed) return { result: { installed: false }, text: NOT_INSTALLED };
+  const result = { installed: true, ...installed };
+  if (!installed.registered)
     return {
       result,
-      text: `The merged cleanup timer is installed: ${installed.path}. ${ran} (output: ${installed.log}).`,
+      text:
+        `The merged cleanup timer is installed, but the scheduler has not loaded it: ${installed.path}. ` +
+        'Install it again with the same --interval to load it, or remove it.',
     };
-  }
-  return { result: { installed: false }, text: NOT_INSTALLED };
+  const ran = installed.lastRunAt ? `Last ran ${installed.lastRunAt}` : 'It has not run yet';
+  return {
+    result,
+    text: `The merged cleanup timer is installed: ${installed.path}. ${ran} (output: ${installed.log}).`,
+  };
 }
 
 async function runOperation(

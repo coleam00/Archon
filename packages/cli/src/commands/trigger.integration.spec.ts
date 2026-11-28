@@ -684,9 +684,11 @@ describe('trigger CLI durable execution', () => {
     const both = await fire(mappedConfig, ['--inputs', inputs, '--input', 'key=issue-947'], false);
     expect(both.exitCode).not.toBe(0);
     expect(both.stderr).toContain("Input 'key' is given by both --inputs and --input");
-    const malformed = await fire(mappedConfig, ['--input', 'oops'], false);
+    const malformed = await fire(mappedConfig, ['--input', 'hunter2'], false);
     expect(malformed.exitCode).not.toBe(0);
-    expect(malformed.stderr).toContain("'oops'");
+    expect(malformed.stderr).toContain('Invalid input assignment at position 1');
+    expect(malformed.stderr).toContain("expected 'name=value'");
+    expect(malformed.stderr).not.toContain('hunter2');
     expect(receipts()).toBe(recorded);
 
     // An --input value is an event input, not a launch literal: a workflow that declares no
@@ -801,6 +803,36 @@ describe('trigger CLI durable execution', () => {
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr).toContain('--item and --no-item are mutually exclusive');
     expect(fixture.runs()).toEqual([]);
+  });
+
+  test('--priority gives the fired item priority, and a fire on no item is refused with it', async () => {
+    const fixture = await heldTriggerRun('priority');
+    fixture.writeWorkflow('echo done');
+    const fire = (args: string[]) =>
+      runCli(
+        fixture.cliPath,
+        fixture.projectRoot,
+        fixture.archonHome,
+        ['trigger', 'fire', '--config', join(fixture.projectRoot, '..', 'trigger.json'), ...args],
+        false
+      );
+    const refused = await fire(['--no-item', '--priority']);
+    expect(refused.exitCode).not.toBe(0);
+    expect(fixture.requests()).toEqual([]);
+
+    const fired = await fire(['--item', 'urgent', '--priority']);
+    expect(fired.exitCode, fired.stderr).toBe(0);
+    expect(
+      readRows<{ key: string }>(
+        join(fixture.archonHome, 'archon.db'),
+        `SELECT i.key FROM remote_agent_item_priorities p
+           JOIN remote_agent_items i ON i.id = p.item_id`
+      )
+    ).toEqual([{ key: 'urgent' }]);
+    await waitFor(
+      () => (fixture.runs()[0]?.status === 'completed' ? true : undefined),
+      'the fired run to complete'
+    );
   });
 
   test.skipIf(process.platform === 'win32')(

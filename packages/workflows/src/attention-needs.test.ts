@@ -17,7 +17,7 @@ test('every line type has a needs, and each level shows its lines and the close 
   const resolved = { type: 'resolved', ...closed, reason: 'withdrawn' } as const;
   // The close of a usage-limit wait when its run resumes.
   const limitEnded = { ...resolved, ref: 'r', occurrence: null } as const;
-  const item = { project: null, revision: 1, labels: {}, pausedAt: null };
+  const item = { project: null, priority: false, revision: 1, labels: {}, pausedAt: null };
   const held = {
     id: 'r',
     workflow: 'ci',

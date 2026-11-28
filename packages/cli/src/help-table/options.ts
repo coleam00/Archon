@@ -241,7 +241,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--item <key>',
     description:
-      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on",
+      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow title': the item the title is set on; for 'workflow priority': the item to give priority or clear it on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'runs' },
@@ -249,6 +249,8 @@ export const orderedFlags: FlagHelp[] = [
       { command: 'workflow', subcommand: 'end' },
       { command: 'workflow', subcommand: 'merged' },
       { command: 'workflow', subcommand: 'landing' },
+      { command: 'workflow', subcommand: 'title' },
+      { command: 'workflow', subcommand: 'priority' },
       { command: 'workflow', subcommand: 'link' },
       { command: 'workflow', subcommand: 'wait' },
       { command: 'workflow', subcommand: 'cancel' },
@@ -260,6 +262,12 @@ export const orderedFlags: FlagHelp[] = [
     spec: '--no-item',
     description:
       "For 'trigger fire': start the run on no item instead of inheriting the firing run's item",
+    owners: [{ command: 'trigger', subcommand: 'fire' }],
+  },
+  {
+    spec: '--priority',
+    description:
+      "For 'trigger fire': give the start's item priority once, when the fire is accepted",
     owners: [{ command: 'trigger', subcommand: 'fire' }],
   },
   {

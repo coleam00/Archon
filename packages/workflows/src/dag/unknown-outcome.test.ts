@@ -499,8 +499,12 @@ describe('a failure whose outcome is unknown', () => {
         later?: Partial<DagNode>;
         /** A node the fan-out depends on. */
         upstream?: DagNode;
-        /** A file each instance's all_done cleanup, after its writer, appends to. */
-        cleanup?: string;
+        /**
+         * Each instance's all_done cleanup, after its writer, appends a line to `cleaned` in the
+         * run's cwd. The path is relative: a Windows absolute path is not valid inside a YAML
+         * double-quoted string (`\U` reads as an escape), so the block would not load.
+         */
+        cleanup?: boolean;
       } = {}
     ) => {
       await mkdir(join(testDir, '.archon', 'workflows'), { recursive: true });
@@ -516,11 +520,11 @@ describe('a failure whose outcome is unknown', () => {
           '  - id: write',
           `    bash: "if [ $INPUTS.item = 2 ]; then echo notjson; else echo '{}'; fi"`,
           '    output_format: { type: object }',
-          ...(cleanup === undefined
+          ...(!cleanup
             ? []
             : [
                 '  - id: cleanup',
-                `    bash: "echo x >> '${cleanup}'"`,
+                '    bash: "echo x >> cleaned"',
                 '    depends_on: [write]',
                 '    trigger_rule: all_done',
               ]),
@@ -614,7 +618,7 @@ describe('a failure whose outcome is unknown', () => {
       const result = await fanOut(false, 'all_done', {
         later: laterWait,
         upstream: counter(),
-        cleanup: cleaned,
+        cleanup: true,
       });
       expect((await readFile(cleaned, 'utf8')).trim().split('\n')).toHaveLength(2);
       // Second pass: the rerun writer's outcome is unknown, recorded after the join completed.
@@ -640,7 +644,6 @@ describe('a failure whose outcome is unknown', () => {
     it('a hand resume runs an outer instance again when only an inner join absorbed the uncertain write', async () => {
       const workflows = join(testDir, '.archon', 'workflows');
       await mkdir(workflows, { recursive: true });
-      const marker = join(testDir, 'tried');
       await writeFile(
         join(workflows, 'writer.yaml'),
         [
@@ -655,6 +658,7 @@ describe('a failure whose outcome is unknown', () => {
         ].join('\n')
       );
       // The outer block: an inner all_done fan-out over the writer, and a step that fails once.
+      // Its marker is relative to the run's cwd, for the reason the fanOut cleanup gives.
       await writeFile(
         join(workflows, 'outer.yaml'),
         [
@@ -668,7 +672,7 @@ describe('a failure whose outcome is unknown', () => {
           '    include: writer',
           "    fan_out: { items: '[2]', as: item, join: all_done }",
           '  - id: step',
-          `    bash: "test -f '${marker}' || { touch '${marker}'; exit 1; }"`,
+          '    bash: "test -f tried || { touch tried; exit 1; }"',
         ].join('\n')
       );
       spy = failingWithOutcomeUnknown(['write']);

@@ -17,6 +17,7 @@ import type { RunLimit } from '@archon/workflows/schemas/run-limit';
 import { itemHolder, itemHolders, type ItemRunRow } from '@archon/workflows/item-hold';
 import { InstallHeldError, RunLimitError, WorkflowItemHeldError } from '@archon/workflows/store';
 import { toHydratedTimestamp } from './timestamps';
+import { PRIORITY_ITEMS_CTE, queueOrderSql, readPriorityItems } from './item-priorities';
 /**
  * Keyed resource slots: a durable counting lock with typed holders.
  *
@@ -432,8 +433,9 @@ export async function removeResourceSlotHolder(
 /**
  * What a run-start slot holds, read under its lock (`lockResourceSlot`) and `lockAdmission`:
  * live holders, capacity waiters, the checkouts live admitted runs hold, the items live runs
- * hold, and the queued start requests. The queued rows are locked too, so a concurrent
- * withdrawal cannot race their admission.
+ * hold, the items with priority, and the queued start requests in queue order
+ * (`queueOrderSql`). The queued rows are locked too, so a concurrent withdrawal cannot race
+ * their admission.
  */
 export async function resourceStartOccupancy(
   query: TransactionQuery,
@@ -471,9 +473,11 @@ export async function resourceStartOccupancy(
     [resource]
   );
   const queued = await query<Record<string, unknown>>(
-    `SELECT id, host_id, resource_key, status, launch, item_id FROM remote_agent_resource_start_requests
-      WHERE resource_key = $1 AND status = 'queued'
-      ORDER BY queue_position${getDialect().rowLock()}`,
+    `WITH RECURSIVE ${PRIORITY_ITEMS_CTE}
+     SELECT r.id, r.host_id, r.resource_key, r.status, r.launch, r.item_id
+       FROM remote_agent_resource_start_requests r
+      WHERE r.resource_key = $1 AND r.status = 'queued'
+      ORDER BY ${queueOrderSql('r')}${getDialect().rowLock()}`,
     [resource]
   );
   const isLocal = (row: (typeof live.rows)[number]) =>
@@ -545,6 +549,7 @@ export async function resourceStartOccupancy(
     foreignHeldCheckouts: heldCheckouts(foreign, reusable.rows),
     unknownForeignCheckoutHolder,
     heldItems: itemHolders(await liveItemRuns(query)),
+    priorityItems: await readPriorityItems(query),
   };
 }
 
@@ -573,4 +578,36 @@ export function parseQueuedResourceStart(value: unknown, resource?: string) {
   if (resource !== undefined && row.resource_key !== resource)
     throw new Error(`Queued request '${row.id}' does not belong to resource '${resource}'`);
   return { id: row.id, hostId: row.host_id, launch: row.launch, itemId: row.item_id };
+}
+
+/**
+ * The capacity each named resource's slot recorded and how many runs hold it now, for a
+ * read that reports them. A resource with no slot row is absent. It prunes nothing: a
+ * holder whose run has ended is left for the next admission and not counted here.
+ */
+export async function listSlotOccupancy(
+  resources: readonly string[]
+): Promise<ReadonlyMap<string, { capacity: number; held: number }>> {
+  const slots = new Map<string, { capacity: number; held: number }>();
+  if (resources.length === 0) return slots;
+  const named = resources.map((_, index) => `$${String(index + 1)}`).join(', ');
+  // SQLite stores the holder id as text; PostgreSQL compares it with a UUID column.
+  const holderRunId =
+    getDatabaseType() === 'postgresql' ? 'CAST(h.holder_id AS UUID)' : 'h.holder_id';
+  const result = await getDatabase().query<{
+    resource_key: string;
+    capacity: number;
+    held: number | string;
+  }>(
+    `SELECT s.resource_key, s.capacity,
+            (SELECT COUNT(*) FROM remote_agent_resource_slot_holders h
+              WHERE h.resource_key = s.resource_key AND h.holder_kind = 'run'
+                AND EXISTS (SELECT 1 FROM remote_agent_workflow_runs w
+                             WHERE w.id = ${holderRunId} AND w.status NOT IN (${terminalList}))) AS held
+       FROM remote_agent_resource_slots s WHERE s.resource_key IN (${named})`,
+    [...resources]
+  );
+  for (const row of result.rows)
+    slots.set(row.resource_key, { capacity: Number(row.capacity), held: Number(row.held) });
+  return slots;
 }

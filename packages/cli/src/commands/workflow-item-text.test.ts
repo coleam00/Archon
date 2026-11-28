@@ -7,6 +7,7 @@ const SERVED: ReadonlySet<string> = new Set(['host']);
 
 const read: ItemRead = {
   item: { id: 'item-row', projectKey: 'acme/web', key: 'issue-7' },
+  standing: { runId: null, state: 'resting', pack: null },
   runs: [
     {
       id: 'run-done-1',
@@ -50,6 +51,7 @@ const read: ItemRead = {
     {
       kind: 'awaiting_response',
       project: null,
+      priority: false,
       revision: 1,
       labels: {},
       pausedAt: null,
@@ -157,6 +159,10 @@ const read: ItemRead = {
     branch: 'feat/order',
     from: { kind: 'part_of', item: { id: 'wo-row', projectKey: 'acme/web', key: 'WO-12' } },
   },
+  priority: {
+    own: false,
+    inheritedFrom: [{ id: 'wo-row', projectKey: 'acme/web', key: 'WO-12' }],
+  },
   ended: {
     kind: 'ended',
     id: 'end-1',
@@ -167,6 +173,7 @@ const read: ItemRead = {
     fromRun: null,
   },
   workOrder: null,
+  dependsOn: [],
   merged: {
     change: 'https://github.com/acme/web/pull/12',
     commit: null,
@@ -201,6 +208,21 @@ test('a work order prints its state and names the members that keep it open', ()
   expect(unknown).toStartWith('Work order: unknown');
   expect(unknown).toContain('issue-a');
   expect(workOrderText(null)).toBeUndefined();
+});
+
+test('an item names the items it depends on with their states', () => {
+  const item = (key: string, projectKey = 'acme/web') => ({ id: `${key}-row`, projectKey, key });
+  const lines = itemReadLines(
+    {
+      ...read,
+      dependsOn: [
+        { item: item('issue-a'), state: 'open' },
+        { item: item('issue-b', 'acme/api'), state: 'merged' },
+      ],
+    },
+    SERVED
+  );
+  expect(lines).toContain('Depends on: issue-a (open), acme/api/issue-b (merged)');
 });
 
 test('an unreadable member part prints under an open work order too, naming the member', () => {
@@ -241,6 +263,7 @@ test('an item read prints its runs, open questions and answers', () => {
   const text = lines.join('\n');
   expect(text).toContain('Merged 2026-11-01T11:00Z: https://github.com/acme/web/pull/12');
   expect(text).toContain('Lands on: feat/order (part_of WO-12)');
+  expect(text).toContain('Priority: part_of WO-12');
   const endLine = lines.find(line => line.includes('Done by hand elsewhere.'));
   expect(endLine).toContain('2026-11-01T12:00Z');
   expect(endLine).toContain('alice');

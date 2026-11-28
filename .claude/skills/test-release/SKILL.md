@@ -247,61 +247,58 @@ git commit -q --allow-empty -m init
 - `Not in a git repository` → working directory handling bug
 - Parse errors → the embedded JSON is corrupt or stale
 
-### Test 3 — SDK path works (archon-investigate workflow)
+### Test 3 — An agent node runs (SDK round trip)
 
-**Prerequisite.** Compiled binaries require Claude Code installed on the host and a configured binary path. Before running this test, ensure one of:
+**Prerequisite.** A compiled binary needs Claude Code installed on the host. It finds the
+binary from `CLAUDE_BIN_PATH`, then `assistants.claude.claudeBinaryPath` in
+`~/.archon/config.yaml`, then the native installer's path (`~/.local/bin/claude`). Run
+`"$BINARY" provider add claude` first (see Test 2).
 
-```bash
-# Option A — env var (easy for ad-hoc testing)
-# After the native installer (Anthropic's default):
-export CLAUDE_BIN_PATH="$HOME/.local/bin/claude"
-# Or after npm global install:
-export CLAUDE_BIN_PATH="$(npm root -g)/@anthropic-ai/claude-code/cli.js"
-
-# Option B — config file (persistent)
-#   Add to ~/.archon/config.yaml:
-#   assistants:
-#     claude:
-#       claudeBinaryPath: /absolute/path/to/claude
-```
-
-Then in the same `$TESTREPO`:
+Use a one-node workflow in `$TESTREPO`, not a bundled one: every bundled `sdlc` workflow needs
+a forge remote and refuses a repository without one (`no_forge_remote`), which is not what
+this test is about.
 
 ```bash
-"$BINARY" workflow run archon-investigate --no-worktree "say hello and nothing else" 2>&1 | tee /tmp/archon-test-investigate.log
+mkdir -p "$TESTREPO/.archon/workflows"
+cat > "$TESTREPO/.archon/workflows/hello.yaml" <<'YAML'
+name: hello
+description: One agent node that says hello
+nodes:
+  - id: say
+    prompt: "Say hello and nothing else."
+YAML
+cd "$TESTREPO"
+"$BINARY" workflow run hello --no-worktree 2>&1 | tee /tmp/archon-test-hello.log
 ```
 
 **Pass criteria:**
 
 - Exit code 0
-- The Claude subprocess spawns successfully (no `spawn EACCES`, `ENOENT`, or `process exited with code 1` in the early output)
-- No `Claude Code CLI not found` error (that means the resolver rejected the configured path — verify the cli.js actually exists)
-- A response is produced (any response — even just "hello" — proves the SDK round-trip works)
+- The Claude subprocess spawns (no `spawn EACCES`, `ENOENT` or `process exited with code 1` in the early output)
+- A response is produced; any response proves the SDK round trip
 
 **Common failures:**
 
-- `Claude Code not found` → `CLAUDE_BIN_PATH` / `claudeBinaryPath` is unset or points at a non-existent file. Fix the path and re-run.
+- `Claude Code not found` → no binary at any of the three places above. Install Claude Code or set `CLAUDE_BIN_PATH`.
 - `Module not found "/Users/runner/..."` → regression of #1210: the resolver was bypassed and the SDK's `import.meta.url` fallback leaked a build-host path. Investigate `packages/providers/src/claude/provider.ts` and the resolver.
-- `Credit balance is too low` → auth is pointing at an exhausted API key (check `CLAUDE_USE_GLOBAL_AUTH` and `~/.archon/.env`)
+- `Credential preflight failed` / `Credit balance is too low` → the login, not the binary: check `archon doctor`
 - `unable to determine transport target for "pino-pretty"` → #960 regression, binary crashes on TTY
 - `package.json not found (bad installation?)` → #961 regression, `isBinaryBuild` detection broken
-- Process exits before producing output → generic spawn failure, capture stderr
 
-### Test 3b — Resolver error path (run without `CLAUDE_BIN_PATH`)
-
-Quickly verify the resolver fails loud when nothing is configured:
+### Test 3b — The resolver says where it found Claude
 
 ```bash
-(unset CLAUDE_BIN_PATH; "$BINARY" workflow run archon-investigate --no-worktree "hello" 2>&1 | tee /tmp/archon-test-no-path.log)
+"$BINARY" doctor 2>&1 | grep -F 'Claude binary'
 ```
 
-**Pass criteria (when no `~/.archon/config.yaml` configures `claudeBinaryPath`):**
+**Pass criteria:**
 
-- Error message contains `Claude Code not found`
-- Error message mentions both `CLAUDE_BIN_PATH` and `claudeBinaryPath` as remediation options
-- No `Module not found` stack traces referencing the CI filesystem
+- One line naming the path and its source, such as `Claude binary: <path> (via autodetect, spawns OK)`
+- No `Module not found` stack trace that names the CI filesystem
 
-If you *do* have `claudeBinaryPath` set globally, skip this test or temporarily rename `~/.archon/config.yaml`.
+The resolver's failure path (nothing configured and no native install) cannot be shown on a
+host where Claude Code is installed, because autodetect finds it. Do not uninstall Claude
+Code to test it; the resolver's own tests cover that path.
 
 ### Test 4 — Env-leak guard strips sensitive keys from .env
 
@@ -330,20 +327,22 @@ YAML
 
 **Pass criteria** (current behaviour — the guard **strips** silently, it does not refuse):
 
-- Run on a fresh scratch Archon home with no inherited `ANTHROPIC_API_KEY` or
-  `DATABASE_URL`, the probe workflow completes and prints `probe: CLEAN`. With no other
-  source for the key, any other marker means the planted key, or some key, reached the run
+- Run on a fresh scratch Archon home with the planted value also exported to the CLI
+  (`ANTHROPIC_API_KEY=sk-ant-test-fake`) and no `DATABASE_URL`, the probe workflow
+  completes and prints `probe: CLEAN`. The release binary never loads the repo's `.env`
+  itself, so the exported key is what the guard must strip: it removes every key the
+  repo's `.env` names, whatever its source. `probe: LEAKED` means the guard let it through
 - No `[archon] stripped` line on stderr: the guard no longer prints on every command
 - `archon doctor` in the repo names this repo's `.env` and the planted key:
   `Target repo .env: 1 key from <repo>/.env is kept out of runs, …: ANTHROPIC_API_KEY`
 
 The probe is the security check: it observes the run itself. The doctor line only
 checks the operator-facing report. The scratch home keeps your own configured key from
-masking a broken guard or appearing in the log, and keeps the run off your database.
+masking or standing in for the planted one, and keeps the run off your database.
 
 ```bash
 PROBE_HOME=$(mktemp -d)
-probe() { env -u ANTHROPIC_API_KEY -u DATABASE_URL ARCHON_HOME="$PROBE_HOME" "$BINARY" "$@"; }
+probe() { env -u DATABASE_URL ANTHROPIC_API_KEY=sk-ant-test-fake ARCHON_HOME="$PROBE_HOME" "$BINARY" "$@"; }
 probe workflow run env-leak-probe --no-worktree > /tmp/archon-test-leak.log 2>&1
 leak_exit=$?
 probe doctor > /tmp/archon-test-leak-doctor.log 2>&1

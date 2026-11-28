@@ -8,7 +8,6 @@ import { describeRunLimit, fullRunLimit } from '@archon/workflows/schemas/run-li
 import type {
   ItemAnswer,
   ItemHeldBehind,
-  ItemHeldStart,
   ItemQueuedStart,
   ItemRead,
   ItemReadLink,
@@ -16,7 +15,9 @@ import type {
   ItemSkippedStart,
 } from '@archon/workflows/item-read';
 import { describeOperatorPause } from '@archon/workflows/schemas/operator-pause';
+import type { ItemHeldStart } from '@archon/workflows/schemas/item-held-start';
 import { landingSourceText } from '@archon/workflows/item-landing';
+import { prioritySourceText } from './workflow-priority';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
@@ -225,7 +226,15 @@ function startSectionLines(read: ItemRead, served: ReadonlySet<string>): string[
     );
   const held = read.hold !== null;
   for (const start of read.held) lines.push(...heldLines(start, served, held));
-  if (read.queued.length === 0 && read.held.length === 0) lines.push('  none');
+  const unplaced = read.degraded.flatMap(report =>
+    report.reason === 'held_start_unplaced' ? [report] : []
+  );
+  for (const start of unplaced)
+    lines.push(
+      `  ${start.workflow ?? 'A trigger start'} (receipt ${start.receiptId}) names this item's key, but its project is unknown: ${start.message}`
+    );
+  if (read.queued.length === 0 && read.held.length === 0 && unplaced.length === 0)
+    lines.push('  none');
   for (const start of read.queued) lines.push(...queuedLines(start, read.runLimit, served, held));
   if (read.skipped.length > 0) {
     lines.push('', 'Refused starts:');
@@ -287,8 +296,13 @@ function waitLines(read: ItemRead): string[] {
   if (read.waits.length === 0) return ['  none'];
   return read.waits.map(
     wait =>
-      `  '${wait.event}' about ${wait.about}, since ${minute(wait.waitingSince)}, ${wait.overdue ? 'overdue since' : 'due'} ${minute(wait.deadline)} (left by ${wait.workflow} run ${wait.runId.slice(0, 8)})`
+      `  '${wait.event}' about ${wait.about}${wait.subject === null ? '' : ` on ${wait.subject.kind} ${String(wait.subject.number)}`}, since ${minute(wait.waitingSince)}, ${wait.overdue ? 'overdue since' : 'due'} ${minute(wait.deadline)} (left by ${wait.workflow} run ${wait.runId.slice(0, 8)})`
   );
+}
+
+/** Another item's key, qualified by its project when that is not the read item's. */
+function otherItemName(read: ItemRead, item: ItemRead['item']): string {
+  return item.projectKey === read.item.projectKey ? item.key : `${item.projectKey}/${item.key}`;
 }
 
 /**
@@ -298,8 +312,7 @@ function waitLines(read: ItemRead): string[] {
 function workOrderLines(read: ItemRead): string[] {
   const order = read.workOrder;
   if (order === null) return [];
-  const name = (item: ItemRead['item']) =>
-    item.projectKey === read.item.projectKey ? item.key : `${item.projectKey}/${item.key}`;
+  const name = (item: ItemRead['item']) => otherItemName(read, item);
   const keys = (state: (typeof order.members)[number]['state']) =>
     order.members.filter(member => member.state === state).map(({ item }) => name(item));
   const total = String(order.members.length);
@@ -333,7 +346,20 @@ function workOrderLines(read: ItemRead): string[] {
   return lines;
 }
 
-/** The facts under the item's name: its end, its merge, its work order and the branch it lands on. */
+/**
+ * The items this one depends on, with their states. It states the links only: whether the
+ * item waits is for attention to say, since a running or ended item depends on them too.
+ */
+function dependsOnLines(read: ItemRead): string[] {
+  if (read.dependsOn.length === 0) return [];
+  const deps = read.dependsOn.map(dep => `${otherItemName(read, dep.item)} (${dep.state})`);
+  return [`Depends on: ${deps.join(', ')}`];
+}
+
+/**
+ * The facts under the item's name: its end, its merge, its work order, what it depends on
+ * and the branch it lands on.
+ */
 function itemFactLines(read: ItemRead): string[] {
   const lines: string[] = [];
   if (read.ended !== null)
@@ -345,9 +371,10 @@ function itemFactLines(read: ItemRead): string[] {
   if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
   if (read.degraded.some(report => report.reason === 'merge_unreadable'))
     lines.push('The merge recorded on this item could not be read.');
-  lines.push(...workOrderLines(read));
+  lines.push(...workOrderLines(read), ...dependsOnLines(read));
   if (read.landing !== null)
     lines.push(`Lands on: ${read.landing.branch} (${landingSourceText(read.landing)})`);
+  if (read.priority !== null) lines.push(`Priority: ${prioritySourceText(read.priority)}`);
   for (const report of read.degraded)
     if (report.reason === 'landing_unresolved') lines.push(`Lands on: unknown. ${report.message}`);
   return lines;
@@ -359,7 +386,8 @@ function itemFactLines(read: ItemRead): string[] {
  * start is told admits it.
  */
 export function itemReadLines(read: ItemRead, served: ReadonlySet<string>): string[] {
-  const lines = [`Item ${read.item.key} (${read.item.projectKey})`, ...itemFactLines(read)];
+  const title = read.item.title == null ? '' : `: ${read.item.title}`;
+  const lines = [`Item ${read.item.key} (${read.item.projectKey})${title}`, ...itemFactLines(read)];
   lines.push('', 'Runs:');
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));

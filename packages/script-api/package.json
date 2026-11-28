@@ -1,6 +1,6 @@
 {
   "name": "@archon/script-api",
-  "version": "0.15.0",
+  "version": "0.16.1",
   "type": "module",
   "main": "./src/module.ts",
   "types": "./src/module.ts",

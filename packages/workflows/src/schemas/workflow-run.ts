@@ -27,13 +27,11 @@ export type { SuspendReason } from './node-state';
 // WorkflowRun
 // ---------------------------------------------------------------------------
 
-export const workflowRunOriginSchema = z
-  .object({
-    conversationId: z.string().optional(),
-    parentConversationId: z.string().optional(),
-    userId: z.string().optional(),
-  })
-  .strict();
+export const workflowRunOriginSchema = z.object({
+  conversationId: z.string().optional(),
+  parentConversationId: z.string().optional(),
+  userId: z.string().optional(),
+});
 
 export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
 
@@ -41,11 +39,28 @@ export const ITEM_KEY_MAX_LENGTH = 200;
 /** An item's key within its project. The engine gives it no meaning and never parses it. */
 export const itemKeySchema = z.string().min(1).max(ITEM_KEY_MAX_LENGTH);
 
-/** The durable thing runs are about: a key within a project (`ProjectRef.key`). */
+export const ITEM_TITLE_MAX_LENGTH = 300;
+/**
+ * What an item is called, for a reader. Whoever knows it sets it (`archon workflow title`)
+ * and setting it again replaces it; the engine gives it no meaning and never derives it
+ * from the key or any other text.
+ */
+export const itemTitleSchema = z
+  .string()
+  .trim()
+  .min(1, 'A title needs text')
+  .max(ITEM_TITLE_MAX_LENGTH, `A title is at most ${String(ITEM_TITLE_MAX_LENGTH)} characters`);
+
+/**
+ * The durable thing runs are about: a key within a project (`ProjectRef.key`), and its
+ * title. Every read from the store carries `title`, null until one is set; it is optional
+ * so an item serialized before titles existed still reads.
+ */
 export const workflowItemSchema = z.object({
   id: z.string(),
   projectKey: z.string(),
   key: itemKeySchema,
+  title: z.string().nullish(),
 });
 export type WorkflowItem = z.infer<typeof workflowItemSchema>;
 

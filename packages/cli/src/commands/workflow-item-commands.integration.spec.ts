@@ -28,6 +28,8 @@ import { join } from 'node:path';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { landingCreateCommand } from '@archon/core/workflows/item-landing';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { heldRunOf } from '@archon/workflows/attention-queue';
+import { type AttentionStreamLine, watchAttentionQueue } from '@archon/workflows/attention-watch';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
@@ -42,10 +44,11 @@ import { projectAddCommand } from './project';
 import { workflowLinkCommand } from './workflow-link';
 import { workflowItemsCommand } from './workflow-items';
 import { workflowLandingCommand } from './workflow-landing';
+import { workflowTitleCommand } from './workflow-title';
 import { workflowMergedCommand } from './workflow-merged';
 import { workflowRunsCommand } from './workflow-query';
 import { workflowRuleCommand } from './workflow-rule';
-import { runWorkflowEnd } from '../routes/workflow';
+import { runWorkflowEnd, runWorkflowPriority } from '../routes/workflow';
 import * as workflowCommands from './workflow';
 import { workflowAttentionCommand } from './workflow-attention';
 import { workflowRunCommand } from './workflow-run-owned';
@@ -379,7 +382,11 @@ test.serial(
 );
 
 /** A run of `item-proof` on `key`: still running, or ended at once, stopping the item or failed. */
-async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Promise<string> {
+async function seedEnded(
+  key: string,
+  end: 'running' | 'stopped' | 'failed',
+  refusals: Parameters<typeof itemStoppedMetadata>[1] = {}
+): Promise<string> {
   let id = '';
   const result = await captureWorkflowCommand(archonHome, async host => {
     const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
@@ -398,7 +405,7 @@ async function seedEnded(key: string, end: 'running' | 'stopped' | 'failed'): Pr
       await host.deps.store.completeWorkflowRun(
         seeded.id,
         { duration_ms: 1 },
-        itemStoppedMetadata('Folded into another item.'),
+        itemStoppedMetadata('Folded into another item.', refusals),
         { outcome: { kind: 'enum', value: 'fold' } }
       );
   });
@@ -499,6 +506,172 @@ nodes:
   expect(await stopsOnItem()).toMatchObject([{ stoppedIn: { workflow: 'review' } }]);
 });
 
+test.serial(
+  'workflow priority marks a work order and its members in the item read and attention',
+  async () => {
+    // A quiet outcome starts nothing and ends nothing, so the run stops its item.
+    writeFileSync(
+      join(projectRoot, '.archon', 'workflows', 'quiet.yaml'),
+      `name: quiet
+description: quiet
+mutates_checkout: false
+returns: { node: decide, outcome: outcome }
+nodes:
+  - id: decide
+    bash: |
+      echo '{"outcome": "not_ready"}'
+    output_format:
+      type: object
+      properties:
+        outcome: { type: string, enum: [not_ready] }
+      required: [outcome]
+`
+    );
+    const result = await invoke(host =>
+      workflowRunCommand(host, projectRoot, 'quiet', 'go', {
+        noWorktree: true,
+        item: 'item-urgent',
+      })
+    );
+    expect(result.exitCode, result.stderr).toBe(0);
+    // Through the route, so the flags it parses are what the command acts on.
+    const priority = (values: { item: string; clear?: true }) =>
+      invoke(host =>
+        runWorkflowPriority({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'priority'],
+          values: { ...values, json: true },
+          command: 'workflow',
+          subcommand: 'priority',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      );
+    expect(succeeded(await priority({ item: 'WO-urgent' }))).toEqual({
+      priority: { own: true, inheritedFrom: [] },
+    });
+    succeeded(
+      await invoke(host =>
+        workflowLinkCommand(
+          host,
+          projectRoot,
+          { item: 'item-urgent', kind: 'part_of', to: 'WO-urgent' },
+          true,
+          callerEnv
+        )
+      )
+    );
+    const workOrder = (await readItemJson('WO-urgent')).item;
+    expect((await readItemJson('item-urgent')).priority).toEqual({
+      own: false,
+      inheritedFrom: [workOrder],
+    });
+    const stopped = async () => {
+      const read = await invoke(host =>
+        workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+      );
+      return (
+        JSON.parse(read.stdout) as {
+          items: { kind: string; priority: boolean; item?: { key: string } }[];
+        }
+      ).items.find(item => item.kind === 'stopped' && item.item?.key === 'item-urgent');
+    };
+    expect((await stopped())?.priority).toBe(true);
+
+    // A member's own clear leaves what the work order gives it.
+    expect(succeeded(await priority({ item: 'item-urgent' }))).toEqual({
+      priority: { own: true, inheritedFrom: [workOrder] },
+    });
+    expect(succeeded(await priority({ item: 'item-urgent', clear: true }))).toEqual({
+      priority: { own: false, inheritedFrom: [workOrder] },
+    });
+    expect(succeeded(await priority({ item: 'WO-urgent', clear: true }))).toEqual({
+      priority: null,
+    });
+    expect((await readItemJson('item-urgent')).priority).toBeNull();
+    expect((await stopped())?.priority).toBe(false);
+    // Clearing names an item; it never creates one.
+    const missing = await priority({ item: 'never-named', clear: true });
+    expect(missing.exitCode).toBe(1);
+    expect(
+      rows<{ key: string }>("SELECT key FROM remote_agent_items WHERE key = 'never-named'")
+    ).toEqual([]);
+  }
+);
+
+test.serial(
+  "a workflow: child's pause carries its top-level run's item and priority, and the watch follows a change",
+  async () => {
+    const result = await captureWorkflowCommand(archonHome, async host => {
+      const { store } = host.deps;
+      const codebase = await host.records.codebases.findCodebaseByDefaultCwd(projectRoot);
+      if (!codebase) throw new Error('The seed runs did not register the project');
+      const parent = await store.createWorkflowRun({
+        workflow_name: 'item-proof',
+        user_message: 'go',
+        codebase_id: codebase.id,
+        working_path: projectRoot,
+        item_key: 'item-child',
+      });
+      await store.claimPendingWorkflowRun(parent.id, projectRoot);
+      const child = await store.createWorkflowRun({
+        workflow_name: 'child',
+        user_message: '',
+        parent_run_id: parent.id,
+      });
+      await store.claimPendingWorkflowRun(child.id);
+      await store.pauseWorkflowRunForWait(
+        child.id,
+        {
+          owner: 'node',
+          nodeId: 'gate',
+          kind: 'attention',
+          waitingSince: new Date().toISOString(),
+          message: 'Ship it?',
+          pauseId: `pause-${child.id}`,
+          form: 'approval',
+          labels: {},
+        },
+        { kind: 'started', stepName: 'gate' }
+      );
+      const item = await store.getItem((await store.getWorkflowRun(parent.id))?.item_id ?? '');
+      if (!item) throw new Error('The parent run is on no item');
+      const lines: AttentionStreamLine[] = [];
+      const childItem = () =>
+        [...lines]
+          .reverse()
+          .find(
+            (line): line is Extract<AttentionStreamLine, { type: 'attention' }> =>
+              line.type === 'attention' && heldRunOf(line.item)?.id === child.id
+          )?.item;
+      const watch = await watchAttentionQueue(
+        store,
+        { branchOf: async () => null },
+        line => {
+          lines.push(line);
+        },
+        { scope: { kind: 'all' }, pollIntervalMs: 5 }
+      );
+      try {
+        expect(childItem()).toMatchObject({ item: { key: 'item-child' }, priority: false });
+        // The write commits no run event; the watch still sends the item again.
+        await store.setItemPriority({ projectKey: item.projectKey, key: item.key });
+        for (let waited = 0; waited < 5000 && childItem()?.priority !== true; waited += 5)
+          await Bun.sleep(5);
+        expect(childItem()).toMatchObject({ item: { key: 'item-child' }, priority: true });
+      } finally {
+        await watch.close();
+      }
+    });
+    expect(result.status, result.stderr).toBe(0);
+  }
+);
+
 /** A binding start on `key` not yet prepared, as a fire or a run's end writes it. */
 async function unpreparedStart(
   key: string,
@@ -595,6 +768,73 @@ test.serial(
     // In the item's project, the stage its end started has not been prepared: the stop waits.
     await unpreparedStart('item-next', { cwd: projectRoot, workflowName: 'build' }, endedBy);
     expect(await stoppedRefs()).not.toContain(`stopped:${stopped}`);
+  }
+);
+
+test.serial(
+  'an item that depends on an open item waits on it, and is listed as stopped once it ends',
+  async () => {
+    const stoppedRefs = async () =>
+      (
+        succeeded(
+          await invoke(host =>
+            workflowAttentionCommand(host, projectRoot, undefined, { json: true, labels: [] })
+          )
+        ) as { items: { kind: string; ref: string }[] }
+      ).items.flatMap(item => (item.kind === 'stopped' ? [item.ref] : []));
+    const link = async (request: Parameters<typeof workflowLinkCommand>[2]) =>
+      succeeded(
+        await invoke(host => workflowLinkCommand(host, projectRoot, request, true, callerEnv))
+      );
+    const waiting = await seedEnded('item-waiting', 'stopped');
+    // A refused start needs someone whatever the item waits on.
+    const refused = await seedEnded('item-refused', 'stopped', {
+      refused: [
+        {
+          receiptId: 'receipt-1',
+          bindingId: 'build',
+          workflow: 'build',
+          reason: 'inputs_unmapped',
+          refusedAt: '2026-11-26T10:00:00Z',
+        },
+      ],
+    });
+    await link({ item: 'item-waiting', kind: 'depends_on', to: 'item-blocker' });
+    await link({ item: 'item-refused', kind: 'depends_on', to: 'item-blocker' });
+    // The blocker is a work order whose member stays open after the blocker ends.
+    await link({ item: 'item-member', kind: 'part_of', to: 'item-blocker' });
+
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([
+      { item: { key: 'item-blocker' }, state: 'open' },
+    ]);
+    expect(await stoppedRefs()).not.toContain(`stopped:${waiting}`);
+    expect(await stoppedRefs()).toContain(`stopped:${refused}`);
+
+    // The blocker is ended and nothing starts on the waiting item: it is stopped again.
+    succeeded(
+      await invoke(host =>
+        runWorkflowEnd({
+          commands: workflowCommands,
+          host,
+          positionals: ['workflow', 'end', 'Nothing more on the blocker.'],
+          values: { item: 'item-blocker', as: 'triage-agent', json: true },
+          command: 'workflow',
+          subcommand: 'end',
+          cwd: projectRoot,
+          effectiveCwd: projectRoot,
+          json: true,
+          detachedRunConfig: undefined,
+          inheritedEnv: callerEnv,
+          forgeTrustedEnv: callerEnv,
+        })
+      )
+    );
+    expect((await readItemJson('item-blocker')).workOrder).toMatchObject({ state: 'open' });
+    expect((await readItemJson('item-waiting')).dependsOn).toMatchObject([{ state: 'ended' }]);
+    expect(await stoppedRefs()).toContain(`stopped:${waiting}`);
+    // Standing's rule is stricter than attention's: an operator's end says nothing more happens
+    // on the blocker, not that it delivered, so the board keeps the item waiting (`item-parts.ts`).
+    expect((await readItemJson('item-waiting')).standing).toMatchObject({ state: 'waiting' });
   }
 );
 
@@ -1120,6 +1360,29 @@ test.serial(
     const again = await link({ end: recorded.id });
     expect(again.exitCode).toBe(1);
     expect(JSON.parse(again.stdout)).toEqual({ ok: false, error: 'already_ended' });
+  }
+);
+
+test.serial(
+  'a title set on an item is read with it, and setting it again replaces it',
+  async () => {
+    const title = (request: Parameters<typeof workflowTitleCommand>[2]) =>
+      invoke(host => workflowTitleCommand(host, projectRoot, request, true));
+    succeeded(await title({ item: 'item-1', text: 'First try' }));
+    // By the run's own item, as a script sets it.
+    const onItem = runsWithItems().find(row => row.item_key === 'item-1');
+    if (!onItem) throw new Error('Expected a run on item-1');
+    expect(succeeded(await title({ itemOf: onItem.id, text: '  Ship the order  ' }))).toMatchObject(
+      {
+        key: 'item-1',
+        title: 'Ship the order',
+      }
+    );
+    expect((await readItemJson('item-1')).item.title).toBe('Ship the order');
+
+    const blank = await title({ item: 'item-1', text: '   ' });
+    expect(blank.exitCode).toBe(1);
+    expect((await readItemJson('item-1')).item.title).toBe('Ship the order');
   }
 );
 

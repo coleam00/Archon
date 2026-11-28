@@ -201,6 +201,7 @@ const source: ItemReadSource = {
     listItemRulings: async id => (id === item.id ? rulings : []),
     getItemMerge: async id => (id === item.id ? merge : null),
     getItemLanding: async id => (id === item.id ? landing : null),
+    getItemPriority: async () => null,
     getHoldingItemEnd: async () => null,
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
@@ -210,6 +211,7 @@ const source: ItemReadSource = {
     getInstallHold: async () => null,
     getRunLimit: async () => null,
     listHeldItemStarts: async () => [],
+    listAllHeldItemStarts: async () => [],
     listItemStarts: async () => [],
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
@@ -447,6 +449,65 @@ describe('reading an item', () => {
     ]);
   });
 
+  test('an ended item whose last run failed stands at rest and reads its end', async () => {
+    const end: ItemEnd = {
+      kind: 'ended',
+      id: 'end-1',
+      reason: 'Folded into another item.',
+      at: '2026-11-01T12:00:00.000Z',
+      via: 'cli',
+      by: { declared: 'alice' },
+      fromRun: null,
+    };
+    const failed = run('failed', {
+      status: 'failed',
+      started_at: new Date('2026-11-01T11:00:00.000Z'),
+    });
+    const unmerged = (holding: ItemEnd | null): ItemReadSource => ({
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [failed], descendantIds: [] }),
+        getItemMerge: async () => null,
+        getHoldingItemEnd: async () => holding,
+      },
+    });
+    expect((await readItem(unmerged(null), item.projectKey, item.key))?.standing.state).toBe(
+      'failed'
+    );
+    const read = await readItem(unmerged(end), item.projectKey, item.key);
+    expect(read?.standing).toEqual({ runId: 'failed', state: 'resting', pack: null });
+    expect(read?.ended).toEqual(end);
+  });
+
+  test('an item whose outcome finished it stands done and reads the engine end', async () => {
+    const closed = run('closed', {
+      status: 'completed',
+      started_at: new Date('2026-11-01T11:00:00.000Z'),
+    });
+    const end: ItemEnd = {
+      kind: 'ended',
+      id: 'end-1',
+      reason: "Workflow 'close' ended the item with outcome 'dropped'",
+      at: '2026-11-01T12:00:00.000Z',
+      via: 'engine',
+      by: null,
+      fromRun: { runId: 'closed', nodePath: 'close' },
+    };
+    const engineEnded: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [closed], descendantIds: [] }),
+        getItemMerge: async () => null,
+        getHoldingItemEnd: async () => end,
+      },
+    };
+    const read = await readItem(engineEnded, item.projectKey, item.key);
+    expect(read?.standing).toEqual({ runId: 'closed', state: 'done', pack: null });
+    expect(read?.ended).toEqual(end);
+  });
+
   test('an end the store holds reads as ended until a held trigger start waits on the item', async () => {
     const end: ItemEnd = {
       kind: 'ended',
@@ -496,6 +557,50 @@ describe('reading an item', () => {
     ]);
   });
 
+  test('a held start naming its key that no project could place is reported, not left out', async () => {
+    const heldFields = {
+      bindingId: 'binding',
+      hostId: null,
+      workflow: 'deliver',
+      receivedAt: '2026-11-01T09:00:00.000Z',
+    };
+    const unplaced: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        listAllHeldItemStarts: async () => [
+          {
+            ...heldFields,
+            receiptId: 'ambiguous',
+            itemKey: item.key,
+            projectKey: null,
+            unplaced: 'the checkout matches two projects',
+          },
+          // Another key's unplaced start is not this item's to report.
+          {
+            ...heldFields,
+            receiptId: 'elsewhere',
+            itemKey: 'issue-99',
+            projectKey: null,
+            unplaced: 'the checkout matches two projects',
+          },
+        ],
+      },
+    };
+    const read = await readItem(unplaced, item.projectKey, item.key);
+    expect(read?.held).toEqual([]);
+    expect(read?.degraded).toContainEqual({
+      type: 'degraded',
+      reason: 'held_start_unplaced',
+      receiptId: 'ambiguous',
+      workflow: 'deliver',
+      message: 'the checkout matches two projects',
+    });
+    expect(read?.degraded.map(report => 'receiptId' in report && report.receiptId)).not.toContain(
+      'elsewhere'
+    );
+  });
+
   test('an unknown key reads as null, an item with no runs as empty but for its rulings', async () => {
     expect(await readItem(source, item.projectKey, 'issue-8')).toBeNull();
     const empty: ItemReadSource = {
@@ -508,6 +613,7 @@ describe('reading an item', () => {
     };
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
+      standing: { runId: null, state: 'done', pack: null },
       runs: [],
       queued: [],
       skipped: [],
@@ -520,9 +626,11 @@ describe('reading an item', () => {
       answers: rulings,
       merged: merge,
       landing: { branch: 'feat/order-1', from: { kind: 'own' } },
+      priority: null,
       links: [],
       ended: null,
       workOrder: null,
+      dependsOn: [],
       degraded: [],
     });
   });
@@ -876,7 +984,7 @@ describe('reading a work order', () => {
       order.projectKey,
       order.key
     );
-    return { workOrder: read?.workOrder, degraded: read?.degraded };
+    return { workOrder: read?.workOrder, degraded: read?.degraded, standing: read?.standing };
   }
 
   test('one open member and one merged member: open, naming the open member', async () => {
@@ -893,6 +1001,11 @@ describe('reading a work order', () => {
   test('once the open member merges or is ended, the order is done with no run on it', async () => {
     const links = [partOf(a, order), partOf(b, order)];
     expect((await readOrder({ links, merged: [a.id, b.id] })).workOrder?.state).toBe('done');
+    // Where the order stands agrees with its work order: an ended part is done for both.
+    expect((await readOrder({ links, merged: [b.id] })).standing?.state).toBe('resting');
+    expect((await readOrder({ links, merged: [b.id], ended: [a.id] })).standing?.state).toBe(
+      'done'
+    );
     expect((await readOrder({ links, merged: [b.id], ended: [a.id] })).workOrder).toEqual({
       state: 'done',
       members: [
@@ -1027,5 +1140,98 @@ describe('reading a work order', () => {
 
   test('an item nothing is part of is no work order', async () => {
     expect((await readOrder({ links: [partOf(order, a)] })).workOrder).toBeNull();
+  });
+});
+
+describe('placing an item through its links', () => {
+  const project = 'acme/web';
+  const at = (key: string): WorkflowItem => ({ id: `${key}-row`, projectKey: project, key });
+  const link = (kind: ItemLink['kind'], from: WorkflowItem, to: WorkflowItem): ItemLink => ({
+    id: `${from.key}-${kind}-${to.key}`,
+    kind,
+    from,
+    to,
+    ...linkAct,
+    ended: null,
+  });
+
+  /**
+   * Where `top` stands over `links` between `items`, with `merged` and `ended` naming the
+   * items that carry those facts, and how many items were placed to say so.
+   */
+  async function place(facts: {
+    top: WorkflowItem;
+    items: WorkflowItem[];
+    links: ItemLink[];
+    merged?: string[];
+    ended?: string[];
+  }) {
+    const byKey = new Map(facts.items.map(each => [each.key, each]));
+    let placed = 0;
+    const read = await readItem(
+      {
+        ...source,
+        store: {
+          ...source.store,
+          getItemRuns: async (projectKey, key) => {
+            const found = byKey.get(key);
+            return projectKey === project && found !== undefined
+              ? { item: found, runs: [], descendantIds: [] }
+              : null;
+          },
+          listQueuedItemStarts: async () => {
+            placed++;
+            return [];
+          },
+          listItemRulings: async () => [],
+          getItemLanding: async () => null,
+          getItemMerge: async id => (facts.merged?.includes(id) ? merge : null),
+          getHoldingItemEnd: async id =>
+            facts.ended?.includes(id)
+              ? {
+                  kind: 'ended',
+                  id: `end-${id}`,
+                  reason: 'Not needed.',
+                  at: '2026-11-01T10:00:00.000Z',
+                  via: 'cli',
+                  by: { declared: 'alice' },
+                  fromRun: null,
+                }
+              : null,
+          listItemLinks: async id => facts.links.filter(l => l.from.id === id || l.to.id === id),
+        },
+      },
+      project,
+      facts.top.key
+    );
+    return { state: read?.standing.state, placed };
+  }
+
+  // Ten layers of two items each under the top, every item linked to both items of the layer
+  // below: 2^11 paths from the top to the last layer, 21 items.
+  const top = at('top');
+  const layers = Array.from({ length: 10 }, (_, i) => [at(`l${String(i)}a`), at(`l${String(i)}b`)]);
+  const lattice = (kind: ItemLink['kind']): ItemLink[] =>
+    [[top], ...layers].flatMap((upper, i) =>
+      (layers[i] ?? []).flatMap(lower =>
+        upper.map(each =>
+          kind === 'depends_on' ? link(kind, each, lower) : link(kind, lower, each)
+        )
+      )
+    );
+  const items = [top, ...layers.flat()];
+
+  test('converging depends_on links place each item once, not once per path', async () => {
+    const read = await place({ top, items, links: lattice('depends_on') });
+    expect(read.state).toBe('waiting');
+    // The top, and the two it depends on: what those depend on cannot make them done.
+    expect(read.placed).toBeLessThanOrEqual(3 * items.length);
+  });
+
+  test('converging part_of links place each item once, and the top is done by its parts', async () => {
+    const lastLayer = (layers.at(-1) ?? []).map(each => each.id);
+    const read = await place({ top, items, links: lattice('part_of'), merged: lastLayer });
+    expect(read.state).toBe('done');
+    expect(read.placed).toBeLessThanOrEqual(3 * items.length);
   });
 });

@@ -1,4 +1,8 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { expandWorkflowIncludes } from './include-expander';
 import { mapOf, wf } from './include-expander.fixtures';
 import {
@@ -9,8 +13,10 @@ import {
   packGraphSchema,
   packWorkflowIdentities,
 } from './pack-graph';
+import { manifestBindingRefusals } from './pack-binding-rule';
 import {
   packAsksSettledBindingSchema,
+  packFireBindingSchema,
   packEventBindingSchema,
   packRunEndedBindingSchema,
 } from './schemas/pack-bindings';
@@ -64,6 +70,8 @@ function installed(
   return {
     file: `/home/triggers/${id}.json`,
     sourceInstanceId: id,
+    resource: to,
+    capacity: null,
     from: { stage: from, outcome },
     launchWorkflow: to,
     linked: null,
@@ -152,6 +160,135 @@ describe('a pack graph', () => {
     ]);
   });
 
+  test('stages come in the order work flows through them, whatever order they were found in', () => {
+    const answered = packAsksSettledBindingSchema.parse({
+      workflow: 'close',
+      resource: 'close',
+      overlap: 'queue',
+      asks_settled: { workflow: 'check', settled: 'answered', option: 'drop' },
+    });
+    // Found alphabetically. Work enters at `intake`, which a later stage also leads back to,
+    // and `close` starts only on an answer.
+    const found = stages(
+      stage('build', ['built']),
+      stage('check', ['pass', 'again'], true),
+      stage('close', ['closed']),
+      stage('intake', ['ready'])
+    );
+    const declared = {
+      'check-after-build': runEnded('check', 'build', 'built'),
+      'intake-again': runEnded('intake', 'check', 'again'),
+      'build-after-intake': runEnded('build', 'intake', 'ready'),
+      dropped: answered,
+    };
+    const order = (bindings: GraphInput['declared']) =>
+      graphOf(found, { declared: bindings, installed: [] }).stages.map(s => s.workflow);
+
+    // Every stage but `close` is on the cycle, so only a binding that starts one says where
+    // work enters.
+    const enter = packFireBindingSchema.parse({
+      workflow: 'intake',
+      resource: 'intake',
+      overlap: 'queue',
+    });
+    expect(order({ ...declared, enter })).toEqual(['intake', 'build', 'check', 'close']);
+    // Work flows through a stage a binding starts or an arrow touches; a workflow of the pack
+    // that only other workflows call is not one.
+    const withHelper = graphOf(
+      stages(
+        stage('build', ['built']),
+        stage('check', ['pass', 'again'], true),
+        stage('close', ['closed']),
+        stage('intake', ['ready']),
+        stage('lint', ['ok'])
+      ),
+      {
+        declared: { ...declared, enter },
+        installed: [],
+      }
+    );
+    expect(withHelper.entries).toEqual([{ binding: 'enter', kind: 'fire', stage: 'intake' }]);
+    expect(withHelper.stages.map(s => [s.workflow, s.entry, s.inFlow])).toEqual([
+      ['intake', true, true],
+      ['build', false, true],
+      ['check', false, true],
+      ['close', false, true],
+      ['lint', false, false],
+    ]);
+    // Without the cycle, the stage no arrow leads to is the entry.
+    const { 'intake-again': _back, ...chain } = declared;
+    expect(order(chain)).toEqual(['intake', 'build', 'check', 'close']);
+  });
+
+  test('a linked arrow places its stage in flow, but not in the order work flows through', () => {
+    // An observing stage started only on the holder of a part_of link: when a member ends, and
+    // when a member that is itself an order reports. A linked arrow places it in flow, as any
+    // arrow does. It starts work on other items, so it says nothing of where the ended run's
+    // item goes next: `report` comes after the stages the item flows through, though it is
+    // found first and `a`'s first binding leads to it.
+    const report = wf('report', [decide(['reported'])], {
+      returns: 'decide',
+      result: { outcome: 'outcome' },
+      observes: true,
+    });
+    const linked = (from: string, outcome: string) =>
+      packRunEndedBindingSchema.parse({
+        workflow: 'report',
+        resource: 'report',
+        overlap: 'queue',
+        run_ended: { workflow: from, outcome, linked: partOfOrder },
+        inputs: { member: { item: 'key' } },
+      });
+    const enter = packFireBindingSchema.parse({ workflow: 'a', resource: 'a', overlap: 'queue' });
+    const graph = graphOf(
+      stages(report, stage('a', ['done']), stage('b', ['done']), stage('c', ['done'])),
+      {
+        declared: {
+          enter,
+          'report-after-a': linked('a', 'done'),
+          'b-after-a': runEnded('b', 'a', 'done'),
+          'c-after-b': runEnded('c', 'b', 'done'),
+          'report-after-report': linked('report', 'reported'),
+        },
+        installed: [],
+      }
+    );
+    expect(graph.stages.map(s => [s.workflow, s.inFlow, s.observes])).toEqual([
+      ['a', true, false],
+      ['b', true, false],
+      ['c', true, false],
+      ['report', true, true],
+    ]);
+    // Once the item's own stages are placed, linked arrows still order the rest: a stage only
+    // a linked arrow reaches comes before the stages its own item flows on to.
+    const crossing = graphOf(stages(stage('d', ['done']), report, stage('a', ['done'])), {
+      declared: {
+        enter,
+        'report-after-a': linked('a', 'done'),
+        'd-after-report': runEnded('d', 'report', 'reported'),
+      },
+      installed: [],
+    });
+    expect(crossing.stages.map(s => s.workflow)).toEqual(['a', 'report', 'd']);
+  });
+
+  test('a stage lists the roles its nodes name, each with the tier it falls back to', () => {
+    const node = (id: string, model: unknown) => ({ id, prompt: 'Do it.', model });
+    const staged = stages(
+      wf('review', [
+        node('judge', ['@judge', 'medium']),
+        node('again', ['@judge', 'medium']),
+        node('write', ['@reviewer', '@writer', 'large']),
+        node('plain', 'small'),
+      ])
+    );
+    expect(graphOf(staged, { declared: undefined, installed: [] }).stages[0]?.roles).toEqual([
+      { role: '@judge', fallback: 'medium' },
+      { role: '@reviewer', fallback: 'large' },
+      { role: '@writer', fallback: 'large' },
+    ]);
+  });
+
   test('an asks arrow is active with its file and declared, inactive without one', () => {
     const asks = (workflow: string, from: string, settled: 'answered' | 'withdrawn') =>
       packAsksSettledBindingSchema.parse({
@@ -169,6 +306,8 @@ describe('a pack graph', () => {
         {
           file: '/home/triggers/answered.json',
           sourceInstanceId: 'answered',
+          resource: 'r',
+          capacity: null,
           from: { stage: 'a', settled: 'answered' },
           launchWorkflow: 'a',
           linked: null,
@@ -201,6 +340,8 @@ describe('a pack graph', () => {
         {
           file: '/home/triggers/replan.json',
           sourceInstanceId: 'replan',
+          resource: 'r',
+          capacity: null,
           from: { stage: 'a', settled: 'answered', option: 'replan' },
           launchWorkflow: 'b',
           linked: null,
@@ -215,6 +356,35 @@ describe('a pack graph', () => {
     ]);
   });
 
+  test("a stage serves its asks' options, each with its label, then the reserved other", () => {
+    const asking = wf('a', [decide(['ready'])], {
+      returns: 'decide',
+      result: {
+        outcome: 'outcome',
+        asks: 'asks',
+        options: [
+          { id: 'land', label: 'merge it', does: 'Merges it', cost: 'None' },
+          { id: 'drop', does: 'Drops it', cost: 'The work' },
+        ],
+      },
+    });
+    const graph = graphOf(stages(asking, stage('b', ['done'], true)), {
+      declared: undefined,
+      installed: [],
+    });
+    expect(graph.stages.find(s => s.name === 'a')?.options).toEqual([
+      { id: 'land', label: 'merge it', does: 'Merges it', cost: 'None' },
+      { id: 'drop', does: 'Drops it', cost: 'The work' },
+      {
+        id: 'other',
+        label: 'Other',
+        does: 'None of these. The answer text says what to do instead.',
+      },
+    ]);
+    // A stage whose asks write their own options declares none.
+    expect(graph.stages.find(s => s.name === 'b')?.options).toBeNull();
+  });
+
   test('an outcome spelled like a settlement is never matched by an asks arrow', () => {
     const graph = graphOf(stages(stage('a', ['asks:answered'], true), stage('b', ['done'])), {
       declared: { 'b-after-a': runEnded('b', 'a', 'asks:answered') },
@@ -222,6 +392,8 @@ describe('a pack graph', () => {
         {
           file: '/home/triggers/asks.json',
           sourceInstanceId: 'asks',
+          resource: 'r',
+          capacity: null,
           from: { stage: 'a', settled: 'answered' },
           launchWorkflow: 'b',
           linked: null,
@@ -572,7 +744,9 @@ describe('a pack graph', () => {
       ],
     });
 
-    const [reviewed, shadowed] = graph.stages;
+    // Stages come in flow order, so each is found by name.
+    const reviewed = graph.stages.find(stage => stage.workflow === 'review');
+    const shadowed = graph.stages.find(stage => stage.workflow === 'shadow');
     expect(reviewed?.outcome?.values).toEqual([
       { value: 'close', startsNothing: true, ends: true, stops: false },
       { value: 'not_ready', startsNothing: true, ends: false, stops: true },
@@ -616,6 +790,12 @@ describe('a pack graph', () => {
       ...graph,
       loaded: [],
       otherCopies: [],
+      document: null,
+      metricViews: null,
+      groups: [],
+      capacity: [],
+      settings: [],
+      settingsFile: { path: '.archon/packs/chain.yaml', problems: [] },
       laterField: 1,
       stages: graph.stages.map(s => ({ ...s, laterField: true })),
     };
@@ -641,5 +821,36 @@ describe('bindingWorkflowNames', () => {
       asks_settled: { workflow: 'triage', settled: 'answered' },
     });
     expect(bindingWorkflowNames(settled)).toEqual(['build', 'triage']);
+  });
+});
+
+describe("a pack's bindings checked against its manifest", () => {
+  const trackTempRoot = trackTempRoots();
+
+  test('refuse only what the manifest does not list, and nothing without a manifest', async () => {
+    const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'pack-bindings-manifest-')));
+    await mkdir(join(dir, '.pack'));
+    // `plan` is listed though no workflow file exists: loading it is not this rule's business.
+    await writeFile(
+      join(dir, '.pack', 'pack.yaml'),
+      'bindings:\n  plan-after-triage:\n    workflow: plan\n    resource: plan\n    overlap: queue\n    run_ended: { workflow: triage, outcome: done }\n'
+    );
+    expect(await manifestBindingRefusals(dir)).toBeUndefined();
+    await writeFile(
+      join(dir, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'factory',
+        description: 'd',
+        entrypoints: { plan: 'plan/plan.yaml' },
+      })
+    );
+    expect(await manifestBindingRefusals(dir)).toEqual({
+      key: 'factory',
+      refusals: [
+        "Binding 'plan-after-triage' names workflow 'triage', which pack 'factory' does not provide.",
+      ],
+    });
   });
 });

@@ -26,6 +26,7 @@ import { loadConfig } from '@archon/core/config/config-loader';
 import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
 import { loadStoreSelection } from '@archon/core/config/store-selection';
 import * as codebaseDb from '@archon/core/db/codebases';
+import { listSlotOccupancy } from '@archon/core/db/resource-slots';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -40,6 +41,8 @@ import {
   type RunEndedBinding,
   runEndedTriggerCheck,
 } from '@archon/core/workflows/run-ended';
+import { packWakeInputProblems } from '@archon/core/workflows/declared-inputs';
+import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { providerRegistry } from '@archon/providers';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import {
@@ -51,15 +54,16 @@ import {
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import {
-  nearestPackBindings,
   type PackCopy,
   packCopies,
   type PackGraph,
-  type PackGraphLink,
+  bindingWorkflowNames,
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
+import { packBindingScope, packBindingWorkflowMissing } from '@archon/workflows/pack-binding-rule';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
+import { arrowText, groupLines } from './pack-graph-text';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type {
@@ -68,6 +72,7 @@ import type {
 } from '@archon/workflows/schemas/binding-input-source';
 import { loadWorkflows } from './workflow-list';
 import { loadedLine, otherCopyLine } from './pack-copies';
+import { checkReplacedFiles } from './pack-replaced-files';
 
 export interface PackBindingsOptions {
   /** The checkout the bindings launch in, and where the pack is discovered from. */
@@ -300,7 +305,7 @@ function generate(
             selector: { ...kinded.binding.event, repository: target.repo },
             inputMapping: fields,
             ...(kinded.binding.item ? { item: kinded.binding.item } : {}),
-            ...wakeDocument(kinded.binding.wake, pack, id, waitInput),
+            ...wakeDocument(kinded.binding.wake, pack, id, waitInput, fromRun),
           },
         },
       ];
@@ -336,12 +341,17 @@ function limitFields(
   };
 }
 
-/** The plugin's `wake` for a binding that declares one, with its workflow's installed name. */
+/**
+ * The plugin's `wake` for a binding that declares one, with its workflow's installed name.
+ * The inputs read from the waiting run and its item (`fromRun`) go into `wake.inputs`,
+ * since the engine maps them when it matches the wait.
+ */
 function wakeDocument(
   wake: PackEventBinding['wake'],
   pack: DeclaredPack,
   id: string,
-  input: string | undefined
+  input: string | undefined,
+  fromRun: Record<string, RunInputSource>
 ): Record<string, unknown> {
   if (wake === undefined) return {};
   return {
@@ -350,6 +360,8 @@ function wakeDocument(
       wait: wake.wait,
       about: { field: wake.about },
       ...(input === undefined ? {} : { input }),
+      ...(Object.keys(fromRun).length > 0 ? { inputs: fromRun } : {}),
+      ...(wake.checkout === undefined ? {} : { checkout: wake.checkout }),
     },
   };
 }
@@ -403,8 +415,10 @@ interface DeclaredPack {
   key: string;
   copies: Awaited<ReturnType<typeof packCopies>>;
   bindings: Readonly<Record<string, PackBinding>>;
-  /** The pack's dispatchable workflow names, as a binding must spell them. */
+  /** The workflow names a binding may name (`packBindingScope`), as it must spell them. */
   workflowNames: readonly string[];
+  /** The pack's workflows as loaded, for what a binding reads of them. */
+  workflows: readonly ResolvedWorkflow[];
 }
 
 async function findPack(
@@ -415,8 +429,8 @@ async function findPack(
   const discovered = await loadWorkflows(cwd);
   const workflows = packWorkflows(discovered, packKey, cwd);
   const copies = await packCopies(discovered, liveSourceRoots(cwd), packKey);
-  const bindings = nearestPackBindings(workflows);
-  if (bindings === undefined)
+  const scope = await packBindingScope(liveSourceRoots(cwd), workflows);
+  if (scope === undefined)
     throw new Error(
       [
         `Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`,
@@ -426,8 +440,9 @@ async function findPack(
   return {
     key: packKey,
     copies,
-    bindings,
-    workflowNames: workflows.map(entry => entry.workflow.name),
+    bindings: scope.bindings,
+    workflowNames: scope.names,
+    workflows: workflows.map(entry => entry.workflow),
   };
 }
 
@@ -446,10 +461,7 @@ function selectIds(pack: DeclaredPack, only: string | undefined): string[] {
 /** An installed pack's workflow is named `owner/plugin:<name>`; a binding must use that name. */
 function workflowNameFor(pack: DeclaredPack, id: string, declared: string): string {
   const name = packWorkflowName(pack.workflowNames, declared);
-  if (name === undefined)
-    throw new Error(
-      `Binding '${id}' names workflow '${declared}', which pack '${pack.key}' does not provide.`
-    );
+  if (name === undefined) throw new Error(packBindingWorkflowMissing(pack.key, id, declared));
   return name;
 }
 
@@ -645,13 +657,20 @@ async function assertSiblingFiles(
   }
 }
 
-async function assertNothingOverwritten(generated: readonly Generated[]): Promise<void> {
-  const present: string[] = [];
-  for (const item of generated) if (await exists(item.path)) present.push(item.path);
-  if (present.length === 0) return;
-  throw new Error(
-    `Refusing to overwrite ${present.join(', ')}. Nothing was written. Pass --force to replace ${present.length === 1 ? 'it' : 'them'}.`
-  );
+/**
+ * A wake binding's `{ input }` reads a run of its `wake.workflow`, so a name that workflow
+ * does not declare would map nothing on every start: refused here, before an event arrives.
+ */
+function assertWakeInputs(id: string, binding: PackBinding, pack: DeclaredPack): void {
+  const problems = packWakeInputProblems(binding, pack.workflows)?.problems ?? [];
+  if (problems.length > 0)
+    throw new Error(
+      [
+        'Wake bindings have problems:',
+        ...problems.map(problem => `  Binding '${id}': ${problem}`),
+        'Nothing was written.',
+      ].join('\n')
+    );
 }
 
 /** Every selected binding, generated and checked before the first file is written. */
@@ -667,6 +686,9 @@ async function generateChecked(
     const binding = pack.bindings[id];
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
+    // An unprovided workflow is refused before its inputs are read, as validate refuses it.
+    for (const name of bindingWorkflowNames(binding)) workflowNameFor(pack, id, name);
+    assertWakeInputs(id, binding, pack);
     for (const item of generate(id, binding, pack, target)) {
       const check = assertLoadable(item, target);
       if (check !== undefined && 'runEnded' in check) ended.push({ id, check });
@@ -690,7 +712,7 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
     target.discoveryCwd !== undefined
   );
   const generated = await generateChecked(pack, selectIds(pack, options.only), target);
-  if (!options.force) await assertNothingOverwritten(generated);
+  await checkReplacedFiles(generated, options.force === true);
 
   await mkdir(target.outDir, { recursive: true });
   for (const item of generated) {
@@ -731,31 +753,6 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
 const GRAPH_USAGE =
   'Usage: archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]';
 
-function arrowText(arrow: PackGraph['arrows'][number]): string {
-  const problems = arrow.active ? arrow.installed.problems : [];
-  const state = !arrow.active
-    ? 'declared, inactive'
-    : problems.length > 0
-      ? `active, refused: ${problems.join('; ')}`
-      : 'active';
-  const declared = arrow.declared?.problems ?? [];
-  const note = declared.length > 0 ? ` (binding ${declared.join('; ')})` : '';
-  const from =
-    'outcome' in arrow.from
-      ? `${arrow.from.stage}:${arrow.from.outcome}`
-      : `${arrow.from.stage}:asks(${arrow.from.settled}${arrow.from.option === undefined ? '' : `: ${arrow.from.option}`})`;
-  return `  ${from} -> ${arrow.to}${arrow.linked ? linkText(arrow.linked) : ''} [${state}]${note}`;
-}
-
-/** ` linked <kind> <holder>`, then the items it names and each input read from an entry. */
-function linkText(link: PackGraphLink): string {
-  const parts = [`linked ${link.kind} ${link.holder}`];
-  if (link.items !== undefined) parts.push(`items ${link.items}`);
-  for (const [target, pointer] of Object.entries(link.entries))
-    parts.push(`${target} from entry ${pointer}`);
-  return ` ${parts.join(', ')}`;
-}
-
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */
 function graphText(graph: PackGraph, source: string, explicitSource: boolean): string {
   const lines = [
@@ -766,6 +763,7 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
     const values = stage.outcome?.values.map(v => v.value).join(', ');
     lines.push(`  ${stage.name}${values === undefined ? ' (no outcome)' : `: ${values}`}`);
   }
+  lines.push(...groupLines(graph));
   lines.push('', `Arrows: ${String(graph.arrows.length)}`);
   for (const arrow of graph.arrows) lines.push(arrowText(arrow));
   // `stops` counts an arrow to an observing stage as starting no step.
@@ -797,6 +795,7 @@ async function packGraph(packKey: string, options: PackBindingsOptions): Promise
       loadConfig,
       providers: providerRegistry,
       triggersDirectory: getTriggersPath,
+      slotOccupancy: listSlotOccupancy,
       projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
       projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
     },

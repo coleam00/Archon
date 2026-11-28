@@ -143,8 +143,10 @@ export function qualifyWorkflowResources(
 /**
  * Rewrite an installed pack workflow's references to workflows of the same pack from
  * their authored `name:` to their qualified discovery identity: `include:` targets
- * (a fan-out's too) and `workflow:` targets. Public identities take precedence over
- * authored aliases, including other packs' entrypoints and targets that failed to load.
+ * (a fan-out's too), `workflow:` targets, and inputs' `result_of`, since a run is stored
+ * under the qualified name. A name the pack does not hold is left as written. Public
+ * identities take precedence over authored aliases, including other packs' entrypoints
+ * and targets that failed to load.
  * Cross-pack includes still fail in the pack's own name map; child runs resolve
  * through the catalog.
  *
@@ -186,5 +188,8 @@ export function qualifyPackReferences(
     }
   };
   visit(workflow.nodes);
+  for (const spec of Object.values(workflow.inputs ?? {})) {
+    if (spec.result_of !== undefined) spec.result_of = resolve(spec.result_of) ?? spec.result_of;
+  }
   return { supportChildren, ambiguousReferences: [...ambiguousReferences] };
 }

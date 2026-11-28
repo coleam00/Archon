@@ -9,6 +9,7 @@ import type {
 } from '../schemas';
 import { isIncludeDirective, isLoopGroupNode } from '../schemas';
 import { collectLoopGroupSinkWarnings } from '../loader/parse-warnings';
+import { withoutDisplayProblems } from '../loader/display-contract';
 import { expandWorkflowIncludes } from '../include-expander';
 import { attachHomeMcpDirectory } from '../compiled-command';
 import { resolveCatalogCommandContents } from './command-scan';
@@ -148,8 +149,11 @@ function expandedWorkflow(
   // expansion, so it is reported here exactly once too.
   const warnings = [...parseWarnings];
   collectLoopGroupSinkWarnings(expanded.nodes, warnings);
+  // The steps `display:` names are only known once includes are flattened (`display-contract.ts`).
+  const words = withoutDisplayProblems(expanded);
+  for (const warning of words.warnings) if (!warnings.includes(warning)) warnings.push(warning);
   return {
-    workflow: expanded,
+    workflow: words.workflow,
     source,
     // Omitted rather than empty, matching the `errors` field on the same
     // surfaces: presence alone is the signal.

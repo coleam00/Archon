@@ -27,6 +27,7 @@ function run(workflow: string, startedAt: string, outcome: string | null = null)
 function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
   return {
     item: { id: key, projectKey: 'acme/web', key },
+    standing: { runId: runs.at(-1)?.id ?? null, state: 'resting', pack: null },
     runs,
     queued: [],
     skipped: [],
@@ -39,8 +40,10 @@ function read(key: string, runs: ItemRun[], mergedAt: string | null): ItemRead {
     answers: [],
     links: [],
     landing: null,
+    priority: null,
     ended: null,
     workOrder: null,
+    dependsOn: [],
     merged:
       mergedAt === null
         ? null

@@ -150,6 +150,88 @@ describe('resource start receipt origin in run metadata', () => {
   });
 });
 
+describe('persisted records a newer binary may have written', () => {
+  test('read with a field this binary does not know; a missing field still refuses', async () => {
+    const {
+      CHECKOUT_HANDOFF_METADATA_KEY,
+      readAsksCheckout,
+      readCheckoutHandoff,
+      readResourceStartOrigin,
+    } = await import('./schemas/resource-start');
+    const { readOwnedWorktree } = await import('./schemas/run-metadata');
+    const uuid = '0b6f3c1e-4a5d-4f6e-9a7b-1c2d3e4f5a6b';
+    const handoff = { runId: 'run', branch: 'main', commit: 'a'.repeat(40) };
+    const later = { later: 1 };
+    const handoffMetadata = { ...handoff, lane: 'continue' as const };
+    const run = (value: unknown) => ({
+      id: 'run',
+      metadata: { [CHECKOUT_HANDOFF_METADATA_KEY]: value },
+    });
+
+    expect(readCheckoutHandoff(run({ ...handoffMetadata, ...later }))).toEqual(handoffMetadata);
+    expect(
+      readAsksCheckout({
+        id: 'run',
+        metadata: {
+          asks_checkout: { handoff: { ...handoff, ...later }, worktree: '/w', ...later },
+        },
+      })
+    ).toEqual({ handoff, worktree: '/w' });
+    expect(
+      readResourceStartOrigin({ resource_start: { receiptId: uuid, bindingId: 'b', ...later } })
+    ).toEqual({
+      receiptId: uuid,
+      bindingId: 'b',
+    });
+    expect(
+      readOwnedWorktree({ owned_worktree: { envId: 'e', creationId: uuid, ...later } })
+    ).toEqual({
+      envId: 'e',
+      creationId: uuid,
+    });
+
+    const { commit: _, ...missingCommit } = handoffMetadata;
+    expect(() => readCheckoutHandoff(run(missingCommit))).toThrow(
+      `invalid ${CHECKOUT_HANDOFF_METADATA_KEY}`
+    );
+  });
+
+  test('a record that mixes two variants is wrong, not newer', async () => {
+    const { readAsksCheckout } = await import('./schemas/resource-start');
+    const handoff = { runId: 'run', branch: 'main', commit: 'a'.repeat(40) };
+    expect(
+      readAsksCheckout({
+        id: 'run',
+        metadata: { asks_checkout: { handoff, worktree: '/w', refused: 'gone' } },
+      })
+    ).toEqual({ refused: 'gone' });
+    // A refusal key with no valid reason is an invalid record, never the hand-off beside it.
+    for (const refused of ['', null, false])
+      expect(
+        readAsksCheckout({
+          id: 'run',
+          metadata: { asks_checkout: { handoff, worktree: '/w', refused } },
+        })
+      ).toEqual({ refused: "run 'run' has an invalid recorded asks_checkout" });
+    const launch = (isolation: object) => ({
+      version: 2,
+      run: {
+        id: crypto.randomUUID(),
+        workflow_name: 'w',
+        codebase_id: 'c',
+        user_message: '',
+        metadata: {},
+      },
+      execution: { cwd: '/project', conversationId: 'conversation', isolation },
+    });
+    expect(preparedWorkflowLaunchSchema.safeParse(launch({ kind: 'in-place' })).success).toBe(true);
+    expect(
+      preparedWorkflowLaunchSchema.safeParse(launch({ kind: 'in-place', branch: 'feature' }))
+        .success
+    ).toBe(false);
+  });
+});
+
 describe('item mapping', () => {
   test('makes a key of text or a number and refuses any other value, naming the field', async () => {
     const { mappedItemKey } = await import('./schemas/resource-start');

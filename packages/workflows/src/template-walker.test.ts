@@ -32,6 +32,8 @@ const HOOK_FIELD_CLASSIFICATIONS = Object.fromEntries(
 const STRING_FIELD_CLASSIFICATIONS = {
   id: { kind: 'literal', reason: 'Node identifier anchors graph edges and output references' },
   description: { kind: 'literal', reason: 'Node documentation is not execution input' },
+  'display.label': { kind: 'literal', reason: 'Display words are served to people, not run' },
+  'display.text': { kind: 'literal', reason: 'Display words are served to people, not run' },
   'depends_on.*': { kind: 'literal', reason: 'Dependency entries are node identifiers' },
   when: { kind: 'template', slots: ['when'] },
   trigger_rule: { kind: 'literal', reason: 'Trigger rule is a scheduling policy enum' },

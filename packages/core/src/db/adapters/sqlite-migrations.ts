@@ -178,6 +178,12 @@ const sqliteMigrations: readonly Migration[] = [
     failureEvent: 'db.sqlite_migration_node_session_model_column_failed',
     apply: addNodeSessionModelColumn,
   },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
+    failureEvent: 'db.sqlite_migration_item_wait_subject_columns_failed',
+    apply: addItemWaitSubjectColumns,
+  },
   { kind: 'required', scope: 'schema', apply: alignEventArchiveColumns },
 ];
 
@@ -504,6 +510,9 @@ function addStartLimitColumns(db: Database): void {
 
 // A receipt records the key a start named; its start request and the run point at the item.
 function addItemColumns(db: Database): void {
+  if (!columnNames(db, 'remote_agent_items').has('title')) {
+    db.run('ALTER TABLE remote_agent_items ADD COLUMN title TEXT');
+  }
   if (!columnNames(db, 'remote_agent_start_receipts').has('item_key')) {
     db.run('ALTER TABLE remote_agent_start_receipts ADD COLUMN item_key TEXT');
   }
@@ -558,6 +567,15 @@ function addNodeSessionModelColumn(db: Database): void {
   if (!columnNames(db, 'remote_agent_workflow_node_sessions').has('model')) {
     db.run('ALTER TABLE remote_agent_workflow_node_sessions ADD COLUMN model TEXT');
   }
+}
+
+// The issue or pull request a wait names; see migrations/000_combined.sql.
+function addItemWaitSubjectColumns(db: Database): void {
+  const columns = columnNames(db, 'remote_agent_item_waits');
+  if (!columns.has('subject_kind'))
+    db.run('ALTER TABLE remote_agent_item_waits ADD COLUMN subject_kind TEXT');
+  if (!columns.has('subject_number'))
+    db.run('ALTER TABLE remote_agent_item_waits ADD COLUMN subject_number INTEGER');
 }
 
 // The archive trigger copies an event row by position, and CREATE TABLE AS ran

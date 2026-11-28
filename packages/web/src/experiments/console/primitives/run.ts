@@ -200,7 +200,7 @@ export function normalizeOrigin(s: string | null | undefined): RunOrigin {
 
 function readCost(meta: WorkflowRunMetadata | undefined): number | null {
   if (meta === undefined) return null;
-  const raw = meta.total_cost_usd;
+  const raw: number | undefined = meta.total_cost_usd;
   return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : null;
 }
 
@@ -346,6 +346,8 @@ export interface RunsAttention {
   answerRefusals: AttentionResponse['answerRefusals'];
   /** The id of every item the list holds open, whether a run or an ask holds it. */
   itemIds: ReadonlySet<string>;
+  /** The ref of every item the list holds, as the attention stream names it. */
+  refs: ReadonlySet<string>;
   degraded: NonNullable<AttentionResponse['degraded']>;
 }
 

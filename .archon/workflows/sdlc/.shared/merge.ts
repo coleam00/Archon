@@ -255,6 +255,8 @@ export interface BaseFacts {
 export interface EventWait {
   readonly event: 'checks';
   readonly about: string;
+  /** A check names only a commit, never an issue or pull request. */
+  readonly subject: null;
   readonly within_minutes: number;
 }
 
@@ -274,7 +276,9 @@ const WAIT_MINUTES = 60;
  */
 export function eventWaits(facts: PrFacts, ci: CiMode, reran: boolean): EventWait[] {
   if (ci === 'forge' && (facts.checks.state === 'pending' || reran)) {
-    return [{ event: 'checks', about: facts.head_revision, within_minutes: WAIT_MINUTES }];
+    return [
+      { event: 'checks', about: facts.head_revision, subject: null, within_minutes: WAIT_MINUTES },
+    ];
   }
   return [];
 }

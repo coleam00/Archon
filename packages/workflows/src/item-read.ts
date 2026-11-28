@@ -4,10 +4,10 @@
  * on the item, each oldest first, and the links from and to it. Its starts still waiting
  * are listed with the queue order recorded for them, and its refused starts beside them. A
  * start waiting or refused because another run of its workflow works the item names that
- * run (`item-hold`). It computes no stage and stores nothing; the one state it derives is a
- * work order's, from its members (`work-order.ts`).
+ * run (`item-hold`). It computes no stage and stores nothing. Two states are derived here on
+ * every read: where the item stands (`standing`), so each reader places the item the same
+ * way, and a work order's, from its members (`work-order.ts`).
  */
-import { askItemRef } from './attention-item-refs';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import {
@@ -15,7 +15,6 @@ import {
   compareAge,
   isHeldByRun,
   listAttentionQueue,
-  type AttentionQueueItem,
   type AttentionQueueSource,
 } from './attention-queue';
 import {
@@ -25,6 +24,11 @@ import {
   type IdentifiedAttentionDegraded,
 } from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
+import {
+  heldStartUnplacedSchema,
+  itemHeldStartSchema,
+  unplacedHeldStarts,
+} from './schemas/item-held-start';
 import { operatorPause, operatorPauseSchema } from './schemas/operator-pause';
 import { itemLinkDegradedSchema, itemLinkKindSchema, type ItemLink } from './schemas/item-link';
 import { itemRulingDegradedSchema, itemRulingSchema } from './schemas/item-ruling';
@@ -34,14 +38,16 @@ import {
   type ItemMergeDegraded,
 } from './schemas/item-merge';
 import { itemLandingUnresolvedSchema, resolvedItemLandingSchema } from './schemas/item-landing';
+import { itemPrioritySchema } from './schemas/item-priority';
 import { itemEndDegradedSchema, itemEndSchema } from './schemas/item-end';
 import { readHoldingItemEnd } from './item-end';
 import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
+import { itemDependencySchema, readDependsOn } from './item-depends-on';
 import { readWorkOrder } from './work-order';
 import { workOrderMemberUnreadableSchema, workOrderSchema } from './schemas/work-order';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { parseRunUsage } from './schemas/run-usage';
-import { chosenAskOption, type StoredItemAsk } from './schemas/item-ask';
+import { itemWaitSubjectSchema } from './schemas/item-wait';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
   attentionAnswererSchema,
@@ -78,6 +84,9 @@ import { changeSizeSchema } from './schemas/change-size';
 import { readChangeSize } from './change-size';
 import { runPack, runPackSchema } from './run-pack';
 import { itemStartLimitSchema, type LimitBindingsReader, withLimitBindings } from './start-limit';
+import { readLinked } from './item-parts';
+import { itemStanding, itemStandingSchema, type ItemStanding } from './item-standing';
+import { askAnswers, itemAnswer } from './item-answers';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -190,21 +199,6 @@ export const itemSkippedStartSchema = z.object({
 export type ItemSkippedStart = z.infer<typeof itemSkippedStartSchema>;
 
 /**
- * A start on the item from a trigger's binding that is not yet prepared, so it has no
- * request or run. Under the install hold it waits for the lift; otherwise for the next
- * drain of its host (`hostId`), which prepares it and admits, queues or skips it by its
- * binding's `overlap`. `workflow` is null when the stored binding does not read.
- */
-export const itemHeldStartSchema = z.object({
-  receiptId: z.string(),
-  bindingId: z.string(),
-  hostId: z.string().nullable(),
-  workflow: z.string().nullable(),
-  receivedAt: z.string(),
-});
-export type ItemHeldStart = z.infer<typeof itemHeldStartSchema>;
-
-/**
  * Where an answer was recorded. A field the event row does not carry is null, so an older
  * row still reads as an answer with its run, node and time.
  */
@@ -288,6 +282,7 @@ export const itemAnswerKindSchema = z.enum({
 export const itemOpenWaitSchema = z.object({
   event: z.string(),
   about: z.string(),
+  subject: itemWaitSubjectSchema.nullable(),
   workflow: z.string(),
   runId: z.string(),
   waitingSince: z.string().datetime(),
@@ -318,26 +313,31 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * `degraded` names each part that could not be read: one of the item's own runs, a paused
  * run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), a link (`link_unreadable`, by `linkId`), or the
- * merge (`merge_unreadable`), or where the item lands (`landing_unresolved`). The rest
+ * merge (`merge_unreadable`), or where the item lands (`landing_unresolved`), or a held
+ * start naming its key that could not be placed in a project (`held_start_unplaced`). The rest
  * still reads. `merged` is the merge the forge reported for the item's change, recorded
  * once; null while none is recorded or when its row could not be read. `landing` is the
  * branch a fresh run on the item is cut from and proposes against, and where it came from:
  * the item's own record, or the nearest item it is `part_of`. Null when neither records
  * one, or when it cannot be resolved. The read does not check that the branch is on the
- * remote; a run does when it starts. `ended` is the operator's end of the item while it
+ * remote; a run does when it starts. `priority` says the item's queued starts go ahead of
+ * ordinary ones (`schemas/item-priority.ts`): its own, or from the items it is `part_of`;
+ * null when it has none. `ended` is the operator's end of the item while it
  * holds (`schemas/item-end.ts`): the item is at rest until a run on it starts or resumes
  * after the end, or a start waits on it in `queued` or `held`. Null when the item was
  * never ended, the end no longer holds, or its row could not be read (`end_unreadable`, by
  * `endId`). `workOrder`: see `WorkOrder`; null when nothing is `part_of` the item, and a
- * member part that could not be read is `member_unreadable`. `waits` are what the item waits for outside Archon:
+ * member part that could not be read is `member_unreadable`. `dependsOn`: see `ItemDependency`. `waits` are what the item waits for outside Archon:
  * the open waits completed runs left on it (`returns.waits`), each with when it opened and
  * fell due, and `overdue` once that time has passed. An overdue set is also among
  * `questions`. `startLimits` are the start limits bindings counted on the item, each with
  * its count (`startLimitStanding`) and the trigger files under it; at `left: 0` the next
- * start is refused, and the refusal is on its receipt (`trigger inspect`).
+ * start is refused, and the refusal is on its receipt (`trigger inspect`). `standing` is
+ * where the item stands: see `itemStandingSchema`.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
+  standing: itemStandingSchema,
   runs: z.array(itemRunSchema),
   queued: z.array(itemQueuedStartSchema),
   skipped: z.array(itemSkippedStartSchema),
@@ -351,8 +351,10 @@ export const itemReadSchema = z.object({
   links: z.array(itemReadLinkSchema),
   merged: itemMergeSchema.nullable(),
   landing: resolvedItemLandingSchema.nullable(),
+  priority: itemPrioritySchema.nullable(),
   ended: itemEndSchema.nullable(),
   workOrder: workOrderSchema.nullable(),
+  dependsOn: z.array(itemDependencySchema),
   degraded: z.array(
     z.discriminatedUnion('reason', [
       attentionDegradedSchema,
@@ -362,6 +364,7 @@ export const itemReadSchema = z.object({
       itemLandingUnresolvedSchema,
       itemEndDegradedSchema,
       workOrderMemberUnreadableSchema,
+      heldStartUnplacedSchema,
     ])
   ),
 });
@@ -376,6 +379,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listItemRulings'
       | 'getItemMerge'
       | 'getItemLanding'
+      | 'getItemPriority'
       | 'getHoldingItemEnd'
       | 'listItemLinks'
       | 'listItemAsks'
@@ -387,6 +391,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'readItemStartLimits'
       | 'getInstallHold'
       | 'listHeldItemStarts'
+      | 'listAllHeldItemStarts'
       | 'listItemStarts'
       | 'getRunLimit'
     >;
@@ -533,37 +538,6 @@ async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly 
   };
 }
 
-function field<T>(schema: z.ZodType<T>, value: unknown): T | null {
-  const parsed = schema.safeParse(value);
-  return parsed.success ? parsed.data : null;
-}
-
-function itemAnswer(row: WorkflowEventRow): ItemAnswer {
-  const { data } = row;
-  const base = {
-    runId: row.workflow_run_id,
-    node: row.step_name,
-    occurrence: field(z.string(), data.occurrence),
-    at: row.created_at,
-    via: field(recordSurfaceSchema, data.via),
-  };
-  if (row.event_type === 'wait_answered')
-    return {
-      kind: 'attention',
-      ...base,
-      answer: field(attentionAnswerSchema, data.answer),
-      by: field(attentionAnswererSchema, data.by),
-      fromRun: field(attentionAnsweringRunSchema, data.fromRun),
-    };
-  return {
-    kind: 'gate',
-    ...base,
-    decision: field(z.string(), data.decision),
-    // Approve and respond record `comment`; reject records `reason`.
-    text: field(z.string(), data.comment) ?? field(z.string(), data.reason),
-  };
-}
-
 function readLink(itemId: string, link: ItemLink): ItemReadLink {
   const { from, to, ...rest } = link;
   // A link joins two different items, so exactly one side is this item.
@@ -598,58 +572,6 @@ function distinctByRun(reports: readonly AttentionDegraded[]): AttentionDegraded
   );
 }
 
-/** An answered or withdrawn ask as an entry of the item's answers; null while it is open or once replaced. */
-function askAnswer({ id, runId, ask, closed }: StoredItemAsk): ItemAnswer | null {
-  if (closed === null || closed.as === 'replaced') return null;
-  const answer = closed.as === 'answered' ? closed.answer : null;
-  return {
-    kind: 'ask',
-    runId,
-    node: null,
-    occurrence: null,
-    at: closed.act.at,
-    via: closed.act.via,
-    ref: askItemRef(id),
-    question: ask.question,
-    answer,
-    chosen: answer === null ? null : (chosenAskOption(ask, answer) ?? null),
-    withdrawn: answer === null,
-    by: closed.act.by,
-    fromRun: closed.act.fromRun,
-  };
-}
-
-/**
- * The answers and settled sets the item's asks hold: one entry per answered or withdrawn
- * ask, and one `asks_settled` per set whose asks all closed that way and all read, at its
- * last close. `unreadable` names the sets with a row that could not be read: any of those
- * rows may be an open ask, so the read cannot say the set settled.
- */
-function askAnswers(asks: readonly StoredItemAsk[], unreadable: ReadonlySet<string>): ItemAnswer[] {
-  const sets = new Map<string, StoredItemAsk[]>();
-  for (const ask of asks) sets.set(ask.runId, [...(sets.get(ask.runId) ?? []), ask]);
-  return [...sets].flatMap(([runId, set]) => {
-    const closes = set.map(askAnswer).filter(answer => answer?.kind === 'ask');
-    const [first] = closes;
-    if (first === undefined || closes.length < set.length || unreadable.has(runId)) return closes;
-    const answered = closes.filter(close => !close.withdrawn).length;
-    const settled: ItemAnswer = {
-      kind: 'asks_settled',
-      runId,
-      node: null,
-      occurrence: null,
-      at: closes.reduce(
-        (last, close) => (Date.parse(close.at) > Date.parse(last) ? close.at : last),
-        first.at
-      ),
-      via: null,
-      answered,
-      withdrawn: closes.length - answered,
-    };
-    return [...closes, settled];
-  });
-}
-
 /** Read the item `key` names in project `projectKey`; null when there is no such item. */
 export async function readItem(
   source: ItemReadSource,
@@ -658,19 +580,31 @@ export async function readItem(
 ): Promise<ItemRead | null> {
   const resolved = await readItemRuns(source.store, projectKey, key);
   if (resolved === null) return null;
-  return assembleItemRead(source, resolved.item, await readItemQueue(source));
+  const placed = await placeItem(source, resolved.item, await readInstallFacts(source));
+  return placed === null ? null : placed.read();
 }
-
-type ItemQueueRead = ReturnType<typeof splitAttentionRead<AttentionQueueItem>>;
 
 /**
- * The attention queue as an item read takes it, read once for any number of items. A
- * holder whose owner is gone is reported on the start held behind it, not as a question.
+ * What an item read takes from the install as a whole, read once for any number of items:
+ * the install hold, the unprepared binding starts, the run limit and the attention queue.
+ * A holder whose owner is gone is reported on the start held behind it, not as a question.
  */
-export async function readItemQueue(source: ItemReadSource): Promise<ItemQueueRead> {
-  // The one queue reader, so a question here reads as `workflow attention` lists it.
-  return splitAttentionRead(await listAttentionQueue({ ...source, ownerLost: undefined }));
+export async function readInstallFacts(source: ItemReadSource) {
+  // Held starts before any item's queued starts and runs, the order a start moves through:
+  // one that moves on between two reads shows twice, never in neither.
+  const hold = await source.store.getInstallHold();
+  const held = await source.store.listAllHeldItemStarts();
+  return {
+    hold,
+    held,
+    runLimit: await source.store.getRunLimit(),
+    // The one queue reader, so a question here reads as `workflow attention` lists it.
+    queue: splitAttentionRead(await listAttentionQueue({ ...source, ownerLost: undefined })),
+    // Shared by every placement of this read, so a linked item is placed once (`readLinked`).
+    linkedDone: new Map<string, boolean>(),
+  };
 }
+type InstallFacts = Awaited<ReturnType<typeof readInstallFacts>>;
 
 /** Where the item lands, through the resolver a run uses; a resolution error is reported, not thrown. */
 async function readLanding(source: ItemReadSource, item: WorkflowItem) {
@@ -691,59 +625,87 @@ async function readLanding(source: ItemReadSource, item: WorkflowItem) {
   }
 }
 
-/** The end that holds on the item; an unreadable one is reported, not thrown. */
-async function readEnd(source: ItemReadSource, itemId: string) {
-  const end = await readHoldingItemEnd(source.store, itemId);
-  if (end !== null && 'type' in end) return { ended: null, degraded: [end] };
-  return { ended: end, degraded: [] };
-}
+type EndRead = Awaited<ReturnType<typeof readHoldingItemEnd>>;
 
-/** The facts on the item itself: rulings, links, merge, landing, end, and its work order. */
-async function readItemFacts(source: ItemReadSource, item: WorkflowItem) {
+/**
+ * The facts on the item itself: rulings, links, merge, landing, priority, end, work
+ * order, dependsOn.
+ * The merge, the links and the end are read by `placeItem`, which needs them to place the
+ * item, and passed in so each is read once.
+ */
+async function readItemFacts(
+  source: ItemReadSource,
+  item: WorkflowItem,
+  merge: Awaited<ReturnType<ItemReadSource['store']['getItemMerge']>>,
+  linkReads: Awaited<ReturnType<ItemReadSource['store']['listItemLinks']>>,
+  end: EndRead
+) {
   const itemId = item.id;
   const rulingReads = await source.store.listItemRulings(itemId);
   const unreadableRulings = rulingReads.filter(read => 'type' in read);
   const rulings = rulingReads.flatMap(read => ('type' in read ? [] : [read]));
-  const linkReads = await source.store.listItemLinks(itemId);
   const unreadableLinks = linkReads.filter(read => 'type' in read);
   const links = linkReads.flatMap(read => ('type' in read ? [] : [readLink(itemId, read)]));
-  const merge = await source.store.getItemMerge(itemId);
   const unreadableMerge: ItemMergeDegraded[] = merge !== null && 'type' in merge ? [merge] : [];
   const landing = await readLanding(source, item);
-  const end = await readEnd(source, itemId);
+  // An unreadable end is reported, not thrown.
+  const unreadableEnd = end !== null && 'type' in end ? [end] : [];
   const workOrder = await readWorkOrder(source.store, item, linkReads);
   return {
     rulings,
     links,
     merged: merge !== null && !('type' in merge) ? merge : null,
     landing: landing.landing,
-    ended: end.ended,
+    priority: await source.store.getItemPriority(itemId),
+    ended: end !== null && !('type' in end) ? end : null,
     workOrder: workOrder.workOrder,
+    dependsOn: await readDependsOn(source.store, itemId, linkReads),
     degraded: [
       ...unreadableRulings,
       ...unreadableMerge,
       ...unreadableLinks,
       ...landing.degraded,
-      ...end.degraded,
+      ...unreadableEnd,
       ...workOrder.degraded,
     ],
   };
 }
 
 /**
- * Build the read of an item against one read of the attention queue, so a reader of many
- * items reads the queue once. Null when the item has gone from the store.
+ * Where the item stands, from the few reads that decide it, and `read` for the rest of the
+ * item. A reader of many items that keeps only some of them (`readItemWindow` with `open`)
+ * reads the rest of those alone. Null when the item has gone from the store.
  */
-export async function assembleItemRead(
+export async function placeItem(
   source: ItemReadSource,
   item: WorkflowItem,
-  queue: ItemQueueRead
-): Promise<ItemRead | null> {
-  // Held starts first, then queued starts, then the runs, the order a start moves through:
-  // one that moves on between two reads shows twice, never in neither. An admitted start
-  // shows in both queued and runs (its run id is its request id) and is listed once as a run.
-  const hold = await source.store.getInstallHold();
-  const held = await source.store.listHeldItemStarts(item.id);
+  install: InstallFacts,
+  /**
+   * Null for the item itself. For an item linked to it, placed only to ask whether it stands
+   * `done`: the items whose links are being placed, so a cycle of links ends.
+   */
+  visiting: ReadonlySet<string> | null = null
+): Promise<{
+  standing: ItemStanding;
+  /** The run `standing.runId` names, for a reader that orders or filters items by it. */
+  run: WorkflowRun | undefined;
+  read: () => Promise<ItemRead>;
+  /** A cycle of links was cut short in placing it (`readLinked`). */
+  cut: boolean;
+} | null> {
+  const { hold, runLimit } = install;
+  const held = install.held
+    .filter(start => start.projectKey === item.projectKey && start.itemKey === item.key)
+    .map(({ receiptId, bindingId, hostId, workflow, receivedAt }) => ({
+      receiptId,
+      bindingId,
+      hostId,
+      workflow,
+      receivedAt,
+    }));
+  const unplacedHeld = unplacedHeldStarts(install.held, item.key);
+  // An admitted start shows in both queued and runs (its run id is its request id) and is
+  // listed once as a run.
   const waiting = await source.store.listQueuedItemStarts(item.id);
   const found = await readItemRuns(source.store, item.projectKey, item.key);
   if (found === null) return null;
@@ -753,89 +715,129 @@ export async function assembleItemRead(
     ...own.degraded.map(report => report.runId),
     ...found.descendantIds,
   ]);
-  const { values, degraded } = queue;
+  const { values, degraded } = install.queue;
   // An ask no run holds belongs to the item it was left on.
   const questions = values
     .filter(question =>
       isHeldByRun(question) ? tree.has(question.run.id) : question.item?.id === found.item.id
     )
     .sort(compareAge);
-  const events =
-    tree.size === 0
-      ? new Map<string, WorkflowEventRow[]>()
-      : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
-  const { rulings, degraded: factsDegraded, ...facts } = await readItemFacts(source, found.item);
-  const terminalEvents = await completionEvents(source, own.values);
-  const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
-  const answers = [
-    ...[...events.values()].flat().map(itemAnswer),
-    ...rulings,
-    ...askAnswers(asks.values, new Set(asks.degraded.map(report => report.runId))),
-  ]
-    // Stable, so rows that tie on `at` keep their store order: append order within a run,
-    // recording order among rulings, and a set's last answer before its settle.
-    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  const holds = await itemHolds(source, found.item.id, own.values);
-  const runLimit = await source.store.getRunLimit();
-  const startLimits = await source.store.readItemStartLimits(found.item.id);
-  const queued: ItemQueuedStart[] = [];
-  for (const start of waiting.filter(start => !tree.has(start.requestId)))
-    queued.push({
-      ...start,
-      heldBehind: (await holds.queuedHeldBehind(start)) ?? null,
-      waitsForRunLimit: runLimit?.waiting.includes(start.requestId) ?? false,
-    });
-  const skipped: ItemSkippedStart[] = [];
-  for (const start of await source.store.listSkippedItemStarts(found.item.id))
-    skipped.push({
-      requestId: start.requestId,
-      workflow: start.workflow,
-      resource: start.resource,
-      heldBehind: (await holds.skippedHeldBehind(start)) ?? null,
-    });
-  return {
-    item: found.item,
-    runs: await Promise.all(
-      own.values.map(async run =>
-        itemRun(
-          source,
-          run,
-          holds.request(run.id),
-          (await holds.runHeldBehind(run)) ?? null,
-          terminalEvents,
-          startLimits.countedUnder[run.id] ?? null
-        )
-      )
-    ),
-    queued,
-    skipped,
-    hold,
+  const queuedStarts = waiting.filter(start => !tree.has(start.requestId));
+  const waits = (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
+    event: wait.event,
+    about: wait.about,
+    subject: wait.subject,
+    workflow: wait.workflowName,
+    runId: wait.runId,
+    waitingSince: wait.openedAt,
+    deadline: wait.deadlineAt,
+    overdue: Date.parse(wait.deadlineAt) <= Date.now(),
+  }));
+  const merge = await source.store.getItemMerge(found.item.id);
+  const linkReads = await source.store.listItemLinks(found.item.id);
+  // The one rule for whether an end holds. It lists the item's starts only when an end is
+  // recorded, so the batch read stays free of per-item start listing for items never ended.
+  const end = await readHoldingItemEnd(source.store, found.item.id);
+  const { cut, ...linked } = await readLinked(
+    source.store,
+    found.item,
+    linkReads,
+    visiting ?? new Set(),
+    (other, inside) =>
+      placeItem(source, other, install, inside).then(place => ({
+        done: place?.standing.state === 'done',
+        cut: place?.cut ?? false,
+      })),
+    { dependsOn: visiting === null, known: install.linkedDone }
+  );
+  const standing = itemStanding({
+    runs: own.values,
+    queued: queuedStarts,
     held,
-    runLimit: runLimit && { limit: runLimit.limit, live: runLimit.live },
-    startLimits: await withLimitBindings(startLimits.limits, source.limitBindings),
-    waits: (await source.store.listOpenItemWaits(found.item.id)).map(wait => ({
-      event: wait.event,
-      about: wait.about,
-      workflow: wait.workflowName,
-      runId: wait.runId,
-      waitingSince: wait.openedAt,
-      deadline: wait.deadlineAt,
-      overdue: Date.parse(wait.deadlineAt) <= Date.now(),
-    })),
+    waits,
     questions,
-    answers,
-    ...facts,
-    // A paused item run the store could not read is in both reports, and an unreadable
-    // open ask in the queue's and the item's; list each run once.
-    degraded: [
-      ...distinctByRun([
-        ...own.degraded,
-        ...degraded.filter(report => tree.has(report.runId)),
-        ...asks.degraded,
-      ]),
-      ...factsDegraded,
-    ],
+    // A merge row that does not read still says the change merged.
+    merged: merge !== null,
+    // An end row that does not read does not hold: the item stands as it would without it.
+    ended: end === null || 'type' in end ? null : end.via === 'engine' ? 'outcome' : 'operator',
+    ...linked,
+  });
+  const read = async (): Promise<ItemRead> => {
+    const events =
+      tree.size === 0
+        ? new Map<string, WorkflowEventRow[]>()
+        : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
+    const {
+      rulings,
+      degraded: factsDegraded,
+      ...facts
+    } = await readItemFacts(source, found.item, merge, linkReads, end);
+    const terminalEvents = await completionEvents(source, own.values);
+    const asks = splitAttentionRead(await source.store.listItemAsks(found.item.id));
+    const answers = [
+      ...[...events.values()].flat().map(itemAnswer),
+      ...rulings,
+      ...askAnswers(asks.values, new Set(asks.degraded.map(report => report.runId))),
+    ]
+      // Stable, so rows that tie on `at` keep their store order: append order within a run,
+      // recording order among rulings, and a set's last answer before its settle.
+      .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+    const holds = await itemHolds(source, found.item.id, own.values);
+    const startLimits = await source.store.readItemStartLimits(found.item.id);
+    const queued: ItemQueuedStart[] = [];
+    for (const start of queuedStarts)
+      queued.push({
+        ...start,
+        heldBehind: (await holds.queuedHeldBehind(start)) ?? null,
+        waitsForRunLimit: runLimit?.waiting.includes(start.requestId) ?? false,
+      });
+    const skipped: ItemSkippedStart[] = [];
+    for (const start of await source.store.listSkippedItemStarts(found.item.id))
+      skipped.push({
+        requestId: start.requestId,
+        workflow: start.workflow,
+        resource: start.resource,
+        heldBehind: (await holds.skippedHeldBehind(start)) ?? null,
+      });
+    return {
+      item: found.item,
+      standing,
+      runs: await Promise.all(
+        own.values.map(async run =>
+          itemRun(
+            source,
+            run,
+            holds.request(run.id),
+            (await holds.runHeldBehind(run)) ?? null,
+            terminalEvents,
+            startLimits.countedUnder[run.id] ?? null
+          )
+        )
+      ),
+      queued,
+      skipped,
+      hold,
+      held,
+      runLimit: runLimit && { limit: runLimit.limit, live: runLimit.live },
+      startLimits: await withLimitBindings(startLimits.limits, source.limitBindings),
+      waits,
+      questions,
+      answers,
+      ...facts,
+      // A paused item run the store could not read is in both reports, and an unreadable
+      // open ask in the queue's and the item's; list each run once.
+      degraded: [
+        ...distinctByRun([
+          ...own.degraded,
+          ...degraded.filter(report => tree.has(report.runId)),
+          ...asks.degraded,
+        ]),
+        ...factsDegraded,
+        ...unplacedHeld,
+      ],
+    };
   };
+  return { standing, run: own.values.find(run => run.id === standing.runId), read, cut };
 }
 
 /**

@@ -59,6 +59,10 @@ inputs:
 
 mutates_checkout: false
 
+# A pick works across every waiting issue. The `build-pick-after-build` binding starts it on
+# the item of the build run that ended, and it is no step of that item.
+observes: true
+
 nodes:
   - id: start
     script: start

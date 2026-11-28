@@ -32,6 +32,7 @@ import * as itemRulingsDb from '../db/item-rulings';
 import * as itemEndsDb from '../db/item-ends';
 import * as itemMergesDb from '../db/item-merges';
 import * as itemLandingsDb from '../db/item-landings';
+import * as itemPrioritiesDb from '../db/item-priorities';
 import * as itemAsksDb from '../db/item-asks';
 import * as itemWaitsDb from '../db/item-waits';
 import * as itemStopsDb from '../db/item-stops';
@@ -39,6 +40,7 @@ import * as workflowDb from '../db/workflows';
 import { listUnfinishedRuns } from '../db/unfinished-runs';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
+import { createWakeMapping } from './wake-start';
 import { updateWorkflowRunMetadataIfPending } from '../db/workflow-run-writes';
 import * as installHold from '../db/install-hold';
 import { queuedItemStarts } from '../db/item-step';
@@ -74,6 +76,7 @@ import {
   createAsksSettledStarts,
 } from './asks-settled';
 import { createEndedCheckout } from './ended-checkout';
+import { heldStartReads } from './held-item-starts';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -157,22 +160,19 @@ function collectOAuthCredentialValues(
 const launchProjectKeyOf = launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb));
 const launchProjectOf = (cwd: string) => registeredProjectForPath(cwd, codebaseDb);
 
-/**
- * The held binding starts on item `itemId`: those naming its key whose checkout is in its
- * project. A binding is resolved to a project only when it is prepared, so the checkout
- * decides it here the way it will then.
- */
+// Every held-start read, so the bulk one and one item's agree on the project (`heldStartReads`).
+const heldStarts = heldStartReads({
+  listHeldStarts: () => installHold.listHeldStarts(),
+  projectKeyOf: launchProjectKeyOf,
+});
+
+/** The held binding starts on item `itemId`: those naming its key whose checkout is in its project. */
 async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   const item = await itemsDb.getItem(itemId);
   if (!item) return [];
-  const held: HeldItemStart[] = [];
-  for (const start of await installHold.listHeldStarts()) {
-    if (start.kind !== 'trigger' || start.itemKey !== item.key || start.cwd === null) continue;
-    if ((await launchProjectKeyOf(start.cwd)) !== item.projectKey) continue;
-    const { receiptId, bindingId, hostId, workflow, receivedAt } = start;
-    held.push({ receiptId, bindingId, hostId, workflow, receivedAt });
-  }
-  return held;
+  return (await heldStarts.naming(item.key))
+    .filter(start => start.projectKey === item.projectKey)
+    .map(({ projectKey: _project, itemKey: _key, ...start }) => start);
 }
 
 /**
@@ -288,6 +288,8 @@ function onBindingDeps(
 }
 
 export function createWorkflowStore(): IWorkflowStore {
+  // A wake binding's carried inputs are checked against the waiting run's own definitions.
+  const wakes = createWakeMapping({ loadConfig: loadMergedConfig, providers: providerRegistry });
   // The close that settles a set writes the starts its asks-settled bindings cause.
   const asksSettledStarts = createAsksSettledStarts({
     ...onBindingDeps(itemsDb.getItem),
@@ -301,6 +303,7 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
+    listAllHeldItemStarts: heldStarts.all,
     listItemStarts,
     listPreparingStarts,
     listRefusedStarts,
@@ -309,7 +312,7 @@ export function createWorkflowStore(): IWorkflowStore {
     admitPendingRun: resourceStarts.admitPendingRun,
     drainResourceStarts: resourceStarts.drainResourceStarts,
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
-    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf),
+    acceptStartReceipt: input => acceptStartReceipt(input, launchProjectKeyOf, wakes),
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
@@ -344,6 +347,10 @@ export function createWorkflowStore(): IWorkflowStore {
     recordItemMerge: itemMergesDb.recordItemMerge,
     getItemLanding: itemLandingsDb.getItemLanding,
     recordItemLanding: itemLandingsDb.recordItemLanding,
+    recordItemTitle: itemsDb.recordItemTitle,
+    getItemPriority: itemPrioritiesDb.getItemPriority,
+    setItemPriority: itemPrioritiesDb.setItemPriority,
+    clearItemPriority: itemPrioritiesDb.clearItemPriority,
     listItemLinks: itemLinksDb.listItemLinks,
     recordItemLink: itemLinksDb.recordItemLink,
     endItemLink: itemLinksDb.endItemLink,

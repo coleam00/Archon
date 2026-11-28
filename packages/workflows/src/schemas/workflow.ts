@@ -20,6 +20,7 @@ import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
 import type { WorkflowPackMember } from './pack-settings';
 import { declaredAskOptionsSchema } from './ask-option';
+import { workflowDisplaySchema } from './display';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -277,6 +278,12 @@ export const workflowBaseSchema = z.object({
    * Bundled defaults carry it during a deprecation window.
    */
   deprecated: workflowDeprecationSchema.optional(),
+  /**
+   * The workflow's words for a person, and its outcomes' (`display.ts`), served by the pack
+   * graph. Never read by the executor. Parsed by the loader, which refuses an unknown key
+   * and an outcome the workflow does not declare.
+   */
+  display: workflowDisplaySchema.optional(),
 });
 
 export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
@@ -430,7 +437,7 @@ export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = ne
   ['deprecated', { kind: 'object', keys: new Set(Object.keys(workflowDeprecationSchema.shape)) }],
   // First `record` entry in this map: `inputs` is a record of input-name → spec,
   // so unknown keys under an individual spec (e.g. `inputs.diff.typo`) warn.
-  // `returns` is parsed by the loader, which refuses an unknown key in its object form.
+  // `returns` and `display` are parsed by the loader, which refuses an unknown key in either.
   [
     'inputs',
     {

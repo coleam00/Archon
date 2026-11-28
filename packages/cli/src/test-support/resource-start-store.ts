@@ -96,6 +96,7 @@ export function createInMemoryResourceStartStore(
         .filter(request => request.resource === resource && request.status === 'queued')
         .map(request => ({ ...request, itemId: null })),
       heldItems: new Map(),
+      priorityItems: new Set(),
       heldCheckouts: heldCheckouts(live, reusable),
       foreignHeldCheckouts: heldCheckouts(
         listRuns()
@@ -342,6 +343,7 @@ export function createInMemoryResourceStartStore(
     liftInstallHold: async () => null,
     listHeldStarts: async () => [],
     listHeldItemStarts: async () => [],
+    listAllHeldItemStarts: async () => [],
     listItemStarts: async () => [],
     listPreparingStarts: async () => [],
     listRefusedStarts: async () => [],

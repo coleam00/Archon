@@ -61,6 +61,7 @@ export {
   type WorkflowSourceRoots,
 } from './workflow-source/roots';
 export {
+  installedPackKey,
   installedWorkflowName,
   listInstalledPacks,
   packDirectory,

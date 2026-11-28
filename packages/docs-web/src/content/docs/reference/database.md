@@ -324,7 +324,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Deduplicates deliveries by `(source_instance_id, delivery_id)` when the source supplies a delivery ID; `delivery_id` is nullable, and the unique constraint does not deduplicate receipts without one
 
 - **`remote_agent_items`** - The durable thing runs are about
-  - `id`, `project_key`, `key` and `created_at`; `(project_key, key)` is unique. `project_key` is the engine's project key, the one `remote_agent_state_revisions` scopes by
+  - `id`, `project_key`, `key`, `created_at` and `title`; `(project_key, key)` is unique. `title` is what the item is called, null until `archon workflow title` sets it. `project_key` is the engine's project key, the one `remote_agent_state_revisions` scopes by
   - Holds no status, stage or config. Where an item stands is derived from its runs
   - Written the first time a start, run, ruling or link names the key in a project. The engine gives `key` no meaning and never parses it
 
@@ -346,6 +346,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_item_landings`** - The branch an item's change lands on (`archon workflow landing`)
   - One row per item: `item_id` is the primary key, and recording again replaces the row
   - `branch`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `recorded_at`
+- **`remote_agent_item_priorities`** - An item's own priority (`archon workflow priority`)
+  - One row per item: `item_id` is the primary key, and the row existing means priority. Clearing deletes the row. An item `part_of` one with a row, through active links at any depth, has priority too; that is resolved on each read, never stored
+  - `item_id` is its only column
+  - Admission orders queued start requests by priority, then `queue_position`. No request column changes, so an older binary admits by `queue_position` alone
 - **`remote_agent_item_tracker_destinations`** - One row per item tracker destination (`tracker:<project>`)
   - The row exists once the destination's activation baseline is committed (`activated_at`), so a later activation by any process does not baseline again
   - `pass_owner_host`, `pass_owner_pid`, `pass_owner_instance` and `pass_started_at` name the process running the destination's pass, all null when none runs; one pass runs at a time across the server and CLI processes. `pass_requested` is 1 when another process asked the holder for one more pass
@@ -361,7 +365,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Closes once: `closed_as` is `answered`, `withdrawn` or `replaced`, NULL while open. An answer or withdrawal sets `answer` (answers only), `closed_at`, `closed_via`, `closed_by_declared` or `closed_by_user_id`, and `closed_from_run_id` and `closed_from_node_path` (unverified); a replacement sets `closed_at` and `replaced_by_run_id`
   - `run_id` has no foreign key, so run cleanup keeps the record: the item read takes its asks, their answers and its settled sets from these rows. `ask` and `answer` are read tolerantly, since more than one binary reads them. The `ask_answered`, `ask_withdrawn` and `asks_settled` events on the run that left the set notify readers of the run's event tail, and go with that run
 - **`remote_agent_item_waits`** - What a completed run said its item waits for outside Archon ([`returns.waits`](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon))
-  - Opened in the write that completes the run; `run_id` is the run that left the wait and names its set, `workflow_name` the run's workflow, `position` its place in the set, `event` and `about` what it waits for, and `deadline_at` when it falls due (`created_at` plus its `within_minutes`)
+  - Opened in the write that completes the run; `run_id` is the run that left the wait and names its set, `workflow_name` the run's workflow, `position` its place in the set, `event` and `about` what it waits for, `subject_kind` and `subject_number` the issue or pull request it names (`pr` or `issue` and its number; NULL when it names none, and on rows written before the columns existed), and `deadline_at` when it falls due (`created_at` plus its `within_minutes`). A wake binding that maps no item matches a wait by its subject
   - A set closes once, all its rows together: `closed_as` is `met`, `replaced` or `withdrawn`, NULL while open, with `closed_at`. A met set records the receipt and binding the event started in `met_by_receipt_id` and `met_by_binding_id`, written in the transaction that records the event; a replaced one `replaced_by_run_id`
   - Nothing reads `deadline_at` but the attention queue, which lists an open set past it as overdue. `run_id` has no foreign key, as for asks
 
@@ -384,8 +388,8 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_resource_start_requests`** - Durable workflow-start requests
   - Stores prepared launches, overlap policy, admission status, and blockers
-  - Prepared launches are versioned. Version 2 carries the run's `origin`; version 1 launches queued by older binaries are still admitted, with their conversation and user read as the origin. Older binaries cannot read version 2, so before downgrading, drain or withdraw any queued or admitted request whose run has not started
-  - `queue_position` orders waiting requests; optional receipt and binding linkage preserves source provenance
+  - Prepared launches are versioned. Version 2 carries the run's `origin`; version 1 launches queued by older binaries are still admitted, with their conversation and user read as the origin. Older binaries cannot read version 2, so before downgrading, drain or withdraw any queued request with it and let every run admitted with it end; see [Persisted JSON documents](#persisted-json-documents)
+  - `queue_position` orders waiting requests, after their item's priority (`remote_agent_item_priorities`); optional receipt and binding linkage preserves source provenance
   - Nullable `item_id` references the item a start named, resolved when the binding is prepared, so a start that waits for capacity already has its item. The run takes it at admission
   - Nullable `start_limit` (JSON, read tolerantly since more than one binary reads it) and `grants_limit` (a limit name) record the start limit a binding start counted under and the limit it granted. A binding's start limit on an item is derived from these rows, their `status` and `queue_position`, at admission and in the item read; it is never kept as a counter. Rows are never deleted
 
@@ -458,6 +462,86 @@ from the CLI or the server, runs it headless and records no conversation history
 Schema upgrades preserve shipped columns and older writers. Older binaries can
 open and write the upgraded database, but may display the compatibility anchor
 when reading an origin-free run.
+
+## Persisted JSON documents
+
+A JSON document stored in a column, a run's `metadata` key, or a file-store document is
+a persisted shape like a column, and more than one binary version may read it. Such a
+document is read so that a key the reader does not know is ignored, not refused. The
+records below marked as kept on write-back also keep that key when a store writes them
+back from what it read, so an older binary that drains, claims or updates one does not
+remove what a newer one wrote.
+
+The engine-written records read this way:
+
+- the prepared launch in `remote_agent_resource_start_requests.launch`, including its
+  `run`, `run.origin`, `execution` and lane. A version 2 launch is kept on write-back. A
+  version 1 launch is converted to version 2 when it is read: the conversion drops unknown
+  keys at the top level and in `run`, and keeps those in `execution` and its lane;
+- the run's `origin`;
+- the `checkout_handoff`, `asks_checkout`, `resource_start` and `owned_worktree` keys of
+  run `metadata`, and the hand-off in `remote_agent_start_receipt_bindings.checkout_from`;
+- the `tool_call_attention` key of run `metadata`, where a write by one stream keeps the
+  other streams' entries as stored;
+- a receipt's `source_actor`;
+- the file store's request and receipt documents and the `origin` in its run documents,
+  kept on write-back;
+- the top-level keys of `metadata.wait`. Its nested options, recommendation and answer
+  stay strict (see the table below).
+
+Only the records marked above are held to keeping an unknown key on write-back. For any
+other record, do not rely on a key the reader does not know surviving a write. Two places
+where it is known to be dropped:
+
+- The SQL run row's `origin` column is written from the known origin fields, so an
+  unknown key in a launch's `run.origin` does not reach the run it starts.
+- The file store drops unknown top-level keys of its run documents, and unknown keys of a
+  receipt's bindings, including those inside a binding intent's `checkoutFrom`, when it
+  writes the receipt back.
+
+A record that is wrong, not merely newer, is still refused: a wrong type, a missing
+required field, a `version` or discriminator value the reader does not know, or a record
+that mixes two variants. An in-place launch lane that names a branch is refused. An
+`asks_checkout` record that carries `refused` is a refusal whatever else it carries, and
+one whose `refused` is not a reason is invalid, which also refuses the checkout. In the
+SQL stores, a queued launch the reader cannot read holds its queue, is listed in the
+attention queue, and is withdrawn with `archon trigger withdraw <request-id>`.
+
+So an optional field can be added to such a record without breaking an older reader,
+which acts as if the field were absent. A field that cannot go into the record this way,
+because its record stays strict or because an older reader must not act as if it were
+absent, goes one of two other ways. Each has a limit:
+
+- **A column of its own**, which the older binary does not read. The intent's
+  `event_input_names`, `checkout_from`, `item_key`, `start_limit` and `grants_limit`
+  columns are built this way, beside an intent older binaries parse strictly. The older
+  binary still reads the row and carries on with its older behaviour, so this fits only a
+  field whose absence is acceptable to the older binary.
+- **A new `version` of the record**, which the older binary refuses as unreadable. This
+  protects only a reader that checks a version. The prepared launch has one. The run
+  metadata records above do not: an added `version` key is ignored like any other
+  unknown key. For the launch, a downgrade must wait until no queued request has the
+  newer version and no run admitted with one is still live. An admitted run's launch is
+  read on every admission on its resource, so one the older binary cannot read blocks that
+  resource until the run ends.
+
+A binary released before this rule (0.16.0 and earlier) may refuse a record above that
+carries a key it does not know. A new field in one of them is safe only once every binary
+that opens the database reads them this way.
+
+These records stay strict, each for the invariant it protects:
+
+| Record | Why it stays strict |
+| --- | --- |
+| `remote_agent_start_receipt_bindings.intent` | The same schema validates bindings an operator writes (trigger files, source and pack bindings), where a misspelled key must fail. Shipped binaries parse the column strictly, so a newer field goes into its own column (see `storableIntent` in `packages/core/src/db/start-receipt-writes.ts`). |
+| The binding intents in a file-store receipt (`bindings[].intent`) | The same schema and reason as the SQL intent. The file store has no separate columns, so a binary that does not know an intent field reports that binding as damaged and does not prepare it. On a file store, a new intent field needs every binary that opens the store to know it. |
+| Trigger files (`~/.archon/triggers/*.json`) | Operator-written config: a misspelled `limit` must fail, not run without a limit. |
+| An answer and its answerer (`remote_agent_item_asks.answer`, the answer in `metadata.wait`, `wait_answered` event data) | The union's variants are told apart by their keys: without strictness `{ decisions, text }` would read as `{ text }`. |
+| The options and recommendation in `metadata.wait` | They share their schema with workflow YAML, where a misspelled key must fail. |
+| `remote_agent_state_revisions.operation` and the file store's state revisions | The patch operations are the script API's input contract. A new operation is a new `op`, which an older reader cannot apply in any case. |
+| A file-store state revision's `writer` and `lease`, and its name record's `scope` | The SQL store keeps these in columns, so only the file store holds them as JSON. The scope decides which document a revision belongs to, and the lease decides which run may write it: an older reader must not ignore a field of either. The writer is part of the script API's `StateRevision` output, so its shape changes with that contract, not silently. |
+| The `asks` and `waits` a returns node outputs (`returns.asks`, `returns.waits`), stored with the node's completion and read again when a resumed run completes | They are the workflow's authored output, checked against the ask and wait shapes the language defines, where a misspelled key must fail the run rather than open an ask or wait without it. A resumed run checks the stored output again at completion, so a field the resuming binary does not know fails the run there and opens none of its asks or waits. A new ask or wait field needs every binary that may resume such a run to know it. |
+| `metadata.run_config` and `metadata.ai_configuration` | An older binary that silently dropped a provider option would change what the run may do. |
 
 ## Store event feed
 

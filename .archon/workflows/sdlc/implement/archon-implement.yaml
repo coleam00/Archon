@@ -19,7 +19,7 @@ inputs:
       description, or the repair of an existing pull request when this run was
       launched on its branch. When empty, the run's trigger message is the work.
 
-returns: { node: implement, outcome: green }
+returns: { node: implement, outcome: green, summary: summary }
 
 nodes:
   # Run success ≠ green. The loop completes on `done`, which deliberately includes

@@ -1,6 +1,6 @@
 /**
- * Where a binding started by a run's end or a settled set of asks reads the inputs of the
- * stage it starts. Data only: no expression, and nothing here names a workflow. The
+ * Where a binding started by a run's end, a settled set of asks or a met wait reads the
+ * inputs of the stage it starts. Data only: no expression, and nothing here names a workflow. The
  * trigger-file schemas that use them are in `resource-start`.
  */
 import { z } from 'zod';
@@ -12,16 +12,17 @@ import { isJsonPointer } from '../json-pointer';
  * by name, the key of the ended run's item (which item ended, for a linked start), a
  * pointer into the started item's own entry of `linked.items`, or every answer on the item.
  */
-const runInputSources = [
-  z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
-  z.object({ input: z.string().min(1) }).strict(),
-] as const;
+const runResultSourceSchema = z
+  .object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') })
+  .strict();
+const runOwnInputSourceSchema = z.object({ input: z.string().min(1) }).strict();
+const runInputSources = [runResultSourceSchema, runOwnInputSourceSchema] as const;
 /** The key of the ended run's item; a pack's run-ended binding reads it as the file does. */
 export const endedItemKeySourceSchema = z.object({ item: z.literal('key') }).strict();
 /**
  * Every answered or withdrawn ask on the item the stage starts on, oldest answer first, so no
- * later stage asks again what was decided. Read by asks-settled and non-linked run-ended
- * bindings; a linked start is on a holder item, which is not the item whose run ended.
+ * later stage asks again what was decided. Read by asks-settled, wake and non-linked
+ * run-ended bindings; a linked start is on a holder item, which is not the item whose run ended.
  */
 export const itemAnswersSourceSchema = z.object({ item: z.literal('answers') }).strict();
 /**
@@ -52,6 +53,15 @@ export const asksSettledInputSourceSchema = z.union([
   itemAnswersSourceSchema,
 ]);
 export type AsksSettledInputSource = z.infer<typeof asksSettledInputSourceSchema>;
+
+/**
+ * Where a wake binding reads one input of the stage it starts, besides the event and the
+ * met wait: one of the own inputs of the run that left the met wait, by name, or
+ * `{item: 'answers'}` for every answer on the wait's item. Not `{result}`: a waiting run's
+ * result is not kept for a later start.
+ */
+export const wakeInputSourceSchema = z.union([runOwnInputSourceSchema, itemAnswersSourceSchema]);
+export type WakeInputSource = z.infer<typeof wakeInputSourceSchema>;
 
 /** A linked start is on a holder item, so the item's answers it would read are not its own. */
 export const linkedReadsNoItemAnswers = {

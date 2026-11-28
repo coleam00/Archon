@@ -1,6 +1,7 @@
 import { runFilesReportSchema } from '@archon/core/schemas/run-files';
 import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
 import { operatorPauseSchema } from '@archon/workflows/schemas/operator-pause';
+import { runCostMetadataShape } from '@archon/workflows/schemas/run-usage';
 import {
   toolCallAttentionArraySchema,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -18,7 +19,9 @@ import { loopRoundSchema } from '@archon/workflows/schemas/loop-rounds';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { RUN_RECORDS_MAX, runRecordSchema } from '@archon/workflows/run-records';
 import { itemWindowSchema } from '@archon/workflows/item-window';
+import { ITEM_STANDING_STATES } from '@archon/workflows/item-standing';
 import { packGraphSchema } from '@archon/workflows/pack-graph';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { itemEndBlockerSchema, itemEndSchema } from '@archon/workflows/schemas/item-end';
@@ -168,8 +171,8 @@ export const workflowWaitContextSchema = engineWorkflowWaitContextSchema.meta({
 export const runStopReasonSchema = engineRunStopReasonSchema.meta({ id: 'RunStopReason' });
 
 /**
- * Run metadata stays open-ended, but approval, waits, tool advisories and stop reasons are
- * engine-owned and typed.
+ * Run metadata stays open-ended, but approval, waits, tool advisories, cost and stop reasons
+ * are engine-owned and typed.
  */
 export const workflowRunMetadataSchema = z
   .object({
@@ -177,6 +180,7 @@ export const workflowRunMetadataSchema = z
     approval: approvalContextSchema.optional(),
     wait: workflowWaitContextSchema.optional(),
     [RUN_STOP_REASON_METADATA_KEY]: runStopReasonSchema.optional(),
+    ...runCostMetadataShape,
   })
   .catchall(z.unknown())
   .openapi('WorkflowRunMetadata');
@@ -238,6 +242,39 @@ export const workflowEventSchema = workflowEventRowSchema
     }),
   })
   .openapi('WorkflowEvent');
+
+/** GET /api/workflows/runs/records query: `runId` repeated once per run. */
+export const runRecordsQuerySchema = z.object({
+  runId: z
+    .union([z.string().min(1), z.array(z.string().min(1)).min(1).max(RUN_RECORDS_MAX)])
+    .openapi({ description: 'A run id; repeat `runId` once per run, at most 100.' }),
+  outputKey: z
+    .union([z.string().min(1), z.array(z.string().min(1))])
+    .optional()
+    .openapi({
+      description:
+        "Keep only this top-level field of each node's structured output; repeat once per field. Absent: outputs whole.",
+    }),
+  resultKey: z
+    .union([z.string().min(1), z.array(z.string().min(1))])
+    .optional()
+    .openapi({
+      description:
+        "Keep only this top-level field of the run's result; repeat once per field. Absent: the result whole.",
+    }),
+});
+
+/** GET /api/workflows/runs/records response. */
+export const runRecordsResponseSchema = z
+  .object({
+    /** One record per run read, in the order asked. */
+    records: z.array(runRecordSchema.meta({ id: 'RunRecord' })),
+    /** The ids no run has. */
+    missing: z.array(z.string()),
+    /** The runs whose events did not fold into a record, with why. */
+    unreadable: z.array(z.object({ id: z.string(), error: z.string() })),
+  })
+  .meta({ id: 'RunRecords' });
 
 /** GET /api/workflows/runs/:runId response. */
 export const workflowRunDetailSchema = z
@@ -494,6 +531,20 @@ export const itemWindowQuerySchema = z.object({
   until: z.string().min(1).optional(),
   limit: z.coerce.number().int().optional(),
   after: z.string().min(1).optional(),
+  states: z
+    .string()
+    .min(1)
+    .transform(text => text.split(','))
+    .pipe(z.array(z.enum(ITEM_STANDING_STATES)))
+    .optional()
+    .openapi({
+      description:
+        'Keep only the items whose standing.state is one of these, comma-separated (running, waiting, queued, failed, stopped, done, resting). With it the page comes most recently active first and the answer carries totals per state. Name it on every page; the cursor does not carry it.',
+    }),
+  pack: z.string().min(1).optional().openapi({
+    description:
+      'Keep only the items that count for this pack (standing.pack), by pack key. Ordered and counted as with states. Name it on every page.',
+  }),
 });
 
 /** GET /api/items/window response: a page of items, as `archon workflow items --json`. */

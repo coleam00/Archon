@@ -367,11 +367,13 @@ test('with --project, the item metrics a pack declares are reported over the win
     listItemRulings: async () => [],
     getItemMerge: async (id: string) => merged(id.slice('item-'.length)),
     getItemLanding: async () => null,
+    getItemPriority: async () => null,
     getHoldingItemEnd: async () => null,
     listQueuedItemStarts: async () => [],
     listSkippedItemStarts: async () => [],
     getInstallHold: async () => null,
     listHeldItemStarts: async () => [],
+    listAllHeldItemStarts: async () => [],
     listItemStarts: async () => [],
     listItemLinks: async () => [],
   };

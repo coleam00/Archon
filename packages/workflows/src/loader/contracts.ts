@@ -23,11 +23,15 @@ import { isDeepStrictEqual } from 'node:util';
  * to the flattened child's declared return. The expander calls this same helper
  * on the final flat workflow, where every selected node is executable.
  */
-export function validateWorkflowResultContract(
-  workflow: Pick<WorkflowDefinition, 'name' | 'returns' | 'result' | 'observes'> & {
-    readonly nodes: readonly (DagNode | IncludeDirective)[];
-  }
-): string | null {
+type ContractWorkflow = Pick<WorkflowDefinition, 'name' | 'returns' | 'result' | 'observes'> & {
+  readonly nodes: readonly (DagNode | IncludeDirective)[];
+};
+
+/**
+ * The result contract. What `display:` names is not part of it: words never refuse a
+ * workflow, so the loader drops a stale display field instead (`display-contract.ts`).
+ */
+export function validateWorkflowResultContract(workflow: ContractWorkflow): string | null {
   if (workflow.result?.options !== undefined && workflow.result.asks === undefined)
     return 'Workflow returns.options declares the options of asks; declare returns.asks too';
   const declared = declaredResultFields(workflow.result);
@@ -86,7 +90,7 @@ function endingOutcomesError(
 interface DeclaredResultField {
   key: 'outcome' | 'asks' | 'waits' | 'summary';
   field: string;
-  engineSchema?: () => Record<string, unknown>;
+  engineSchema?: (node: DagNode) => Record<string, unknown>;
 }
 
 function declaredResultFields(result: WorkflowDefinition['result']): DeclaredResultField[] {
@@ -138,7 +142,7 @@ function resultFieldError(
     );
   return (
     selectedNodeShapeError(subject, nodeId, node, 'an object output_format') ??
-    validateEngineFieldSchema(subject, nodeId, field, node, engineSchema())
+    validateEngineFieldSchema(subject, nodeId, field, node, engineSchema(node))
   );
 }
 

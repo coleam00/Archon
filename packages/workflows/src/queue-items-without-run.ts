@@ -7,8 +7,9 @@
  * it, or it is withdrawn by its `wait:` ref. A completed step that stopped its item (see
  * `readItemStopped`), or a failed top-level step, is listed while it is the newest step on
  * the item (a run that observes it is no step), the item's end does not hold (`item-end.ts`) and no merge is recorded on it
- * (`getItemMerge`); it takes no answer. Asks and waits on an item whose end holds are left
- * out too: an item at rest asks nothing.
+ * (`getItemMerge`); a completed quiet stop is also left out while the item depends on an open
+ * item (`item-depends-on.ts`). It takes no answer. Asks and waits on an item whose end holds
+ * are left out too: an item at rest asks nothing.
  */
 import { createLogger } from '@archon/paths';
 import { isOwnerProvablyGone } from '@archon/paths/process-owner';
@@ -25,7 +26,9 @@ import { isAttentionDegraded, type AttentionRead } from './schemas/attention-deg
 import {
   projectRef,
   projectRefForRun,
+  queueItemOf,
   runProject,
+  withPriority,
   type AskQueueItem,
   type AttentionQueueItemSources,
   type AttentionQueueItemWithoutRun,
@@ -36,8 +39,10 @@ import {
   type StoppedQueueItem,
   type UnreadableStartQueueItem,
 } from './attention-queue';
+import { readDependsOn, waitsOn } from './item-depends-on';
 import { readHoldingItemEnd, type ItemEndStore } from './item-end';
 import { readItemStopped, type ItemStopped } from './schemas/run-metadata';
+import { readOwnClose } from './work-order';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { getTerminalRecord, terminalReason } from './terminal-record';
 import type { TerminalRecord } from './schemas/terminal-record';
@@ -56,7 +61,7 @@ import type { IWorkflowStore } from './store';
 /** The store reads an ask's queue item needs. */
 export type AskItemStore = Pick<
   IWorkflowStore,
-  'listOpenItemAsks' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
+  'listOpenItemAsks' | 'getItem' | 'getItemPriority' | 'getWorkflowRun' | 'getCodebase'
 >;
 
 /**
@@ -86,7 +91,7 @@ export async function askQueueItem(
   ask: StoredItemAsk,
   codebases: CodebaseCache = new Map()
 ): Promise<AskQueueItem> {
-  const item = await store.getItem(ask.itemId);
+  const { item, priority } = await queueItemOf(store, ask.itemId);
   const run = await store.getWorkflowRun(ask.runId);
   const project =
     run !== null
@@ -99,13 +104,19 @@ export async function askQueueItem(
     ref: askItemRef(ask.id),
     project,
     ...(item === null ? {} : { item }),
+    priority,
     revision: 1,
     labels: {},
     pausedAt: ask.openedAt,
     message: ask.ask.question,
     form: 'select',
     options: [
-      ...ask.ask.options.map(option => ({ id: option.id, does: option.does, cost: option.cost })),
+      ...ask.ask.options.map(option => ({
+        id: option.id,
+        ...(option.label === undefined ? {} : { label: option.label }),
+        does: option.does,
+        cost: option.cost,
+      })),
       OTHER_ATTENTION_OPTION,
     ],
     other: true,
@@ -145,7 +156,7 @@ export async function openAskItems(
 /** The store reads an overdue wait's queue item needs. */
 export type WaitItemStore = Pick<
   IWorkflowStore,
-  'listOpenItemWaits' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
+  'listOpenItemWaits' | 'getItem' | 'getItemPriority' | 'getWorkflowRun' | 'getCodebase'
 >;
 
 /**
@@ -158,7 +169,7 @@ export async function waitQueueItem(
   codebases: CodebaseCache = new Map()
 ): Promise<OverdueWaitQueueItem> {
   const [first] = set;
-  const item = await store.getItem(first.itemId);
+  const { item, priority } = await queueItemOf(store, first.itemId);
   const run = await store.getWorkflowRun(first.runId);
   const project =
     run !== null
@@ -171,6 +182,7 @@ export async function waitQueueItem(
     ref: waitItemRef(first.runId),
     project,
     ...(item === null ? {} : { item }),
+    priority,
     revision: 1,
     labels: {},
     pausedAt: first.openedAt,
@@ -218,7 +230,13 @@ export async function overdueWaitItems(
 /** The store reads a stopped item's queue item needs. */
 export type StoppedItemStore = Pick<
   IWorkflowStore,
-  'listStoppedItemRuns' | 'listEventsForRuns' | 'getItem' | 'getCodebase' | 'getItemMerge'
+  | 'listStoppedItemRuns'
+  | 'listEventsForRuns'
+  | 'getItem'
+  | 'getItemPriority'
+  | 'getCodebase'
+  | 'getItemMerge'
+  | 'listItemLinks'
 > &
   ItemEndStore;
 
@@ -231,7 +249,7 @@ export type StoppedItemStore = Pick<
  * read it and start a new run on it, which closes the item.
  */
 export async function stoppedQueueItem(
-  store: Pick<StoppedItemStore, 'getItem' | 'getCodebase'>,
+  store: Pick<StoppedItemStore, 'getItem' | 'getItemPriority' | 'getCodebase'>,
   run: WorkflowRun,
   codebases: CodebaseCache = new Map(),
   /** A failed run's `workflow_failed` events, which carry what failed first. */
@@ -244,7 +262,7 @@ export async function stoppedQueueItem(
     ? { summary: null }
     : readItemStopped(run.metadata);
   if (stopped === undefined || (run.item_id === null && !isOutcomeUnknownRun(run))) return null;
-  const item = run.item_id === null ? null : await store.getItem(run.item_id);
+  const { item, priority } = await queueItemOf(store, run.item_id);
   let codebase: AttentionQueueItemSources['codebase'] = null;
   if (run.codebase_id !== null) {
     const read = codebases.get(run.codebase_id) ?? store.getCodebase(run.codebase_id);
@@ -256,6 +274,7 @@ export async function stoppedQueueItem(
     ref: stoppedItemRef(run.id),
     project: projectRefForRun(run, codebase),
     ...(item === null ? {} : { item }),
+    priority,
     revision: 1,
     labels: {},
     pausedAt: stopped.refused?.at(-1)?.refusedAt ?? run.completed_at?.toISOString() ?? null,
@@ -336,6 +355,7 @@ export async function stoppedItems(
     }
     // A run whose outcome is unknown stays until resumed or abandoned, even past an item end.
     if (!isOutcomeUnknownRun(run) && (await isItemDone(store, run.item_id))) continue;
+    if (await waitsOnOpenItem(store, run)) continue;
     const unknownNodes = isOutcomeUnknownRun(run)
       ? liveUnknownOutcomes(run, unknownEvents.get(run.id) ?? [])
       : [];
@@ -356,15 +376,26 @@ export async function stoppedItems(
  * unreadable end or merge row reads as not done, so it does not hide the stop.
  */
 async function isItemDone(store: StoppedItemStore, itemId: string | null): Promise<boolean> {
-  if (itemId === null) return false;
-  const end = await readHoldingItemEnd(store, itemId);
-  if (end !== null && !('type' in end)) return true;
-  const merge = await store.getItemMerge(itemId);
-  return merge !== null && !('type' in merge);
+  return itemId !== null && (await readOwnClose(store, itemId)) !== null;
+}
+
+/**
+ * Whether `run` is a completed, quiet stop of an item that waits on an open item. A stop
+ * that names a refused start or a limit needs someone whatever the item waits on.
+ */
+async function waitsOnOpenItem(store: StoppedItemStore, run: WorkflowRun): Promise<boolean> {
+  if (run.status !== 'completed' || run.item_id === null) return false;
+  const stopped = readItemStopped(run.metadata);
+  if (stopped?.limit !== undefined || stopped?.refused !== undefined) return false;
+  const links = await store.listItemLinks(run.item_id);
+  return waitsOn(await readDependsOn(store, run.item_id, links)).length > 0;
 }
 
 /** The store reads a lost preparation's queue item needs. */
-export type PreparingItemStore = Pick<IWorkflowStore, 'listPreparingStarts' | 'getStartReceipt'>;
+export type PreparingItemStore = Pick<
+  IWorkflowStore,
+  'listPreparingStarts' | 'getStartReceipt' | 'getItemPriority'
+>;
 
 /**
  * The binding starts whose preparer this process can prove gone, as queue items, for
@@ -393,6 +424,7 @@ export async function preparationLostItems(
           ? null
           : projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase),
       ...(start.item === null ? {} : { item: start.item }),
+      priority: (await withPriority(store, start.item)).priority,
       revision: 1,
       labels: {},
       pausedAt: start.claimedAt,
@@ -405,7 +437,7 @@ export async function preparationLostItems(
 /** The store reads an unreadable queued request's queue item needs. */
 export type UnreadableStartItemStore = Pick<
   IWorkflowStore,
-  'listUnreadableQueuedStarts' | 'getItem'
+  'listUnreadableQueuedStarts' | 'getItem' | 'getItemPriority'
 >;
 
 /**
@@ -418,12 +450,13 @@ export async function unreadableStartItems(
 ): Promise<UnreadableStartQueueItem[]> {
   const items: UnreadableStartQueueItem[] = [];
   for (const start of await store.listUnreadableQueuedStarts()) {
-    const item = start.itemId === null ? null : await store.getItem(start.itemId);
+    const { item, priority } = await queueItemOf(store, start.itemId);
     items.push({
       kind: 'unreadable_start',
       ref: unreadableStartRef(start.requestId),
       project: item === null ? null : projectRef(item.projectKey, null),
       ...(item === null ? {} : { item }),
+      priority,
       revision: 1,
       labels: {},
       pausedAt: start.queuedAt,
@@ -439,7 +472,7 @@ export async function unreadableStartItems(
 }
 
 /** The store read a refused start's queue item needs. */
-export type RefusedStartItemStore = Pick<IWorkflowStore, 'listRefusedStarts'>;
+export type RefusedStartItemStore = Pick<IWorkflowStore, 'listRefusedStarts' | 'getItemPriority'>;
 
 /**
  * The refused starts no run caused that are still their item's newest step, as queue items,
@@ -449,9 +482,10 @@ export type RefusedStartItemStore = Pick<IWorkflowStore, 'listRefusedStarts'>;
 export async function refusedStartItems(
   store: RefusedStartItemStore
 ): Promise<RefusedStartQueueItem[]> {
-  return (await store.listRefusedStarts()).map(start => {
+  const items: RefusedStartQueueItem[] = [];
+  for (const start of await store.listRefusedStarts()) {
     const { receiptId, bindingId, hostId, workflow, itemKey, refusal, codebase } = start;
-    return {
+    items.push({
       kind: 'refused_start',
       ref: refusedStartRef(receiptId, bindingId),
       project:
@@ -459,6 +493,7 @@ export async function refusedStartItems(
           ? null
           : projectRef(projectKeyForCodebase(codebase, codebase.default_cwd), codebase),
       ...(start.item === null ? {} : { item: start.item }),
+      priority: (await withPriority(store, start.item)).priority,
       revision: 1,
       labels: {},
       pausedAt: start.refusedAt,
@@ -472,6 +507,7 @@ export async function refusedStartItems(
         ...(refusal.limit === undefined ? {} : { limit: refusal.limit }),
         ...(refusal.fileSetting === undefined ? {} : { fileSetting: refusal.fileSetting }),
       },
-    };
-  });
+    });
+  }
+  return items;
 }

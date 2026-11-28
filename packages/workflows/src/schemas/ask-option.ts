@@ -52,11 +52,45 @@ export function refineOptionIds(
 }
 
 /**
+ * An option as a workflow declares it (`returns.options`): the model's shape plus `label`,
+ * the short words a person reads where the option is shown or was chosen. The label is the
+ * author's, never the model's, so `askOptionSchema`, the shape the model writes, stays
+ * without it for OpenAI strict mode.
+ */
+export const declaredAskOptionSchema = askOptionSchema.extend({
+  label: z.string().trim().min(1).max(80).optional(),
+});
+export type DeclaredAskOption = z.infer<typeof declaredAskOptionSchema>;
+
+/**
  * The options a workflow declares for every ask it leaves (`returns.options`): at least
  * two, no id twice, and not the reserved `other`, which every ask offers anyway.
  */
 export const declaredAskOptionsSchema = z
-  .array(askOptionSchema)
+  .array(declaredAskOptionSchema)
   .min(2)
   .superRefine((options, ctx) => refineOptionIds(options, ctx, []));
-export type DeclaredAskOption = z.infer<typeof askOptionSchema>;
+
+/**
+ * The options every ask of a stage offers, as the pack graph serves them: its declared
+ * `returns.options` in order, each with its `label` when it declares one, then the reserved
+ * `other`, labelled by the engine. Null when the stage declares none (its asks write their
+ * own options).
+ */
+export const stageAskOptionsSchema = z
+  .array(
+    z.object({
+      id: z.string(),
+      label: z.string().optional(),
+      does: z.string().optional(),
+      cost: z.string().optional(),
+    })
+  )
+  .nullable();
+
+export function stageAskOptions(
+  declared: readonly DeclaredAskOption[] | undefined
+): z.infer<typeof stageAskOptionsSchema> {
+  if (declared === undefined) return null;
+  return [...declared.map(option => ({ ...option })), { ...OTHER_ATTENTION_OPTION }];
+}

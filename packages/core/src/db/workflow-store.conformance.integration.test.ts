@@ -10,6 +10,7 @@ import {
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
 import { describeItemLandingConformance } from './item-landings.conformance-harness';
+import { describeItemPriorityConformance } from './item-priorities.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
 import { describeLinkedStartConformance } from './linked-starts.conformance-harness';
 import { describeSqlItemAskStartConformance } from './item-ask-starts.conformance';
@@ -18,6 +19,7 @@ import { describeSqlRunDeleteConformance } from './workflow-run-delete.conforman
 import { describeSqlItemStopConformance } from './item-stops.conformance';
 import { describeSqlItemEndConformance } from './item-ends.conformance';
 import { describeSqlStartLimitConformance } from './start-limits.conformance';
+import { describeSqlLaunchRecordConformance } from './launch-records.conformance';
 import { describeSqlItemWaitConformance } from './item-waits.conformance';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
@@ -43,6 +45,7 @@ describeWorkflowStoreConformance('SQLite', makeHarness);
 describeSqlStatusReadConformance(makeHarness);
 describeItemLinkConformance(makeHarness);
 describeItemLandingConformance(makeHarness);
+describeItemPriorityConformance(makeHarness);
 describeLinkedStartConformance(makeHarness);
 describeSqlItemAskConformance(makeHarness);
 describeSqlItemWaitConformance(makeHarness);
@@ -51,6 +54,7 @@ describeSqlItemEndConformance(makeHarness);
 describeSqlItemAskStartConformance(makeHarness);
 describeSqlRunDeleteConformance(makeHarness);
 describeSqlStartLimitConformance(makeHarness);
+describeSqlLaunchRecordConformance(makeHarness);
 
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();

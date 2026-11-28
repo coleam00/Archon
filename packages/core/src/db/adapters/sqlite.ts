@@ -564,6 +564,7 @@ export class SqliteAdapter implements IDatabase {
         project_key TEXT NOT NULL,
         key TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        title TEXT,
         moved_on_at TEXT,
         moved_on_tie INTEGER,
         UNIQUE(project_key, key)
@@ -628,6 +629,10 @@ export class SqliteAdapter implements IDatabase {
         from_run_id TEXT,
         from_node_path TEXT,
         recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      -- An item's own priority; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_priorities (
+        item_id TEXT PRIMARY KEY REFERENCES remote_agent_items(id)
       );
       -- An item tracker destination's activation and pass holder; see migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_item_tracker_destinations (
@@ -712,7 +717,9 @@ export class SqliteAdapter implements IDatabase {
         closed_at TEXT,
         met_by_receipt_id TEXT,
         met_by_binding_id TEXT,
-        replaced_by_run_id TEXT
+        replaced_by_run_id TEXT,
+        subject_kind TEXT,
+        subject_number INTEGER
       );
       CREATE INDEX IF NOT EXISTS idx_item_waits_open ON remote_agent_item_waits(workflow_name, event, about) WHERE closed_as IS NULL;
       CREATE INDEX IF NOT EXISTS idx_item_waits_run_id ON remote_agent_item_waits(run_id);

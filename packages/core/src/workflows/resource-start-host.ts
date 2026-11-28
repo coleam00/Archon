@@ -129,7 +129,7 @@ interface BindingIdentity {
   ownerId: string;
 }
 
-async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<Codebase> {
+export async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<Codebase> {
   const { codebase: found, repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
   if (found) return found;
   const registered = repoRoot
