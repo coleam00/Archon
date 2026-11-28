@@ -51,6 +51,10 @@ export function FilterChips({ value, onChange, counts }: FilterChipsProps): Reac
               active ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'
             }`}
             aria-pressed={active}
+            // The focus ring is drawn inside the tab: the tabs sit in a box that
+            // scrolls sideways, which clips a ring drawn outside it. Inline because
+            // the console scope's focus rule outranks an offset utility (see theme.css).
+            style={{ outlineOffset: '-2px' }}
           >
             {label}
             <span
