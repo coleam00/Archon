@@ -278,6 +278,30 @@ describe('shared usage selection', () => {
     expect(snapshot.completedNodeOutputs.get('build')?.output).toBe('private-output');
   });
 
+  it('skips a node row whose data is not JSON, as the resume snapshot does', async () => {
+    const measured = serializeNodeStateRecord(
+      finishNodeExecution(
+        startNodeExecution({
+          runId: 'run',
+          path: 'build',
+          node: {
+            id: 'build',
+            kind: 'agent',
+            source: { kind: 'inline', prompt: 'PRIVATE_PROMPT' },
+          },
+          invocation: newNodeInvocation(),
+          provider: 'claude',
+        }),
+        { status: 'completed' },
+        { costUsd: 0.25, tokens: { input: 4, output: 2 } }
+      )
+    );
+    const unreadable = { ...measured, data: '{' };
+    const fold = foldDagUsage([unreadable, measured], 'run');
+    expect(countedUsage(fold)).toMatchObject({ costUsd: 0.25 });
+    expect(fold.observations).toHaveLength(1);
+  });
+
   it('does not weaken strict malformed execution handling', async () => {
     const row: DagResumeEvent = {
       step_name: 'build',

@@ -5,6 +5,7 @@ import {
   foldDagUsageRecord,
   foldDeferredUsage,
   newDagUsageFold,
+  type DagUsageEventRow,
   type DagUsageFold,
 } from './dag-usage-fold';
 import type { FanOutInstanceSnapshot } from './fan-out-identity';
@@ -34,11 +35,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return (cachedLog ??= createLogger('workflow.dag-resume-snapshot'));
 }
 
-export interface DagResumeEvent {
-  step_name?: string | null;
-  event_type: string;
-  data?: string | Record<string, unknown>;
-}
+export type DagResumeEvent = DagUsageEventRow;
 
 /**
  * Keep the failure a `node_failed` row records, as a later pass replays it. Every other

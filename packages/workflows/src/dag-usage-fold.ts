@@ -25,11 +25,15 @@ function getLog(): ReturnType<typeof createLogger> {
   return (cachedLog ??= createLogger('workflow.dag-usage-fold'));
 }
 
-export interface DagUsageRow {
-  step_name: string;
+/** A persisted workflow event row, as the store returns it. */
+export interface DagUsageEventRow {
+  step_name?: string | null;
   event_type: string;
   data?: string | Record<string, unknown>;
 }
+
+/** A row that names its node. */
+export type DagUsageRow = DagUsageEventRow & { step_name: string };
 
 export interface DagUsageMeasurement {
   tokens:
@@ -161,14 +165,7 @@ export function foldDagUsageRecord(
   foldNodeUsage(fold, row, record, evidence);
 }
 
-export function foldDagUsage(
-  rows: readonly {
-    step_name?: string | null;
-    event_type: string;
-    data?: string | Record<string, unknown>;
-  }[],
-  runId: string
-): DagUsageFold {
+export function foldDagUsage(rows: readonly DagUsageEventRow[], runId: string): DagUsageFold {
   const fold = newDagUsageFold(runId);
   for (const row of rows) {
     if (!row.step_name) continue;
@@ -176,6 +173,9 @@ export function foldDagUsage(
     if (row.event_type === DEFERRED_NODE_USAGE_EVENT_TYPE) {
       foldDeferredUsage(fold, usageRow);
     } else if (NODE_STATE_EVENT_TYPES.some(type => type === row.event_type)) {
+      // The resume snapshot skips a node row whose data is not JSON, with a warning, and
+      // keeps the rows after it. This entry point does the same.
+      if (dataIsNotJson(runId, usageRow)) continue;
       const record = readNodeRecordEvent({
         workflow_run_id: runId,
         ...usageRow,
@@ -185,6 +185,20 @@ export function foldDagUsage(
     }
   }
   return fold;
+}
+
+function dataIsNotJson(runId: string, row: DagUsageRow): boolean {
+  if (typeof row.data !== 'string') return false;
+  try {
+    JSON.parse(row.data);
+    return false;
+  } catch (parseErr) {
+    getLog().warn(
+      { err: parseErr as Error, runId, stepName: row.step_name },
+      'db.workflow_dag_node_output_parse_failed'
+    );
+    return true;
+  }
 }
 
 export interface UsageContribution {
@@ -215,7 +229,12 @@ function isReportedTokens(
 
 function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsage | undefined {
   if (!isReportedTokens(tokens)) {
-    getLog().warn({ runId, stepName, tokens }, 'db.workflow_dag_node_tokens_invalid_ignored');
+    // The value failed its shape check, so it may be any text a provider or an older binary
+    // wrote. Log what kind of thing it is, not the thing.
+    getLog().warn(
+      { runId, stepName, tokenType: tokens === null ? 'null' : typeof tokens },
+      'db.workflow_dag_node_tokens_invalid_ignored'
+    );
     return undefined;
   }
   const normalized: TokenUsage = { input: tokens.input, output: tokens.output };
@@ -226,7 +245,7 @@ function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsag
       normalized[axis] = value;
     } else {
       getLog().warn(
-        { runId, stepName, axis, value },
+        { runId, stepName, axis, valueType: value === null ? 'null' : typeof value },
         'db.workflow_dag_node_optional_tokens_invalid_ignored'
       );
     }
@@ -247,7 +266,10 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
   // silently poison the total (NaN > 0 is false, which would drop the run's
   // cost from the persisted metadata with no trace).
   if (typeof costUsd === 'number' && Number.isFinite(costUsd)) return costUsd;
-  getLog().warn({ runId, stepName, costUsd }, 'db.workflow_dag_node_cost_invalid_ignored');
+  getLog().warn(
+    { runId, stepName, costType: costUsd === null ? 'null' : typeof costUsd },
+    'db.workflow_dag_node_cost_invalid_ignored'
+  );
   return undefined;
 }
 
