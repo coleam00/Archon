@@ -82,6 +82,7 @@ export async function printStatusRun(
   const age = formatAge(run.started_at);
   console.log(`  ID:     ${run.id}`);
   console.log(`  Name:   ${run.workflow_name}`);
+  if (run.item_key != null) console.log(`  Item:   ${run.item_key}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
   console.log(`  Status: ${run.status}`);
   const pauseLine = operatorPauseLine(run);

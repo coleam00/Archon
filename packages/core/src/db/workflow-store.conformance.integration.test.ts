@@ -9,6 +9,7 @@ import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
+import { describeRunItemListingConformance } from './workflow-run-listing.conformance-harness';
 import { describeItemLandingConformance } from './item-landings.conformance-harness';
 import { describeItemPriorityConformance } from './item-priorities.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
@@ -43,6 +44,7 @@ const makeHarness = async () => {
 describeWorkflowStoreConformance('SQLite', makeHarness);
 
 describeSqlStatusReadConformance(makeHarness);
+describeRunItemListingConformance(makeHarness);
 describeItemLinkConformance(makeHarness);
 describeItemLandingConformance(makeHarness);
 describeItemPriorityConformance(makeHarness);

@@ -485,6 +485,30 @@ describe('workflowStatusCommand', () => {
     expect(printed).not.toContain('/workflow ');
   });
 
+  it('names the item an active run is on, between its name and its path', async () => {
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        {
+          id: 'run-item',
+          workflow_name: 'implement',
+          working_path: '/path/to/worktree',
+          status: 'running',
+          started_at: new Date(),
+          active_nodes: [],
+          item_key: 'acme/web#7',
+        },
+      ])
+    );
+
+    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
+
+    const lines = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(lines.indexOf('  Name:   implement') + 1).toBe(lines.indexOf('  Item:   acme/web#7'));
+    expect(lines.indexOf('  Item:   acme/web#7') + 1).toBe(
+      lines.indexOf('  Path:   /path/to/worktree')
+    );
+  });
+
   it('prints the complete active run layout with fixed age and active nodes', async () => {
     const now = spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-23T12:00:00Z'));
     try {

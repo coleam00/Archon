@@ -61,6 +61,7 @@ describe('run responses', () => {
         {
           ...dashboardRun,
           codebase_name: 'Archon',
+          item_key: 'crusader/crusader-engine#138',
           platform_type: 'cli',
           worker_platform_id: null,
           parent_platform_id: null,
@@ -80,6 +81,7 @@ describe('run responses', () => {
     const result = await listRuns();
     expect(result.runs[0]).toMatchObject({
       projectName: 'Archon',
+      itemKey: 'crusader/crusader-engine#138',
       origin: 'cli',
       activeNodes: ['a', 'b'],
       workerPlatformId: null,

@@ -44,6 +44,7 @@ import {
   type WorkflowJsonEntry,
 } from './workflow-list';
 import { buildNodeSummaries, fetchVerboseEvents, withRunDetail } from './workflow-node-summaries';
+import { runItemsOf } from './workflow-run-items';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import {
   formatAge,
@@ -686,10 +687,11 @@ async function listOpenWorkRuns(
     limit: opts.limit ?? 20,
   });
   const report = await listedRunThroughput(host, runs, opts);
+  const items = await runItemsOf(host, runs);
   if (opts.json) {
     await writeJsonLine({
       ...(report ? { throughput: report.throughput } : {}),
-      runs: report?.runs ?? (opts.verbose ? await withRunDetail(host, runs) : runs),
+      runs: items.named(report?.runs ?? (opts.verbose ? await withRunDetail(host, runs) : runs)),
       total: runs.length,
       scopeFallback: !opts.all && !codebase,
     });
@@ -704,7 +706,7 @@ async function listOpenWorkRuns(
   for (const run of runs) {
     printListedRunThroughput(run.id, report?.runs);
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
+      `  ${run.id.slice(0, 8)}  ${items.cell(run.id)}${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})  adopt: workflow run <name> --adopt ${run.id}`
     );
   }
   printModelThroughput(report?.throughput);
@@ -742,6 +744,7 @@ async function listRecentRuns(
 
   const report = await listedRunThroughput(host, result.runs, opts);
 
+  const items = await runItemsOf(host, result.runs);
   if (opts.json) {
     // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
     // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
@@ -749,7 +752,7 @@ async function listRecentRuns(
       report?.runs ?? (opts.verbose ? await withRunDetail(host, result.runs) : result.runs);
     await writeJsonLine({
       ...result,
-      runs,
+      runs: items.named(runs),
       scopeFallback,
       ...(report ? { throughput: report.throughput } : {}),
     });
@@ -769,7 +772,7 @@ async function listRecentRuns(
     const activeNodes =
       run.active_nodes.length > 0 ? ` · active node(s): ${run.active_nodes.join(', ')}` : '';
     console.log(
-      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${activeNodes}${operatorPauseMark(run)}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${items.cell(run.id)}${run.workflow_name}${activeNodes}${operatorPauseMark(run)}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
     );
   }
   printModelThroughput(report?.throughput);

@@ -44,6 +44,7 @@ const validDashboardWorkflowRun = {
   platform_type: 'web',
   worker_platform_id: null,
   parent_platform_id: null,
+  item_key: null,
   active_nodes: [],
   current_step_name: null,
   total_steps: null,
