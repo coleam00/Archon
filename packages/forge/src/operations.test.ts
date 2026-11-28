@@ -1,5 +1,10 @@
 import { expect, test } from 'bun:test';
-import { checksObservationSchema, summarizeChecks, type CheckObservation } from './operations';
+import {
+  checksObservationSchema,
+  pluginMetadataSchema,
+  summarizeChecks,
+  type CheckObservation,
+} from './operations';
 
 const failed: CheckObservation = {
   unit: { kind: 'commit_status', id: '42', name: 'external-ci' },
@@ -133,4 +138,27 @@ test('failure evidence cannot belong to another operation or call observed rerun
       },
     }).success
   ).toBe(false);
+});
+
+test('plugin metadata may state how the forge is displayed, with a base64 icon', () => {
+  const metadata = {
+    protocol: 1,
+    name: 'test',
+    version: '1',
+    forge: 'test',
+    hosts: ['forge.example'],
+    capabilities: [],
+  };
+  expect(pluginMetadataSchema.parse(metadata).display).toBeUndefined();
+  const icon = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64');
+  expect(
+    pluginMetadataSchema.parse({ ...metadata, display: { name: 'Test Forge', icon } }).display
+  ).toEqual({ name: 'Test Forge', icon });
+  for (const refused of ['<svg/>', 'A'.repeat(16 * 1024 + 4)])
+    expect(
+      pluginMetadataSchema.safeParse({
+        ...metadata,
+        display: { name: 'Test Forge', icon: refused },
+      }).success
+    ).toBe(false);
 });

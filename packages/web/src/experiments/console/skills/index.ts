@@ -12,6 +12,7 @@ export * from './workflows';
 export * from './worktrees';
 export * from './runs';
 export * from './metrics';
+export * from './forge';
 export * from './startRun';
 export * from './messages';
 export * from './conversations';

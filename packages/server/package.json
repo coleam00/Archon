@@ -95,6 +95,9 @@
       "src/routes/api.metrics.test.ts"
     ],
     [
+      "src/routes/api.project-forge.test.ts"
+    ],
+    [
       "src/routes/api.packs.test.ts"
     ],
     [

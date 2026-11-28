@@ -44,6 +44,7 @@ mock.module('./console/skills', () => ({
   addProjectByPath: addPath,
   getMetrics: mock(),
   getMetricViews: mock(),
+  getProjectForge: mock(),
   answerAttentionItem: mock(),
   cancelConversation: mock(),
 }));

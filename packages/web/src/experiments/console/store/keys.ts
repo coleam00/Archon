@@ -42,6 +42,7 @@ export const K = {
   run: (id: string): string => `run:${id}`,
   metrics: (scope: Scope, since: string): string => `metrics:${scopeKey(scope)}:${since}`,
   metricViews: (scope: Scope): string => `metric-views:${scopeKey(scope)}`,
+  projectForge: (projectId: string): string => `project-forge:${projectId}`,
   messages: (conversationId: string): string => `messages:${conversationId}`,
   conversations: (projectId: string): string => `conversations:${projectId}`,
   countsGlobal: 'counts:global' as const,

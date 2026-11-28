@@ -173,6 +173,7 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 | PATCH | `/api/codebases/{id}` | Rename a codebase |
 | DELETE | `/api/codebases/{id}` | Delete a codebase after container cleanup |
 | GET | `/api/codebases/{id}/environments` | List isolation environments for a codebase |
+| GET | `/api/codebases/{id}/forge` | The codebase's repository on its forge, as `ProjectForge`: `none` for a folder or a remote no forge plugin claims, `unresolved` with the error when the forge could not be determined, or `forge` with the plugin that answered and its [`repo.overview`](/reference/forge/#work-item-writes), which is `ok` with the facts and counts or `failed` with the error kind and a remedy. A successful read answers the same codebase and user for 60 seconds |
 | POST | `/api/codebases/base-branch` | Inspect the remote default branch without registering a project |
 | GET | `/api/codebases/{id}/config` | Get a codebase's merged config (defaults, global and its `.archon/config.yaml`) with secrets removed; `envKeys` lists its `env:` key names only |
 | GET | `/api/codebases/{id}/env` | List a codebase's environment variable keys (values are never returned) |

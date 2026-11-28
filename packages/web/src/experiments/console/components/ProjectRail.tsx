@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
+import { Fragment, useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router';
 import { ChartLine, Factory, Inbox, Settings, PenTool, type LucideIcon } from 'lucide-react';
 import { SessionMenu } from '@/components/auth/SessionMenu';
@@ -6,6 +6,7 @@ import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
+import { forgeOverview, useProjectForge } from '../lib/project-forge';
 import * as skill from '../skills';
 import type { Project } from '../primitives/project';
 
@@ -111,6 +112,35 @@ function RailNavLink({
         </span>
       ) : null}
     </NavLink>
+  );
+}
+
+/**
+ * The selected project's open issues and pull requests, each linking to that list on its
+ * forge. Only the project in view is read, so the rail never reads every project's forge.
+ * A sibling of the row, not a child: the row is itself a button.
+ */
+export function RailForgeCounts({ projectId }: { projectId: string }): ReactElement | null {
+  const stats = forgeOverview(useProjectForge(projectId).data)?.stats;
+  const counts = [
+    { noun: 'issues', stat: stats?.issues_open },
+    { noun: 'PRs', stat: stats?.prs_open },
+  ].flatMap(({ noun, stat }) => (stat === undefined ? [] : [{ noun, stat }]));
+  if (counts.length === 0) return null;
+  return (
+    <div className="flex gap-3 px-2 pb-1.5 pl-9 font-mono text-console-11 text-text-tertiary">
+      {counts.map(({ noun, stat }) => (
+        <a
+          key={noun}
+          href={stat.url}
+          target="_blank"
+          rel="noreferrer"
+          className="hover:text-text-primary"
+        >
+          {stat.count.toLocaleString('en-US')} {noun}
+        </a>
+      ))}
+    </div>
   );
 }
 
@@ -341,19 +371,21 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
               <span aria-hidden className="h-px flex-1 bg-border/60" />
             </div>
             {g.items.map(p => (
-              <ProjectRow
-                key={p.id}
-                project={p}
-                selected={scope === p.id}
-                onClick={() => {
-                  navigate(`/console/p/${p.id}`);
-                }}
-                onRemove={() => removeProject(p.id)}
-                onRename={name => renameProject(p.id, name)}
-                onEditEnv={() => {
-                  setEnvProject(p);
-                }}
-              />
+              <Fragment key={p.id}>
+                <ProjectRow
+                  project={p}
+                  selected={scope === p.id}
+                  onClick={() => {
+                    navigate(`/console/p/${p.id}`);
+                  }}
+                  onRemove={() => removeProject(p.id)}
+                  onRename={name => renameProject(p.id, name)}
+                  onEditEnv={() => {
+                    setEnvProject(p);
+                  }}
+                />
+                {scope === p.id ? <RailForgeCounts projectId={p.id} /> : null}
+              </Fragment>
             ))}
           </div>
         ))}

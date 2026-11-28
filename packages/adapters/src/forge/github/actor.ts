@@ -40,6 +40,37 @@ export function authorField(host: string, user: User | undefined): { author?: So
   return user === undefined ? {} : { author: actor(host, user) };
 }
 
+export const graphqlActorSchema = z
+  .object({
+    __typename: z.string().optional(),
+    login: z.string().min(1),
+    id: z.string().min(1),
+    databaseId: z.number().int().nullable().optional(),
+  })
+  .nullable();
+/** The selection `graphqlActorSchema` reads from a GraphQL `Actor`. */
+export const GRAPHQL_ACTOR_FIELDS =
+  '__typename login ... on Node{id} ... on User{databaseId} ... on Bot{databaseId} ... on Organization{databaseId} ... on Mannequin{databaseId}';
+
+/**
+ * `id` is the account's database id, the number REST and webhooks report. An author kind
+ * GitHub gives no database id (an enterprise user account) keeps its GraphQL node id, which
+ * survives a rename as the login does not.
+ */
+export function graphqlActor(
+  host: string,
+  author: z.infer<typeof graphqlActorSchema>
+): SourceActor | null {
+  return author
+    ? {
+        host,
+        id: author.databaseId == null ? author.id : String(author.databaseId),
+        login: author.login,
+        type: accountType(author.__typename),
+      }
+    : null;
+}
+
 /**
  * The account the token acts as. A GitHub App installation token has no user, and
  * GitHub answers 403, which reaches the caller as `authorization`.

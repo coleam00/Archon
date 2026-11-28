@@ -239,6 +239,20 @@ export const workItemSearchRequestSchema = requestBase.extend({
   state: z.enum(['open', 'closed', 'any']).optional(),
   limit: z.number().int().positive().max(WORKITEM_SEARCH_MAX_LIMIT).optional(),
 });
+/** The most items each list of one `repo.overview` holds, and the count when none is asked for. */
+export const REPO_OVERVIEW_MAX_LIMIT = 20;
+export const REPO_OVERVIEW_DEFAULT_LIMIT = 5;
+/**
+ * One repository at a glance: its facts, counts of its issues and pull requests, and the
+ * most recently updated open ones. `since` starts the window of the two `_since` counts;
+ * the caller chooses it. `limit` bounds each list.
+ */
+export const repoOverviewRequestSchema = requestBase.extend({
+  op: z.literal('repo.overview'),
+  repo: repoRefSchema,
+  since: z.iso.datetime({ offset: true }),
+  limit: z.number().int().positive().max(REPO_OVERVIEW_MAX_LIMIT).optional(),
+});
 export const repoLabelEnsureRequestSchema = requestBase.extend({
   op: z.literal('repo.label.ensure'),
   repo: repoRefSchema,
@@ -450,6 +464,9 @@ export const attachmentContentTypeSchema = z.enum([
   'image/gif',
   'image/webp',
 ]);
+// A pattern rather than `z.base64()`: its JSON Schema `contentEncoding` keyword is
+// one the script API type generator cannot state.
+export const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 /** The most decoded bytes one `attachment.put` stores. */
 export const ATTACHMENT_MAX_BYTES = 5 * 1024 * 1024;
 /**
@@ -463,14 +480,9 @@ export const attachmentPutRequestSchema = requestBase.extend({
   op: z.literal('attachment.put'),
   repo: repoRefSchema,
   contentType: attachmentContentTypeSchema,
-  // A pattern rather than `z.base64()`: its JSON Schema `contentEncoding` keyword is
-  // one the script API type generator cannot state.
   content: z
     .string()
-    .regex(
-      /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/,
-      'content must be base64'
-    )
+    .regex(BASE64_PATTERN, 'content must be base64')
     .refine(
       value => {
         const bytes = Buffer.byteLength(value, 'base64');
@@ -518,6 +530,7 @@ export const lifecycleReadRequestSchemas = [
   prFilesRequestSchema,
   repoFileRequestSchema,
   actorSelfRequestSchema,
+  repoOverviewRequestSchema,
 ] as const;
 export const mutationRequestSchemas = [
   prMergeRequestSchema,
@@ -635,6 +648,58 @@ export const workItemSearchSchema = z.object({
   items: z.array(workItemSearchItemSchema),
   truncated: z.boolean(),
 });
+/** How many items a list holds, and `url`, the forge's own page for exactly that list. */
+const repoOverviewStatSchema = z.object({ count: z.number().int().nonnegative(), url: z.url() });
+/**
+ * `issues_bugs` counts the open issues the forge classifies as bugs. The two `_actor`
+ * counts are for the account the plugin's credential acts as, and their `url` shows that
+ * account's list to whoever opens it. The two `_since` counts are pull requests merged
+ * and issues closed at or after the request's `since`.
+ */
+export const repoOverviewStatsSchema = z
+  .object({
+    issues_open: repoOverviewStatSchema,
+    issues_unlabeled: repoOverviewStatSchema,
+    issues_bugs: repoOverviewStatSchema,
+    issues_assigned_to_actor: repoOverviewStatSchema,
+    prs_open: repoOverviewStatSchema,
+    prs_draft: repoOverviewStatSchema,
+    prs_review_requested_from_actor: repoOverviewStatSchema,
+    prs_merged_since: repoOverviewStatSchema,
+    issues_closed_since: repoOverviewStatSchema,
+  })
+  .partial();
+export const repoOverviewItemSchema = subjectRecordSchema.extend({
+  title: z.string(),
+  updatedAt: timestamp,
+  author: authorSchema,
+  labels: labelNamesSchema.optional(),
+  /** Only a pull request reports it. */
+  is_draft: z.boolean().optional(),
+});
+/**
+ * An optional key the plugin omits is a fact the forge or the plugin does not have; a
+ * caller hides it and never reads it as zero or empty. Null is the forge's own answer
+ * that there is none: no description, no release yet. `name` is the repository as the
+ * forge displays it, `url` its web page, and `actor` the account the credential acts as.
+ * Both lists hold open items, most recently updated first.
+ */
+export const repoOverviewSchema = z.object({
+  repo: repoRefSchema,
+  since: timestamp,
+  url: z.url(),
+  name: text,
+  description: z.string().nullable().optional(),
+  stars: z.number().int().nonnegative().optional(),
+  forks: z.number().int().nonnegative().optional(),
+  default_branch: text.optional(),
+  latest_release: z.object({ name: text, url: z.url() }).nullable().optional(),
+  actor: z.object({ login: text }).optional(),
+  stats: repoOverviewStatsSchema,
+  pull_requests: z.array(repoOverviewItemSchema).optional(),
+  issues: z.array(repoOverviewItemSchema).optional(),
+});
+export type RepoOverview = z.infer<typeof repoOverviewSchema>;
 export const workItemCommentsSchema = z.object({
   workitem: subjectRecordSchema,
   comments: z.array(workItemCommentSchema),
@@ -708,6 +773,7 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: prFilesRequestSchema.shape.op, value: prFilesSchema }),
   z.object({ op: repoFileRequestSchema.shape.op, value: repoFileSchema }),
   z.object({ op: actorSelfRequestSchema.shape.op, value: actorSelfSchema }),
+  z.object({ op: repoOverviewRequestSchema.shape.op, value: repoOverviewSchema }),
 ] as const;
 export const mutationResultSchemas = [
   z.object({

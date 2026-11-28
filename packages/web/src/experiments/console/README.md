@@ -17,6 +17,8 @@ name remains in place to avoid a mechanical move while the builder is changing.
 - `/console/p/:projectId/chat` → project operator chat
 - `/console/p/:projectId/metrics` → the project's overview cards
 - `/console/p/:projectId/metrics/details` → the project's metric details
+- `/console/p/:projectId/forge` → the project's repository on its forge; the tab exists only
+  when a forge plugin claims the project's remote
 - `/console/p/:projectId/r/:runId` → project-scoped run detail
 
 ## Ownership

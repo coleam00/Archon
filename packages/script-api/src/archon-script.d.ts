@@ -718,6 +718,122 @@ declare module 'archon:script' {
         };
       };
     };
+    'repo.overview': {
+      readonly request: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly since: string;
+        readonly limit?: number;
+      };
+      readonly result: {
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+          readonly hostClaim?: true;
+        };
+        readonly since: string;
+        readonly url: string;
+        readonly name: string;
+        readonly description?: string | null;
+        readonly stars?: number;
+        readonly forks?: number;
+        readonly default_branch?: string;
+        readonly latest_release?: {
+          readonly name: string;
+          readonly url: string;
+        } | null;
+        readonly actor?: {
+          readonly login: string;
+        };
+        readonly stats: {
+          readonly issues_open?: {
+            readonly count: number;
+            readonly url: string;
+          };
+          readonly issues_unlabeled?: {
+            readonly count: number;
+            readonly url: string;
+          };
+          readonly issues_bugs?: {
+            readonly count: number;
+            readonly url: string;
+          };
+          readonly issues_assigned_to_actor?: {
+            readonly count: number;
+            readonly url: string;
+          };
+          readonly prs_open?: {
+            readonly count: number;
+            readonly url: string;
+          };
+          readonly prs_draft?: {
+            readonly count: number;
+            readonly url: string;
+          };
+          readonly prs_review_requested_from_actor?: {
+            readonly count: number;
+            readonly url: string;
+          };
+          readonly prs_merged_since?: {
+            readonly count: number;
+            readonly url: string;
+          };
+          readonly issues_closed_since?: {
+            readonly count: number;
+            readonly url: string;
+          };
+        };
+        readonly pull_requests?: ReadonlyArray<{
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+          readonly kind: 'issue' | 'pr';
+          readonly url: string;
+          readonly state: 'open' | 'closed';
+          readonly title: string;
+          readonly updatedAt: string;
+          readonly author?: {
+            readonly host: string;
+            readonly id: string;
+            readonly login: string | null;
+            readonly type?: 'user' | 'bot' | 'organization' | null;
+          } | null;
+          readonly labels?: ReadonlyArray<string>;
+          readonly is_draft?: boolean;
+        }>;
+        readonly issues?: ReadonlyArray<{
+          readonly ref: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+              readonly hostClaim?: true;
+            };
+            readonly number: number;
+          };
+          readonly kind: 'issue' | 'pr';
+          readonly url: string;
+          readonly state: 'open' | 'closed';
+          readonly title: string;
+          readonly updatedAt: string;
+          readonly author?: {
+            readonly host: string;
+            readonly id: string;
+            readonly login: string | null;
+            readonly type?: 'user' | 'bot' | 'organization' | null;
+          } | null;
+          readonly labels?: ReadonlyArray<string>;
+          readonly is_draft?: boolean;
+        }>;
+      };
+    };
     'pr.merge': {
       readonly request: {
         readonly ref: {
@@ -1786,6 +1902,10 @@ declare module 'archon:script' {
         readonly remedies?: {
           readonly unsupported_op?: string;
           readonly no_credential?: string;
+        };
+        readonly display?: {
+          readonly name: string;
+          readonly icon?: string;
         };
       };
     };

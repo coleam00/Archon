@@ -878,6 +878,8 @@ test('the graph and the titles are asked for at once; the columns draw when the 
   const json = (body: unknown): Response =>
     new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
   const board = await mountBoard(url => {
+    // The tab row's read of the project's forge, which is no read of the board's.
+    if (url.endsWith('/forge')) return Promise.resolve(json({ kind: 'none' }));
     asked.push(url.replace(/\?.*$/, ''));
     if (url.includes('/graph'))
       return new Promise(resolve => {

@@ -5182,6 +5182,62 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/codebases/{id}/forge': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** A project's repository on its forge: facts, counts and the newest open items */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          id: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description The forge state. A project with no forge and a failed forge read are states of this resource, not errors. */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProjectForge'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/web-push/key': {
     parameters: {
       query?: never;
@@ -13720,6 +13776,211 @@ export interface components {
       updated_at: string;
       days_since_activity: number;
     };
+    ProjectForge:
+      | {
+          /** @enum {string} */
+          kind: 'none';
+        }
+      | {
+          /** @enum {string} */
+          kind: 'unresolved';
+          error: {
+            /** @enum {string} */
+            kind:
+              | 'unavailable'
+              | 'rate_limited'
+              | 'no_plugin_for_host'
+              | 'unsupported_op'
+              | 'no_credential'
+              | 'authorization'
+              | 'not_found'
+              | 'conflict'
+              | 'forge_error'
+              | 'invalid_request'
+              | 'invalid_response'
+              | 'duplicate_host'
+              | 'process_failed'
+              | 'timeout';
+            message: string;
+          };
+        }
+      | {
+          /** @enum {string} */
+          kind: 'forge';
+          forge: {
+            name: string;
+            icon?: string;
+          };
+          repo: {
+            host: string;
+            path: string;
+          };
+          plugin: {
+            name: string;
+            version: string;
+          };
+          overview:
+            | {
+                /** @enum {string} */
+                status: 'ok';
+                /** Format: date-time */
+                syncedAt: string;
+                value: {
+                  repo: {
+                    host: string;
+                    path: string;
+                    /** @enum {boolean} */
+                    hostClaim?: true;
+                  };
+                  /** Format: date-time */
+                  since: string;
+                  /** Format: uri */
+                  url: string;
+                  name: string;
+                  description?: string | null;
+                  stars?: number;
+                  forks?: number;
+                  default_branch?: string;
+                  latest_release?: {
+                    name: string;
+                    /** Format: uri */
+                    url: string;
+                  } | null;
+                  actor?: {
+                    login: string;
+                  };
+                  stats: {
+                    issues_open?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                    issues_unlabeled?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                    issues_bugs?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                    issues_assigned_to_actor?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                    prs_open?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                    prs_draft?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                    prs_review_requested_from_actor?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                    prs_merged_since?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                    issues_closed_since?: {
+                      count: number;
+                      /** Format: uri */
+                      url: string;
+                    };
+                  };
+                  pull_requests?: {
+                    ref: {
+                      repo: {
+                        host: string;
+                        path: string;
+                        /** @enum {boolean} */
+                        hostClaim?: true;
+                      };
+                      number: number;
+                    };
+                    /** @enum {string} */
+                    kind: 'issue' | 'pr';
+                    /** Format: uri */
+                    url: string;
+                    /** @enum {string} */
+                    state: 'open' | 'closed';
+                    title: string;
+                    /** Format: date-time */
+                    updatedAt: string;
+                    author?: {
+                      host: string;
+                      id: string;
+                      login: string | null;
+                      /** @enum {string|null} */
+                      type?: 'user' | 'bot' | 'organization' | null;
+                    } | null;
+                    labels?: string[];
+                    is_draft?: boolean;
+                  }[];
+                  issues?: {
+                    ref: {
+                      repo: {
+                        host: string;
+                        path: string;
+                        /** @enum {boolean} */
+                        hostClaim?: true;
+                      };
+                      number: number;
+                    };
+                    /** @enum {string} */
+                    kind: 'issue' | 'pr';
+                    /** Format: uri */
+                    url: string;
+                    /** @enum {string} */
+                    state: 'open' | 'closed';
+                    title: string;
+                    /** Format: date-time */
+                    updatedAt: string;
+                    author?: {
+                      host: string;
+                      id: string;
+                      login: string | null;
+                      /** @enum {string|null} */
+                      type?: 'user' | 'bot' | 'organization' | null;
+                    } | null;
+                    labels?: string[];
+                    is_draft?: boolean;
+                  }[];
+                };
+              }
+            | {
+                /** @enum {string} */
+                status: 'failed';
+                error: {
+                  /** @enum {string} */
+                  kind:
+                    | 'unavailable'
+                    | 'rate_limited'
+                    | 'no_plugin_for_host'
+                    | 'unsupported_op'
+                    | 'no_credential'
+                    | 'authorization'
+                    | 'not_found'
+                    | 'conflict'
+                    | 'forge_error'
+                    | 'invalid_request'
+                    | 'invalid_response'
+                    | 'duplicate_host'
+                    | 'process_failed'
+                    | 'timeout';
+                  message: string;
+                };
+                remedy?: string;
+              };
+        };
     WebPushKey: {
       publicKey: string;
     };

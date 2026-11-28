@@ -149,11 +149,62 @@ export async function githubPages<T>(
   }
 }
 
+const graphqlDocumentSchema = z.object({
+  data: z.unknown().optional(),
+  errors: z
+    .array(
+      z.object({
+        message: z.string(),
+        type: z.string().optional(),
+        // The response field the error belongs to, by alias when the query gave one.
+        path: z.array(z.union([z.string(), z.number()])).optional(),
+      })
+    )
+    .optional(),
+});
+export type GithubGraphqlError = NonNullable<
+  z.infer<typeof graphqlDocumentSchema>['errors']
+>[number];
+
 /**
- * One GraphQL call. GitHub answers 200 with an `errors` document for a query or
- * mutation it rejects, so the errors are read here rather than trusted away by
- * the status, and a write is acknowledged only once the document carries none.
+ * One GraphQL call, answered with its data and its errors. GitHub answers 200 with an
+ * `errors` document for a query or mutation it rejects, so a caller reads the errors
+ * rather than trusting the status.
  */
+export async function githubGraphqlDocument(
+  fetchImpl: Fetch,
+  token: string,
+  repo: RepoRef,
+  query: string,
+  variables: Record<string, unknown>
+): Promise<{ data: unknown; errors: readonly GithubGraphqlError[] }> {
+  const { graphql } = location(repo);
+  const raw = await githubRequest(fetchImpl, token, graphql, {
+    method: 'POST',
+    body: JSON.stringify({ query, variables }),
+  });
+  const parsed = graphqlDocumentSchema.parse(raw);
+  return { data: parsed.data, errors: parsed.errors ?? [] };
+}
+
+export function githubGraphqlRefusal(errors: readonly GithubGraphqlError[]): GitHubError {
+  const types = new Set(errors.map(error => error.type));
+  return new GitHubError(
+    {
+      kind: types.has('RATE_LIMITED')
+        ? 'rate_limited'
+        : types.has('NOT_FOUND')
+          ? 'not_found'
+          : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
+            ? 'authorization'
+            : 'forge_error',
+      message: `GitHub GraphQL refused the request: ${errors[0]?.message ?? 'unknown error'}`,
+    },
+    true
+  );
+}
+
+/** One GraphQL call that any error refuses; a write is acknowledged only once there is none. */
 export async function githubGraphql(
   fetchImpl: Fetch,
   token: string,
@@ -162,35 +213,10 @@ export async function githubGraphql(
   variables: Record<string, unknown>,
   acknowledge?: () => void
 ): Promise<unknown> {
-  const { graphql } = location(repo);
-  const raw = await githubRequest(fetchImpl, token, graphql, {
-    method: 'POST',
-    body: JSON.stringify({ query, variables }),
-  });
-  const parsed = z
-    .object({
-      data: z.unknown().optional(),
-      errors: z.array(z.object({ message: z.string(), type: z.string().optional() })).optional(),
-    })
-    .parse(raw);
-  if (parsed.errors && parsed.errors.length > 0) {
-    const types = new Set(parsed.errors.map(error => error.type));
-    throw new GitHubError(
-      {
-        kind: types.has('RATE_LIMITED')
-          ? 'rate_limited'
-          : types.has('NOT_FOUND')
-            ? 'not_found'
-            : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
-              ? 'authorization'
-              : 'forge_error',
-        message: `GitHub GraphQL refused the request: ${parsed.errors[0]?.message ?? 'unknown error'}`,
-      },
-      true
-    );
-  }
+  const { data, errors } = await githubGraphqlDocument(fetchImpl, token, repo, query, variables);
+  if (errors.length > 0) throw githubGraphqlRefusal(errors);
   acknowledge?.();
-  return parsed.data;
+  return data;
 }
 
 function parseUrlRemote(value: string): RepoRef | null {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { checkChangedEventSchema, type CheckResult } from './events';
 import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
+  BASE64_PATTERN,
   actorSelfRequestSchema,
   actorSelfSchema,
   mergeConditionSchema,
@@ -41,6 +42,9 @@ import {
   prFilesSchema,
   repoFileRequestSchema,
   repoFileSchema,
+  repoOverviewItemSchema,
+  repoOverviewRequestSchema,
+  repoOverviewSchema,
   type ForgeMutationRequest,
 } from './lifecycle';
 
@@ -156,6 +160,8 @@ export const pluginIdentitySchema = z.object({
   name: z.string().regex(/^[a-z0-9-]+$/),
   version: z.string().min(1),
 });
+/** The most base64 characters a plugin's `display.icon` holds. */
+export const PLUGIN_ICON_MAX_CHARS = 16 * 1024;
 export const pluginMetadataSchema = pluginIdentitySchema.extend({
   mutationConditions: z.object({ 'pr.merge': z.array(mergeConditionSchema).optional() }).optional(),
   protocol: z.literal(1),
@@ -171,6 +177,19 @@ export const pluginMetadataSchema = pluginIdentitySchema.extend({
       no_credential: z.string().min(1),
     } satisfies Record<PluginRemedyKind, z.ZodString>)
     .partial()
+    .optional(),
+  // How a host presents the forge: its product name, and a base64-encoded SVG a host
+  // draws as a one-colour mask. A host labels a plugin that states none with `forge`.
+  display: z
+    .object({
+      name: z.string().min(1),
+      icon: z
+        .string()
+        .min(1)
+        .max(PLUGIN_ICON_MAX_CHARS)
+        .regex(BASE64_PATTERN, 'icon must be base64')
+        .optional(),
+    })
     .optional(),
 });
 export type PluginMetadata = z.infer<typeof pluginMetadataSchema>;
@@ -290,6 +309,9 @@ const contentAuditSchema = z.object({
   digest: z.string().min(1),
   bytes: z.number().int().nonnegative(),
 });
+const overviewItemAuditSchema = repoOverviewItemSchema
+  .omit({ title: true })
+  .extend({ content: contentAuditSchema });
 const auditResponseSchema = z.discriminatedUnion('ok', [
   responseBase.extend({
     ok: z.literal(true),
@@ -327,6 +349,14 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
       }),
       z.object({ op: workItemOpenedRequestSchema.shape.op, value: workItemOpenedSchema }),
       z.object({ op: actorSelfRequestSchema.shape.op, value: actorSelfSchema }),
+      z.object({
+        op: repoOverviewRequestSchema.shape.op,
+        value: repoOverviewSchema.omit({ description: true }).extend({
+          description: contentAuditSchema.nullable().optional(),
+          pull_requests: z.array(overviewItemAuditSchema).optional(),
+          issues: z.array(overviewItemAuditSchema).optional(),
+        }),
+      }),
       z.object({
         op: workItemSearchRequestSchema.shape.op,
         value: workItemSearchSchema.omit({ text: true }).extend({
@@ -395,7 +425,7 @@ function bodyAudit(body: string): z.infer<typeof contentAuditSchema> {
 type ForgeResult = Extract<ForgeResponse, { ok: true }>['result'];
 type ForgeAuditResult = Extract<ForgeAuditResponse, { ok: true }>['result'];
 
-/** A search's words and titles and a check's log are authored text: digests only. */
+/** A search's words, a title, a repository's description and a check's log are authored text: digests only. */
 function searchAudit(result: Extract<ForgeResult, { op: 'workitem.search' }>): ForgeAuditResult {
   const { text, ...facts } = result.value;
   return {
@@ -404,6 +434,22 @@ function searchAudit(result: Extract<ForgeResult, { op: 'workitem.search' }>): F
       ...facts,
       query: bodyAudit(text),
       items: facts.items.map(({ title, ...item }) => ({ ...item, content: bodyAudit(title) })),
+    },
+  };
+}
+function overviewAudit(result: Extract<ForgeResult, { op: 'repo.overview' }>): ForgeAuditResult {
+  const { description, pull_requests, issues, ...facts } = result.value;
+  const items = (list: typeof issues) =>
+    list?.map(({ title, ...item }) => ({ ...item, content: bodyAudit(title) }));
+  return {
+    op: result.op,
+    value: {
+      ...facts,
+      ...(description === undefined
+        ? {}
+        : { description: description === null ? null : bodyAudit(description) }),
+      ...(pull_requests ? { pull_requests: items(pull_requests) } : {}),
+      ...(issues ? { issues: items(issues) } : {}),
     },
   };
 }
@@ -421,6 +467,7 @@ export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse 
   if (!response.ok) return response;
   const result = response.result;
   if (result.op === 'workitem.search') return { ...response, result: searchAudit(result) };
+  if (result.op === 'repo.overview') return { ...response, result: overviewAudit(result) };
   if (result.op === 'checks.logs') return { ...response, result: logAudit(result) };
   if (result.op === 'pr.reviews')
     return {
