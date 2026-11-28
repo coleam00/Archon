@@ -144,8 +144,14 @@ function parseRowData(fold: ResumeFold, row: FoldedRow): Record<string, unknown>
   try {
     return typeof row.data === 'string' ? JSON.parse(row.data) : (row.data ?? {});
   } catch (parseErr) {
+    // A JSON.parse error message quotes the rejected input, which may hold user text.
     getLog().warn(
-      { err: parseErr as Error, runId: fold.runId, stepName: row.step_name },
+      {
+        errorName: (parseErr as Error).name,
+        dataLength: row.data?.length,
+        runId: fold.runId,
+        stepName: row.step_name,
+      },
       'db.workflow_dag_node_output_parse_failed'
     );
     return undefined;

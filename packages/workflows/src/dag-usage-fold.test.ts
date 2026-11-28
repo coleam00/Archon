@@ -1,8 +1,22 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
+import * as paths from '@archon/paths';
 import { countedUsage, foldDagUsage } from './dag-usage-fold';
 import { foldDagResumeSnapshot, type DagResumeEvent } from './dag-resume-snapshot';
 import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
 import { serializeDeferredNodeUsage, serializeNodeStateRecord } from './node-record-serialization';
+
+/**
+ * Every warning the fold logs. The fold creates its logger lazily, so this is installed before
+ * any test runs, or a warning in an earlier test would hand it the real logger for good.
+ */
+const loggedWarnings: Record<string, unknown>[] = [];
+{
+  const logger = paths.createLogger('test');
+  spyOn(paths, 'createLogger').mockReturnValue(logger);
+  spyOn(logger, 'warn').mockImplementation((...args: Parameters<typeof logger.warn>) => {
+    loggedWarnings.push(args[0] as Record<string, unknown>);
+  });
+}
 
 const started = (path: string, provider = 'claude') =>
   startNodeExecution({
@@ -296,10 +310,17 @@ describe('shared usage selection', () => {
         { costUsd: 0.25, tokens: { input: 4, output: 2 } }
       )
     );
-    const unreadable = { ...measured, data: '{' };
+    // Malformed JSON that carries text a user wrote; a JSON.parse error message quotes it.
+    const unreadable = { ...measured, data: '{"output":"PRIVATE_OUTPUT' };
+    const before = loggedWarnings.length;
     const fold = foldDagUsage([unreadable, measured], 'run');
     expect(countedUsage(fold)).toMatchObject({ costUsd: 0.25 });
     expect(fold.observations).toHaveLength(1);
+    const warnings = loggedWarnings.slice(before);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ errorName: 'SyntaxError', stepName: 'build' });
+    expect(JSON.stringify(warnings)).not.toContain('PRIVATE_OUTPUT');
+    expect(warnings[0]).not.toHaveProperty('err');
   });
 
   it('does not weaken strict malformed execution handling', async () => {
