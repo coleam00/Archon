@@ -1,0 +1,26 @@
+# synthesize fails (an unstubbed node is the dry run's failure) after a clean preflight.
+# settle must then be SKIPPED by the default rule, not run on its own and fail a second
+# time on `$synthesize.output.*`; publish is skipped behind it. The run reports one cause.
+# Run by `archon workflow test review`.
+fixture:
+  fail-node: synthesize
+  expect: failed
+mode:
+  continuation: false
+  head: "0123456789abcdef"
+  cursor: ""
+  risks: "stub: risks"
+  seams: false
+  code: true
+  tests: false
+  errors: false
+  docs: false
+  ux: false
+  part: null
+scope:
+  pr: null
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/scope.md }
+route: { seams: false, code: true, tests: false, errors: false, docs: false, ux: false, reason: "stub: the change touches code" }
+code: "stub: 0 findings"
+review-complete: { seams: skipped, code: completed, tests: skipped, errors: skipped, docs: skipped, ux: skipped }
+verifiers-done: {}

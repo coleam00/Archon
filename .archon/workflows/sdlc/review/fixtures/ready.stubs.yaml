@@ -1,0 +1,43 @@
+# A Ready verdict: synthesize passes, the three verifiers are skipped (nothing to judge),
+# and settle and publish run. verifiers-done and settle are deliberately unstubbed so the
+# real scripts run against the workflow's own `with:` bindings: settle must pass
+# synthesis's verdict through unchanged. The exec workspace is a detached scratch worktree;
+# publish is stubbed so nothing is posted.
+# Run by `archon workflow test review`.
+fixture:
+  expect: completed
+  reached: [settle, publish]
+exec-code: true
+mode:
+  continuation: false
+  head: "0123456789abcdef"
+  cursor: ""
+  risks: "stub: risks"
+  seams: false
+  code: true
+  tests: false
+  errors: false
+  docs: false
+  ux: false
+  part: null
+scope:
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/scope.md }
+route: { seams: false, code: true, tests: false, errors: false, docs: false, ux: false, reason: "stub: the change touches code" }
+code: "stub: 0 findings"
+review-complete: { seams: skipped, code: completed, tests: skipped, errors: skipped, docs: skipped, ux: skipped }
+synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/report.md }
+  discoveries: []
+  contract_left: []
+  coverage_gaps: []
+publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/report.md }
+  discoveries: []
+  contract_left: []
