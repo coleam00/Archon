@@ -1,0 +1,51 @@
+# A not-Ready verdict: synthesize passes with a blocking finding, so all three verifiers
+# run, verifiers-done waits for them, and settle and publish run. settle is stubbed here:
+# the real script reads review/findings.json, which only a real synthesis writes.
+# Run by `archon workflow test review`.
+fixture:
+  expect: completed
+  reached: [verify-1, verify-2, verify-3, settle, publish]
+mode:
+  continuation: false
+  head: "0123456789abcdef"
+  cursor: ""
+  risks: "stub: risks"
+  seams: false
+  code: true
+  tests: false
+  errors: false
+  docs: false
+  ux: false
+  part: null
+scope:
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/scope.md }
+route: { seams: false, code: true, tests: false, errors: false, docs: false, ux: false, reason: "stub: the change touches code" }
+code: "stub: 1 blocking finding"
+review-complete: { seams: skipped, code: completed, tests: skipped, errors: skipped, docs: skipped, ux: skipped }
+synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/report.md }
+  discoveries: []
+  contract_left: []
+  coverage_gaps: []
+verify-1: "stub: votes written"
+verify-2: "stub: votes written"
+verify-3: "stub: votes written"
+verifiers-done: {}
+settle:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 blocking finding upheld"
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/report.md }
+  discoveries: []
+  contract_left: []
+publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 blocking finding upheld"
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/report.md }
+  discoveries: []
+  contract_left: []

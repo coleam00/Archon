@@ -1,0 +1,32 @@
+# scope fails, so route, synthesize and the verifiers are skipped behind it. synthesize
+# carries a stub on purpose: it must be SKIPPED, not failed for a missing stub, and settle
+# must be skipped rather than fail on a reference to a node that never ran. The run
+# reports one cause.
+# Run by `archon workflow test review`.
+fixture:
+  fail-node: scope
+  expect: failed
+mode:
+  continuation: false
+  head: "0123456789abcdef"
+  cursor: ""
+  risks: "stub: risks"
+  seams: false
+  code: true
+  tests: false
+  errors: false
+  docs: false
+  ux: false
+  part: null
+route: { seams: false, code: true, tests: false, errors: false, docs: false, ux: false, reason: "stub: the change touches code" }
+code: "stub: 0 findings"
+review-complete: { seams: skipped, code: completed, tests: skipped, errors: skipped, docs: skipped, ux: skipped }
+synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: none"
+  report: { type: archon_artifact, run_id: "fixture-run", path: review/report.md }
+  discoveries: []
+  contract_left: []
+  coverage_gaps: []
+verifiers-done: {}
