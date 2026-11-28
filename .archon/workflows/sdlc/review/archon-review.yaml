@@ -350,15 +350,25 @@ nodes:
     when: "$synthesize.output.ready == false"
     with: { voter: "3" }
 
+  # Waits for the verifiers without also tolerating a failed synthesize. It binds
+  # nothing, so a failed verifier cannot fail it, and it completes when a Ready
+  # verdict skipped all three.
+  - id: verifiers-done
+    script: verifiers-done
+    runtime: bun
+    depends_on: [verify-1, verify-2, verify-3]
+    trigger_rule: all_done
+
   # Applies the votes and owns the final verdict (scripts/settle-review.ts). A
   # verifier that failed or wrote no vote upholds every finding: only two
-  # explicit votes against a blocker demote it. all_done lets it settle after a
-  # failed verifier; it still requires synthesize, whose output it binds.
+  # explicit votes against a blocker demote it. It runs once the verifiers have
+  # settled and synthesize succeeded. A failed synthesize skips it under the
+  # default rule, so the run reports that one failure and not a second one from
+  # a binding that cannot read a failed node's output.
   - id: settle
     script: settle-review
     runtime: bun
-    depends_on: [synthesize, verify-1, verify-2, verify-3]
-    trigger_rule: all_done
+    depends_on: [synthesize, verifiers-done]
     with:
       ready: "$synthesize.output.ready"
       action: "$synthesize.output.action"

@@ -6,7 +6,7 @@
  * workflows, then judge the result with the engine's own validator, schemas and naming.
  */
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { workflowRunStatusSchema } from '../packages/workflows/src/schemas/run-status';
@@ -168,5 +168,53 @@ describe('claims', () => {
       expect(fakeLeaseLive(status)).toBe(isStateLeaseHolderLive(status));
     // A run the store no longer has: deleted, so its lease has ended.
     expect(fakeLeaseLive(undefined)).toBe(isStateLeaseHolderLive(null));
+  });
+});
+
+describe('joins past a failure', () => {
+  // The engine never evaluates a failed node's output. A node that tolerates a failed
+  // dependency with `trigger_rule: all_done` and also binds that dependency's output
+  // plainly fails after the dependency did, and the run reports two causes for one.
+  // `{ from, if_skipped }` is the documented way across a skipped producer and is not
+  // flagged; it does not cover a failed one, which is why such a producer needs a node of
+  // its own that the default rule skips.
+  const plainStrings = (value: unknown): string[] =>
+    typeof value === 'string'
+      ? [value]
+      : value !== null && typeof value === 'object'
+        ? 'from' in value && 'if_skipped' in value
+          ? []
+          : Object.values(value).flatMap(plainStrings)
+        : [];
+
+  test('no all_done node plainly binds the output of a dependency it tolerates', () => {
+    const workflows = readdirSync(PACK, { recursive: true })
+      .map(String)
+      .filter(file => file.endsWith('.yaml') && !file.includes('fixtures'));
+    expect(workflows.length).toBeGreaterThan(5);
+    const offenders: string[] = [];
+    for (const file of workflows) {
+      const parsed = Bun.YAML.parse(readFileSync(join(PACK, file), 'utf8')) as {
+        nodes: {
+          id: string;
+          depends_on?: string | string[];
+          trigger_rule?: string;
+          when?: unknown;
+          with?: unknown;
+        }[];
+      };
+      for (const node of parsed.nodes ?? []) {
+        if (node.trigger_rule !== 'all_done') continue;
+        const tolerated = new Set(
+          [node.depends_on ?? []].flat().map(dependency => `$${String(dependency)}.output`)
+        );
+        const bound = [...plainStrings(node.when), ...plainStrings(node.with)];
+        for (const prefix of tolerated) {
+          if (bound.some(text => text.includes(prefix)))
+            offenders.push(`${file}: ${String(node.id)} binds ${prefix} under all_done`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
