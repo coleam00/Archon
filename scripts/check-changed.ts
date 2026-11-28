@@ -122,21 +122,29 @@ export function packageShippedInputs(
     if (file.endsWith('.md') || file.endsWith('.mdx')) continue;
     const name = byDirectory.get(/^packages\/[^/]+/.exec(file)?.[0] ?? '');
     if (name === undefined) continue;
-    const source = readFileSync(join(repo, file), 'utf8');
-    for (const match of source.matchAll(/[\w./-]+\.(?:md|mdx|sql|txt|yaml|yml)\b/g)) {
-      const token = match[0];
-      // `./` and `../` name a path relative to the naming file only; anything else is a
-      // repository path. Looking a relative reference up at the root as well would give a
-      // package an unrelated root file that happens to share the relative path.
-      const target =
-        token.startsWith('./') || token.startsWith('../')
-          ? normalize(join(dirname(file), token)).replaceAll('\\', '/')
-          : token;
-      if (!wanted.has(target)) continue;
+    for (const target of namedFiles(repo, file, wanted)) {
       owners.set(target, (owners.get(target) ?? new Set()).add(name));
     }
   }
   return owners;
+}
+
+/** The changed files `file` names: a repository path, or an import relative to `file`. */
+function namedFiles(repo: string, file: string, wanted: ReadonlySet<string>): string[] {
+  const source = readFileSync(join(repo, file), 'utf8');
+  const found: string[] = [];
+  for (const match of source.matchAll(/[\w./-]+\.(?:md|mdx|sql|txt|yaml|yml)\b/g)) {
+    const token = match[0];
+    // `./` and `../` name a path relative to the naming file only; anything else is a
+    // repository path. Looking a relative reference up at the root as well would give a
+    // package an unrelated root file that happens to share the relative path.
+    const target =
+      token.startsWith('./') || token.startsWith('../')
+        ? normalize(join(dirname(file), token)).replaceAll('\\', '/')
+        : token;
+    if (wanted.has(target)) found.push(target);
+  }
+  return found;
 }
 
 function packageScope(file: string, graph: WorkspaceGraph): FileScope | undefined {
