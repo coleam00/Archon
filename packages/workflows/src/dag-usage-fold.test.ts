@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, it, spyOn } from 'bun:test';
 import * as paths from '@archon/paths';
 import { countedUsage, foldDagUsage } from './dag-usage-fold';
@@ -6,8 +7,9 @@ import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './no
 import { serializeDeferredNodeUsage, serializeNodeStateRecord } from './node-record-serialization';
 
 /**
- * Every warning the fold logs. The fold creates its logger lazily, so this is installed before
- * any test runs, or a warning in an earlier test would hand it the real logger for good.
+ * Every warning the fold logs. The fold caches its logger on first use, so this file runs in
+ * its own process (`@archon-test-isolated`): a warning in another file would otherwise hand the
+ * fold the real logger before this spy is installed.
  */
 const loggedWarnings: Record<string, unknown>[] = [];
 {
