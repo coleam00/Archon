@@ -545,9 +545,9 @@ describe("a run's definitions", () => {
     const base = checkDeps(checkout, 'release');
     const deps = {
       ...base,
-      projectOf: async (cwd: string) => {
+      projectOf: async (_cwd: string) => {
         projectReads += 1;
-        return base.projectOf(cwd);
+        return base.projectOf();
       },
     };
     const launch = (workflowName: string) => ({
@@ -561,9 +561,8 @@ describe("a run's definitions", () => {
       discoverBindingWorkflows(launch('release-stage'), operation),
       discoverBindingWorkflows(launch('other-stage'), operation),
     ]);
-    expect('discovered' in first && 'discovered' in second && first.discovered).toBe(
-      'discovered' in second ? second.discovered : undefined
-    );
+    if (!('discovered' in first) || !('discovered' in second)) throw new Error('refused');
+    expect(second.discovered).toBe(first.discovered);
     expect(projectReads).toBe(1);
 
     // A stage pushed after that operation is seen by the next one.
