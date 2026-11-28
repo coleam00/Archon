@@ -133,11 +133,12 @@ export function packageShippedInputs(
 function namedFiles(repo: string, file: string, wanted: ReadonlySet<string>): string[] {
   const source = readFileSync(join(repo, file), 'utf8');
   const found: string[] = [];
-  // A reference is the whole run of path characters, and only then is its extension checked:
-  // stopping `config/settings.yaml.example` at `.yaml` would name a file nobody referenced.
-  // Trailing dots end a sentence, not a path.
-  for (const match of source.matchAll(/[\w./-]+/g)) {
-    const token = match[0].replace(/\.+$/, '');
+  // A reference is delimited, not spelled: everything up to whitespace, a quote or a bracket
+  // is one path, and only then is its extension checked. A whitelist of path characters
+  // would cut `config/settings.yaml.example` at `.yaml`, or `a+config/settings.yaml` at `+`,
+  // and name a file nobody referenced. Trailing punctuation ends a sentence, not a path.
+  for (const match of source.matchAll(/[^\s'"`()[\]{}<>]+/g)) {
+    const token = match[0].replace(/[.,;:]+$/, '');
     if (!/\.(?:md|mdx|sql|txt|yaml|yml)$/.test(token)) continue;
     // `./` and `../` name a path relative to the naming file only; anything else is a
     // repository path. Looking a relative reference up at the root as well would give a

@@ -238,8 +238,9 @@ describe('changedFiles', () => {
     );
     writeFileSync(
       join(repo, 'packages/cli/src/example.ts'),
-      // Names the example file, not the root settings file changed below.
-      "import example from 'config/settings.yaml.example';\n"
+      // Name other files whose tails read like the root settings file changed below.
+      "import example from 'config/settings.yaml.example';\n" +
+        "import alt from './alternate+config/settings.yaml';\n"
     );
     writeFileSync(join(repo, '.claude/skills/archon-cli/SKILL.md'), '# skill\n');
     git(repo, 'add', '.');
