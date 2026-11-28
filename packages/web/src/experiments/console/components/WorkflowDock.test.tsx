@@ -25,7 +25,6 @@ const parallelRun: Run = {
   workingPath: null,
   userMessage: 'Implement the change',
   activeNodes: ['parallel-a', 'parallel-b'],
-  lastTool: null,
 };
 
 describe('WorkflowDock', () => {

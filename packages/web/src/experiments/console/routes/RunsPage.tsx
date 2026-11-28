@@ -72,7 +72,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'running',
       startedAt: iso(4 * 60 + 12),
       activeNodes: ['plan/draft'],
-      lastTool: 'read_file',
     },
     {
       ...base,
@@ -82,7 +81,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'running',
       startedAt: iso(9 * 60 + 38),
       activeNodes: ['implement/loop'],
-      lastTool: 'edit_file',
     },
     {
       ...base,
@@ -98,7 +96,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       origin: 'web',
       status: 'paused',
       startedAt: iso(14 * 60 + 22),
-      lastTool: null,
       approval: {
         nodeId: 'foundation-gate',
         message:
@@ -123,7 +120,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'paused',
       outcome: 'succeeded',
       startedAt: iso(4 * 60 + 2),
-      lastTool: null,
       approval: {
         nodeId: 'review/approve',
         message: 'Approve changes before opening PR?',
@@ -140,7 +136,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'failed',
       startedAt: iso(2 * 60 + 41),
       finishedAt: iso(0),
-      lastTool: null,
     },
     {
       ...base,
@@ -151,7 +146,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       outcome: 'failed',
       startedAt: iso(8 * 60 + 14),
       finishedAt: iso(0),
-      lastTool: null,
     },
   ] satisfies Run[];
 }

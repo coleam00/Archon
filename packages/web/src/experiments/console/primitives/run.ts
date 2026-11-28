@@ -81,7 +81,6 @@ export interface Run {
   /** The inputs the run was invoked with, by name; a re-run restores these. */
   suppliedInputs?: Readonly<WorkflowRun['supplied_inputs']>;
   activeNodes: NonNullable<components['schemas']['DashboardWorkflowRun']['active_nodes']>;
-  lastTool?: string | null;
   toolCallAttention?: NonNullable<WorkflowRunMetadata['tool_call_attention']>;
   /**
    * Pending human gate. Null once the gate is resolved (see gateResolved).
@@ -317,7 +316,6 @@ export function toRun(raw: RawWorkflowRun): Run {
     userMessage: raw.user_message ?? '',
     suppliedInputs: raw.supplied_inputs ?? {},
     activeNodes,
-    lastTool: null,
     toolCallAttention: raw.status === 'running' ? (raw.metadata?.tool_call_attention ?? []) : [],
     ...readCurrentPause(raw),
     stopReason: raw.metadata?.stop_reason ?? null,

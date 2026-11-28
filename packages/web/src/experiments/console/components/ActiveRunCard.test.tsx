@@ -23,7 +23,6 @@ const parallelRun: Run = {
   workingPath: null,
   userMessage: 'Implement the change',
   activeNodes: ['parallel-a', 'parallel-b'],
-  lastTool: null,
 };
 
 type Progress = NonNullable<Run['progress']>;
@@ -259,7 +258,7 @@ test.each(['unreachable', 'unknown'] as const)(
   observation => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <ActiveRunCard run={{ ...parallelRun, ownerObservation: observation, lastTool: 'bash' }} />
+        <ActiveRunCard run={{ ...parallelRun, ownerObservation: observation }} />
       </MemoryRouter>
     );
 
