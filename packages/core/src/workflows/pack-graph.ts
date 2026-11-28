@@ -10,6 +10,20 @@
 import { loadStoreSelection } from '../config/store-selection';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { existsSync } from 'node:fs';
+import { relative } from 'node:path';
+import {
+  PackSettingsError,
+  projectPackSettingsPath,
+  readProjectPackSettings,
+  validateProjectPackSettings,
+} from '@archon/workflows/pack-settings';
+import { loadPackMetricViews } from '@archon/workflows/metric-views';
+import {
+  checkGroups,
+  exitProblem,
+  loadPackDocument,
+  ungroupedStages,
+} from '@archon/workflows/pack-document';
 import {
   buildPackGraph,
   graphLink,
@@ -20,10 +34,11 @@ import {
   type InstalledArrow,
   type PackGraph,
 } from '@archon/workflows/pack-graph';
+import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { asksSettledBindingCheck } from './asks-settled';
-import type { BindingDefinitionsDeps } from './definition-source';
+import { type BindingDefinitionsDeps, withOneDefinitionsRead } from './definition-source';
 import {
   bindingProjectKey,
   readOnBindings,
@@ -33,7 +48,39 @@ import {
 } from './run-ended';
 
 type GraphDeps = BindingDefinitionsDeps &
-  Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'>;
+  Pick<RunEndedStartsDependencies, 'triggersDirectory' | 'projectKeyOf'> & {
+    /**
+     * The recorded capacity and the runs holding a slot of each resource named. A reader
+     * without it reports no limit and nothing held.
+     */
+    slotOccupancy?: (
+      resources: readonly string[]
+    ) => Promise<ReadonlyMap<string, { capacity: number; held: number }>>;
+    /**
+     * Live discovery from a root. A server passes `createDiscoveryCache`'s, which keeps the
+     * result while the files discovery reads are unchanged; without it every read discovers.
+     */
+    discover?: (root: string) => Promise<WorkflowLoadResult>;
+  };
+
+/** Each resource the registered arrows start work on, with its stages, limit and slots held. */
+async function packCapacity(
+  installed: readonly InstalledArrow[],
+  deps: GraphDeps
+): Promise<PackGraph['capacity']> {
+  const resources = [...new Set(installed.map(arrow => arrow.resource))];
+  const slots = (await deps.slotOccupancy?.(resources)) ?? new Map<string, never>();
+  return resources.map(resource => {
+    const arrows = installed.filter(arrow => arrow.resource === resource);
+    return {
+      resource,
+      stages: [...new Set(arrows.map(arrow => arrow.launchWorkflow))],
+      declared: arrows.find(arrow => arrow.capacity !== null)?.capacity ?? null,
+      limit: slots.get(resource)?.capacity ?? null,
+      held: slots.get(resource)?.held ?? 0,
+    };
+  });
+}
 
 /** The link a run-ended file starts its stage over, or null for a same-item start. */
 function installedLink(file: OnBinding): InstalledArrow['linked'] {
@@ -63,6 +110,7 @@ async function installedArrows(
   touches: (workflowName: string) => boolean,
   deps: GraphDeps
 ): Promise<InstalledArrow[]> {
+  deps = withOneDefinitionsRead(deps);
   const files = await readOnBindings(deps.triggersDirectory());
   if (files.length === 0) return [];
   // The file store has no items, so a binding with `on` can never start anything there.
@@ -81,6 +129,8 @@ async function installedArrows(
     const entry = {
       file: file.file,
       sourceInstanceId: file.sourceInstanceId,
+      resource: file.binding.resource,
+      capacity: file.binding.capacity ?? null,
       from,
       launchWorkflow,
       linked: installedLink(file),
@@ -111,6 +161,50 @@ async function installedArrows(
   return installed;
 }
 
+/**
+ * The values the project sets, or none when its settings file does not read; that error is
+ * among the settings file's problems. A setting naming a missing file still shows its value.
+ */
+async function projectValues(
+  cwd: string,
+  pack: Parameters<typeof readProjectPackSettings>[1]
+): Promise<Record<string, string>> {
+  try {
+    return await readProjectPackSettings(cwd, pack);
+  } catch (error) {
+    if (error instanceof PackSettingsError) return {};
+    throw error;
+  }
+}
+
+/** The pack's declared settings with the project's values, and its settings file. */
+async function packSettings(
+  cwd: string,
+  packKey: string,
+  workflows: ReturnType<typeof packWorkflows>
+): Promise<Pick<PackGraph, 'settings' | 'settingsFile'>> {
+  // Every workflow of a pack carries its declaration, and the nearest scope's wins.
+  const own = workflows.filter(entry => entry.workflow.pack?.key === packKey);
+  const pack = own[0]?.workflow.pack;
+  // A missing `file` setting is checked through the inputs of each workflow that reads it.
+  const problems = [
+    ...new Set(
+      (await Promise.all(own.map(entry => validateProjectPackSettings(cwd, entry.workflow)))).flat()
+    ),
+  ];
+  const values = pack === undefined ? {} : await projectValues(cwd, pack);
+  return {
+    settings: Object.entries(pack?.settings ?? {}).map(([name, spec]) => ({
+      name,
+      description: spec.description ?? null,
+      type: spec.type,
+      default: spec.default ?? null,
+      value: values[name] ?? null,
+    })),
+    settingsFile: { path: relative(cwd, projectPackSettingsPath(cwd, packKey)), problems },
+  };
+}
+
 export async function readPackGraph(
   cwd: string,
   packKey: string,
@@ -118,7 +212,8 @@ export async function readPackGraph(
   options: { workflowSource?: string } = {}
 ): Promise<PackGraph> {
   const source = options.workflowSource ?? cwd;
-  const discovered = await discoverWorkflowsWithConfig(source, deps.loadConfig, deps.providers);
+  const discovered = await (deps.discover?.(source) ??
+    discoverWorkflowsWithConfig(source, deps.loadConfig, deps.providers));
   const workflows = packWorkflows(discovered, packKey, source);
   const stages = workflows.map(entry => entry.workflow);
   const declared = nearestPackBindings(workflows);
@@ -128,13 +223,46 @@ export async function readPackGraph(
   );
   const touches = (name: string): boolean => own.has(name);
   const copies = await packCopies(discovered, liveSourceRoots(source), packKey);
+  const installed = await installedArrows(cwd, touches, deps);
   const graph = buildPackGraph({
     packKey,
     stages,
     declared,
-    installed: await installedArrows(cwd, touches, deps),
+    installed,
     workflows: [...discovered.workflows, ...(discovered.support ?? [])].map(e => e.workflow),
     discoveryErrors: discovered.errors,
   });
-  return { ...graph, ...copies };
+  // The nearest copy's document, as the nearest copy's bindings are the pack's.
+  const dir = copies.loaded[0]?.dir ?? null;
+  const read = dir === null ? null : await loadPackDocument(dir);
+  const views = dir === null ? null : await loadPackMetricViews(dir);
+  // A stale group entry drops only itself; the problems say which, and which stage is in none.
+  const inFlow = graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow);
+  const checked = read === null ? { groups: [], problems: [] } : checkGroups(read.groups, inFlow);
+  return {
+    ...graph,
+    ...copies,
+    document:
+      read === null || read.document === null
+        ? null
+        : {
+            path: read.document,
+            problems: [
+              ...read.problems,
+              ...checked.problems,
+              ...ungroupedStages(read.groups, inFlow),
+              ...exitProblem(read.exit, inFlow),
+              ...read.warnings,
+            ],
+            text: read.text,
+            ...(read.words === undefined ? {} : { words: read.words }),
+            ...(read.exit === undefined || exitProblem(read.exit, inFlow).length > 0
+              ? {}
+              : { exit: read.exit }),
+          },
+    metricViews: views === null ? null : { names: {}, cards: [], problem: null, ...views },
+    groups: checked.groups,
+    ...(await packSettings(cwd, packKey, workflows)),
+    capacity: await packCapacity(installed, deps),
+  };
 }

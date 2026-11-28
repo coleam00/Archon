@@ -365,6 +365,8 @@ export interface RunsAttention {
   answerRefusals: AttentionResponse['answerRefusals'];
   /** The id of every item the list holds open, whether a run or an ask holds it. */
   itemIds: ReadonlySet<string>;
+  /** The ref of every item the list holds, as the attention stream names it. */
+  refs: ReadonlySet<string>;
   degraded: NonNullable<AttentionResponse['degraded']>;
 }
 

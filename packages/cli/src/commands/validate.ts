@@ -13,7 +13,7 @@ import {
   type WorkflowLoadError,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
-import { declaredStops, nearestPackBindings } from '@archon/workflows/pack-graph';
+import { buildPackGraph, declaredStops, nearestPackBindings } from '@archon/workflows/pack-graph';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
@@ -41,11 +41,23 @@ import { PACK_DECLARATION_PATH } from '@archon/workflows/pack-settings';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { discoverInstalledForgePlugins } from './forge';
 import {
+  checkGroups,
+  exitProblem,
+  loadPackDocument,
+  ungroupedStages,
+} from '@archon/workflows/pack-document';
+import {
+  replacedStillPresent,
+  replacedTwice,
+  unlabelled,
+} from '@archon/workflows/pack-graph-words';
+import { displayDeclarationIssues, withDisplayIssues } from './validate-display';
+import {
   PLUGIN_MANIFEST_FILE,
   unknownManifestKeys,
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
-import { readFile, stat } from 'node:fs/promises';
+import { access, readFile, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 
 /**
@@ -125,7 +137,12 @@ export async function validateWorkflowsCommand(
   source?: string
 ): Promise<number> {
   const config = await buildValidationConfig(source ?? cwd);
-  const results = await collectWorkflowResults(cwd, source, config, forgeTrustedEnv);
+  const { results, workflowEntries } = await collectWorkflowResults(
+    cwd,
+    source,
+    config,
+    forgeTrustedEnv
+  );
   if (source !== undefined && results.length === 0) {
     const message = `Error: no workflows found in --workflow-source ${source}`;
     if (json) await writeStdout(`${JSON.stringify({ error: message, source })}\n`);
@@ -142,10 +159,17 @@ export async function validateWorkflowsCommand(
       return 1;
     }
   }
-  // A pack's bindings and the manifest are not workflows, so the name filter does not apply.
+  // A pack's bindings, the manifest and the pack document are not workflows, so the name filter
+  // does not apply to them.
   filteredResults.push(
     ...(await packBindingResults(source ?? cwd, source === undefined ? pluginRoot : undefined)),
-    ...(await manifestResults(source ?? pluginRoot))
+    ...(await manifestResults(source ?? pluginRoot)),
+    ...(await packDocumentResults(source ?? pluginRoot, workflowEntries))
+  );
+  filteredResults = withDisplayIssues(
+    filteredResults,
+    await packDisplayIssues(source ?? pluginRoot, workflowEntries),
+    name
   );
 
   filteredResults.sort((a, b) => {
@@ -197,7 +221,10 @@ async function collectWorkflowResults(
   workflowSource: string | undefined,
   config: ValidationConfig,
   forgeTrustedEnv: NodeJS.ProcessEnv
-): Promise<WorkflowValidationResult[]> {
+): Promise<{
+  results: WorkflowValidationResult[];
+  workflowEntries: readonly WorkflowWithSource[];
+}> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
   const { workflowEntries, loadErrors } = await discoverForValidation(cwd, workflowSource);
@@ -253,7 +280,7 @@ async function collectWorkflowResults(
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
-  return results;
+  return { results, workflowEntries };
 }
 
 /** The workflows by pack key; a workflow outside a pack is a group of its own. */
@@ -327,6 +354,126 @@ function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, Validat
       ]);
   }
   return issues;
+}
+
+/**
+ * The stages a group of the pack at `packDir` may hold, and the ones it must: with the
+ * bindings the pack declares, its in-flow stages, read as `archon pack graph` reads them
+ * before anything is installed (declared arrows mark a stage in flow on their own). A pack
+ * that declares no bindings has no flow, so a group may hold any workflow of the pack and no
+ * stage must be in one. A source pack is keyed by its manifest's `name`; a plugin root whose
+ * pack discovery did not reach is checked against every workflow discovered.
+ */
+async function packStages(
+  packDir: string,
+  entries: readonly WorkflowWithSource[]
+): Promise<{ allowed: string[]; required: string[]; graph?: ReturnType<typeof buildPackGraph> }> {
+  const manifest = workflowPackManifestSchema.safeParse(
+    JSON.parse(await readFile(join(packDir, PLUGIN_MANIFEST_FILE), 'utf-8'))
+  );
+  const key = manifest.success ? manifest.data.name : undefined;
+  const own = entries.filter(entry => entry.workflow.pack?.key === key);
+  const declared = nearestPackBindings(own);
+  if (own.length === 0 || declared === undefined) {
+    // A document names a stage as its pack authored it, as an installed catalog's name need not.
+    const names = (own.length === 0 ? entries : own).map(
+      ({ workflow }) => workflow.pack?.workflow ?? workflow.name
+    );
+    return { allowed: names, required: [] };
+  }
+  const graph = buildPackGraph({
+    packKey: key ?? '',
+    stages: own.map(entry => entry.workflow),
+    declared,
+    installed: [],
+    workflows: entries.map(entry => entry.workflow),
+    discoveryErrors: [],
+  });
+  const inFlow = graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow);
+  return { allowed: inFlow, required: inFlow, graph };
+}
+
+/**
+ * What is wrong with the pack's document (the manifest's `document`, else its
+ * `how-it-works.md`): errors when it is missing or does not read, when a group names a stage
+ * that is not in the pack's flow or that another group holds, when an in-flow stage is in
+ * no group, and when `exit` names a stage not in the flow (`pack-document.ts`, the checks
+ * `archon pack graph` makes). A frontmatter key this
+ * Archon does not read is a warning, as an unknown manifest key is.
+ */
+async function packDocumentResults(
+  packDir: string,
+  entries: readonly WorkflowWithSource[]
+): Promise<WorkflowValidationResult[]> {
+  const read = await loadPackDocument(packDir);
+  if (read.document === null) return [];
+  const hint = read.fallback
+    ? `Fix ${read.document}, or name the pack's document in the manifest's \`document\`.`
+    : `Fix ${read.document} or the manifest's document path.`;
+  const stages = await packStages(packDir, entries);
+  const errors = [
+    ...read.problems,
+    ...checkGroups(read.groups, stages.allowed).problems,
+    ...ungroupedStages(read.groups, stages.required),
+    ...exitProblem(read.exit, stages.allowed),
+  ];
+  const issues = [
+    ...errors.map(
+      (message): ValidationIssue => ({
+        level: 'error',
+        field: 'pack_document',
+        message,
+        hint,
+      })
+    ),
+    ...read.warnings.map(
+      (message): ValidationIssue => ({
+        level: 'warning',
+        field: 'pack_document',
+        message,
+        hint: `Remove the key from ${read.document}, or check its spelling: a key a newer Archon reads is ignored by this one.`,
+      })
+    ),
+  ];
+  return issues.length > 0
+    ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
+    : [];
+}
+
+/**
+ * What the pack's in-flow stages leave a reader without words for, as warnings (a reader shows
+ * the id instead), and a `display.replaces` naming a stage the pack still has or a retired
+ * workflow named twice, as errors (`pack-graph-words.ts`), by the stage's workflow name. A
+ * mark's `means` and a `results` pointer are checked per workflow
+ * (`displayDeclarationIssues`). Beyond those, a folder with no pack manifest, or a pack with
+ * no flow, has nothing to check.
+ */
+async function packDisplayIssues(
+  packDir: string,
+  entries: readonly WorkflowWithSource[]
+): Promise<Map<string, ValidationIssue[]>> {
+  const byStage = displayDeclarationIssues(entries);
+  try {
+    await access(join(packDir, PLUGIN_MANIFEST_FILE));
+  } catch {
+    return byStage;
+  }
+  let graph: ReturnType<typeof buildPackGraph> | undefined;
+  try {
+    ({ graph } = await packStages(packDir, entries));
+  } catch {
+    // A manifest that does not read is reported by `manifestResults`.
+    return byStage;
+  }
+  if (graph === undefined) return byStage;
+  const add = (stage: string, issue: ValidationIssue): void => {
+    byStage.set(stage, [...(byStage.get(stage) ?? []), issue]);
+  };
+  for (const { stage, message, hint } of unlabelled(graph))
+    add(stage, { level: 'warning', field: 'display', message, hint });
+  for (const { stage, message, hint } of [...replacedStillPresent(graph), ...replacedTwice(graph)])
+    add(stage, { level: 'error', field: 'display', message, hint });
+  return byStage;
 }
 
 /**

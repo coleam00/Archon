@@ -60,7 +60,7 @@ function definedFields<K extends keyof DagNodeFields>(
 function structuralFields(data: DagNodeFields) {
   return {
     id: data.id.trim(),
-    ...definedFields(data, ['description']),
+    ...definedFields(data, ['description', 'display']),
     ...(data.depends_on !== undefined && data.depends_on.length > 0
       ? { depends_on: data.depends_on }
       : {}),

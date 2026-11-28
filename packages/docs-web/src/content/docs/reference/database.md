@@ -324,7 +324,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Deduplicates deliveries by `(source_instance_id, delivery_id)` when the source supplies a delivery ID; `delivery_id` is nullable, and the unique constraint does not deduplicate receipts without one
 
 - **`remote_agent_items`** - The durable thing runs are about
-  - `id`, `project_key`, `key` and `created_at`; `(project_key, key)` is unique. `project_key` is the engine's project key, the one `remote_agent_state_revisions` scopes by
+  - `id`, `project_key`, `key`, `created_at` and `title`; `(project_key, key)` is unique. `title` is what the item is called, null until `archon workflow title` sets it. `project_key` is the engine's project key, the one `remote_agent_state_revisions` scopes by
   - Holds no status, stage or config. Where an item stands is derived from its runs
   - Written the first time a start, run, ruling or link names the key in a project. The engine gives `key` no meaning and never parses it
 

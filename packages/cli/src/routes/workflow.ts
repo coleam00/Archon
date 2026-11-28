@@ -728,6 +728,15 @@ export async function runWorkflowLanding(route: WorkflowRoute): Promise<number> 
   );
 }
 
+export async function runWorkflowTitle(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const target = itemTarget(values);
+  const text = values.text as string | undefined;
+  if (target === undefined || text === undefined || positionals[2] !== undefined)
+    return await fail(json, commands.WORKFLOW_TITLE_USAGE);
+  return await commands.workflowTitleCommand(route.host, effectiveCwd, { ...target, text }, json);
+}
+
 export async function runWorkflowPriority(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, commands, effectiveCwd } = route;
   const target = itemTarget(values);
@@ -825,6 +834,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, pause, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, end, link, items, merged, landing, priority, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, pause, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, end, link, items, merged, landing, title, priority, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

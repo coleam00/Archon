@@ -17,6 +17,27 @@ export const K = {
     `workflow:${encodeURIComponent(cwd)}:${encodeURIComponent(name)}`,
   worktrees: (projectId: string): string => `worktrees:${projectId}`,
   runsAttention: 'runs:attention' as const,
+  /** How many things wait on the operator, for the rail; only the attention stream refetches it. */
+  needsYouCount: 'needs-you:count' as const,
+  /**
+   * Every item of a project: the board's columns, decision strip, work orders, Merged column and
+   * Table and the overview's numbers all read it. Run and attention events refetch `board:*`.
+   */
+  boardOrders: (projectId: string): string => `board:${projectId}:orders`,
+  /**
+   * The run records a list of board cards reads, by the runs asked; under `board:`, so run and
+   * attention events refetch the running step and rounds.
+   */
+  cardReads: (projectId: string, runs: readonly string[]): string =>
+    `board:${projectId}:cards:${runs.join(',')}`,
+  /** The forge's titles for some issues, which board cards print and the board filter searches. */
+  forgeTitles: (projectId: string, issues: readonly number[]): string =>
+    `forge-titles:${projectId}:${issues.join(',')}`,
+  /** The forge's numbers for the pull requests some runs named. */
+  forgeChanges: (projectId: string, changes: readonly { run: string; url: string }[]): string =>
+    `forge-changes:${projectId}:${changes.map(c => `${c.run}@${encodeURIComponent(c.url)}`).join(',')}`,
+  packGraph: (projectId: string, pack: string): string =>
+    `pack-graph:${projectId}:${encodeURIComponent(pack)}`,
   runs: (scope: Scope): string => `runs:${scopeKey(scope)}`,
   run: (id: string): string => `run:${id}`,
   metrics: (scope: Scope, since: string): string => `metrics:${scopeKey(scope)}:${since}`,
@@ -34,6 +55,7 @@ export const K = {
   // instead of issuing duplicate /api/health fetches.
   health: 'health' as const,
   providers: 'providers' as const,
+  observing: 'observing' as const,
   updateCheck: 'update-check' as const,
   githubConnection: 'github-connection' as const,
   providerConnections: 'provider-connections' as const,

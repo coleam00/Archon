@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { providerCapabilitiesSchema } from '@archon/provider-contract';
 import { providerPluginDescriptorSchema } from '@archon/provider-contract/plugin/wire';
 import {
+  workflowPackManifestSchema,
   maintainedProviderPluginId,
   isMaintainedProviderPlugin,
   forgeManifestSchema,
@@ -370,3 +371,21 @@ test.each(['claude', 'codex', 'pi'] as const)(
     expect(isMaintainedProviderPlugin(`${pluginId}/extra`, id)).toBe(false);
   }
 );
+
+test('a workflow pack may name its document: a markdown file inside the pack', () => {
+  const pack = {
+    schemaVersion: 1,
+    kind: 'workflow-pack',
+    name: 'flow',
+    description: 'A pack.',
+    entrypoints: { plan: 'plan/plan.yaml' },
+  };
+  const accepts = (document: string): boolean =>
+    workflowPackManifestSchema.safeParse({ ...pack, document }).success;
+  expect(accepts('docs/how-it-works.md')).toBe(true);
+  expect(workflowPackManifestSchema.safeParse(pack).success).toBe(true);
+  expect(accepts('../outside.md')).toBe(false);
+  expect(accepts('docs/../../outside.md')).toBe(false);
+  expect(accepts('/etc/passwd.md')).toBe(false);
+  expect(accepts('docs/page.html')).toBe(false);
+});

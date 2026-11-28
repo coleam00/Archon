@@ -779,6 +779,9 @@ CREATE TABLE IF NOT EXISTS remote_agent_items (
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
   UNIQUE(project_key, key)
 );
+-- What an item is called, for a reader: set by whoever knows it and replaced when set
+-- again. NULL until something names it; the engine never derives it from the key.
+ALTER TABLE remote_agent_items ADD COLUMN IF NOT EXISTS title TEXT;
 -- A receipt records the key a start named, before any item exists. Preparation resolves
 -- the project, writes the item and points the start request at it; the run takes the
 -- request's item at admission.

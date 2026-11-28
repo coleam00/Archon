@@ -8,6 +8,7 @@ import {
 } from '@archon/core/workflows/run-ended';
 import { runEndedStops } from '@archon/core/workflows/run-ended-stops';
 import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
+import { withOneDefinitionsRead } from '@archon/core/workflows/definition-source';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -41,13 +42,14 @@ export async function checkTriggers(
     throw new FileStoreUnsupportedError(
       `Run-ended and asks-settled triggers (${bindings.map(entry => entry.file).join(', ')})`
     );
-  const deps = {
+  // One read of each base and project for the whole check, not one per binding.
+  const deps = withOneDefinitionsRead({
     ...host.deps,
     // A check changes nothing: a missing global config.yaml stays missing.
     loadConfig: (cwd: string) => loadConfig(cwd, { readOnly: true }),
     projectKeyOf: (cwd: string) => registeredProjectKeyForPath(cwd, host.records.codebases),
     projectOf: (cwd: string) => registeredProjectForPath(cwd, host.records.codebases),
-  };
+  });
   const runEnded = bindings.filter(entry => 'runEnded' in entry);
   const asksSettled = bindings.filter(entry => 'asksSettled' in entry);
   const runEndedProblems = await runEndedTriggerCheck(runEnded, deps);

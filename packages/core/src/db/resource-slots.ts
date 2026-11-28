@@ -579,3 +579,35 @@ export function parseQueuedResourceStart(value: unknown, resource?: string) {
     throw new Error(`Queued request '${row.id}' does not belong to resource '${resource}'`);
   return { id: row.id, hostId: row.host_id, launch: row.launch, itemId: row.item_id };
 }
+
+/**
+ * The capacity each named resource's slot recorded and how many runs hold it now, for a
+ * read that reports them. A resource with no slot row is absent. It prunes nothing: a
+ * holder whose run has ended is left for the next admission and not counted here.
+ */
+export async function listSlotOccupancy(
+  resources: readonly string[]
+): Promise<ReadonlyMap<string, { capacity: number; held: number }>> {
+  const slots = new Map<string, { capacity: number; held: number }>();
+  if (resources.length === 0) return slots;
+  const named = resources.map((_, index) => `$${String(index + 1)}`).join(', ');
+  // SQLite stores the holder id as text; PostgreSQL compares it with a UUID column.
+  const holderRunId =
+    getDatabaseType() === 'postgresql' ? 'CAST(h.holder_id AS UUID)' : 'h.holder_id';
+  const result = await getDatabase().query<{
+    resource_key: string;
+    capacity: number;
+    held: number | string;
+  }>(
+    `SELECT s.resource_key, s.capacity,
+            (SELECT COUNT(*) FROM remote_agent_resource_slot_holders h
+              WHERE h.resource_key = s.resource_key AND h.holder_kind = 'run'
+                AND EXISTS (SELECT 1 FROM remote_agent_workflow_runs w
+                             WHERE w.id = ${holderRunId} AND w.status NOT IN (${terminalList}))) AS held
+       FROM remote_agent_resource_slots s WHERE s.resource_key IN (${named})`,
+    [...resources]
+  );
+  for (const row of result.rows)
+    slots.set(row.resource_key, { capacity: Number(row.capacity), held: Number(row.held) });
+  return slots;
+}

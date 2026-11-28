@@ -389,6 +389,9 @@ Commands:
   workflow merged --item <key> --change <ref> --at <ISO>
                              Record that an item's change merged, as the forge reported it. Recorded once:
                              a second report keeps the first
+  workflow title --item <key> --text <title>
+                             Set what an item is called. Every read of the item returns it beside the key.
+                             Setting it again replaces it
   workflow landing --item <key> --branch <name> [--from <start-point>]
                              Record the branch an item's change lands on. Every fresh run on the item, and on
                              an item part_of it that records none, is cut from it and proposes against it.
@@ -505,7 +508,7 @@ Options:
                              is not terminal (with or without a resource:), or who set the install hold while it is set
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow priority': the item to give priority or clear it on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow end': the item to end; for 'workflow merged': the item whose change merged; for 'workflow landing': the item whose landing branch is recorded; for 'workflow title': the item the title is set on; for 'workflow priority': the item to give priority or clear it on; for 'workflow link': the item the link is from; for 'workflow wait/cancel/abandon': the item whose runs to wait on or act on
   --no-item                  For 'trigger fire': start the run on no item instead of inheriting the firing run's item
   --priority                 For 'trigger fire': give the start's item priority once, when the fire is accepted
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded

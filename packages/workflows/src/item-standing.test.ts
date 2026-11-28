@@ -1,0 +1,173 @@
+import { describe, expect, test } from 'bun:test';
+import { itemStanding } from './item-standing';
+import type { WorkflowRun } from './schemas/workflow-run';
+
+type Run = Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'completed_outcome' | 'metadata'>;
+
+function run(
+  id: string,
+  status: WorkflowRun['status'],
+  extra: { outcome?: string; metadata?: Record<string, unknown> } = {}
+): Run {
+  return {
+    id,
+    status,
+    outcome: null,
+    completed_outcome: extra.outcome ?? null,
+    metadata: extra.metadata ?? {},
+  };
+}
+
+/** What a run records at dispatch; `pack_workflow` is absent on runs from older builds. */
+const dispatch = (pack: string, workflow?: string): Record<string, unknown> => ({
+  dispatch: {
+    base_branch: 'dev',
+    pack,
+    ...(workflow === undefined ? {} : { pack_workflow: workflow }),
+  },
+});
+
+function standing(
+  runs: Run[],
+  facts: {
+    merged?: boolean;
+    ended?: 'outcome' | 'operator';
+    parts?: { done: boolean }[];
+    dependsOn?: { done: boolean }[];
+    stopped?: boolean;
+    refused?: boolean;
+  } = {}
+) {
+  return itemStanding({
+    runs,
+    queued: [],
+    held: [],
+    waits: [],
+    questions: [
+      ...(facts.stopped === true ? [{ kind: 'stopped' }] : []),
+      ...(facts.refused === true ? [{ kind: 'refused_start' }] : []),
+    ],
+    merged: facts.merged ?? false,
+    ended: facts.ended ?? null,
+    parts: facts.parts ?? [],
+    dependsOn: facts.dependsOn ?? [],
+  });
+}
+
+describe('where an item stands', () => {
+  test('a merged change is done, whatever its last run did', () => {
+    expect(standing([run('r1', 'failed')], { merged: true }).state).toBe('done');
+  });
+
+  test('a last run an operator cancelled leaves the item at rest, not failed', () => {
+    expect(
+      standing([run('r1', 'completed', { outcome: 'built' }), run('r2', 'cancelled')])
+    ).toEqual({ runId: 'r2', state: 'resting', pack: null });
+  });
+
+  test('a failed run that a later run superseded does not fail the item', () => {
+    // Standing reads only that a newer run follows; a superseding run is such a run.
+    const rerun = run('r2', 'completed');
+    expect(standing([run('r1', 'failed'), rerun]).state).toBe('resting');
+  });
+
+  test('a start that failed, or one the engine recorded a stop for, needs a decision', () => {
+    expect(standing([run('r1', 'failed')]).state).toBe('failed');
+    const refused = [run('r1', 'completed', { outcome: 'refused' })];
+    expect(standing(refused, { stopped: true }).state).toBe('stopped');
+  });
+
+  test('a completed run with an outcome reads stopped only by the engine stop rule', () => {
+    // No stop recorded (an older run, or a stop the engine does not count): at rest.
+    expect(standing([run('r1', 'completed', { outcome: 'refused' })]).state).toBe('resting');
+  });
+
+  test('an item is done when every part is done, and not by having no parts', () => {
+    const split = [run('r1', 'completed', { outcome: 'split' })];
+    expect(standing(split, { parts: [{ done: true }, { done: true }] }).state).toBe('done');
+    expect(standing(split, { stopped: true }).state).toBe('stopped');
+  });
+
+  test('an item that split into parts never needs a decision of its own while they go on', () => {
+    const parts = [{ done: true }, { done: false }];
+    // Live 199: its split ended 'split' and nothing followed; its work goes on in its parts.
+    const split = [run('r1', 'completed', { outcome: 'split' })];
+    expect(standing(split, { parts }).state).toBe('resting');
+    expect(standing(split, { parts, stopped: true }).state).toBe('resting');
+    expect(standing([run('r1', 'failed')], { parts }).state).toBe('resting');
+    expect(standing([run('r1', 'running')], { parts }).state).toBe('running');
+  });
+
+  test('an item that waits on an item it depends on is waiting, not in need of a decision', () => {
+    // Live 198: its link stage ended 'waiting' because 196, which it depends on, is open.
+    const linked = [run('r1', 'completed', { outcome: 'waiting' })];
+    expect(standing(linked, { dependsOn: [{ done: false }] }).state).toBe('waiting');
+    expect(standing(linked, { dependsOn: [{ done: false }], stopped: true }).state).toBe('waiting');
+    // Once what it depends on is done, nothing moves it but a decision; a failure stays one.
+    expect(standing(linked, { dependsOn: [{ done: true }], stopped: true }).state).toBe('stopped');
+    expect(standing([run('r1', 'failed')], { dependsOn: [{ done: false }] }).state).toBe('failed');
+  });
+
+  test('an item an operator ended is at rest, not failed or stopped, until work starts again', () => {
+    expect(standing([run('r1', 'failed')], { ended: 'operator' }).state).toBe('resting');
+    expect(
+      standing([run('r1', 'completed', { outcome: 'blocked' })], { ended: 'operator' }).state
+    ).toBe('resting');
+    expect(standing([run('r1', 'completed')], { ended: 'operator', stopped: true }).state).toBe(
+      'resting'
+    );
+    // A merge still says done; an end that holds while a run runs is impossible, but running wins.
+    expect(standing([run('r1', 'failed')], { ended: 'operator', merged: true }).state).toBe('done');
+    expect(standing([run('r1', 'running')], { ended: 'operator' }).state).toBe('running');
+  });
+
+  test('an outcome that finished the item stands done, unless parts carry its work on', () => {
+    const finished = [run('r1', 'completed', { outcome: 'dropped' })];
+    expect(standing(finished, { ended: 'outcome' }).state).toBe('done');
+    // A split or a work order ends the parent, but its work goes on in the parts.
+    expect(standing(finished, { ended: 'outcome', parts: [{ done: false }] }).state).toBe(
+      'resting'
+    );
+    expect(standing(finished, { ended: 'outcome', parts: [{ done: true }] }).state).toBe('done');
+    // Only the engine's end finishes an item: a run carrying an `item_final` key is not done.
+    const older = [run('r1', 'completed', { outcome: 'dropped', metadata: { item_final: true } })];
+    expect(standing(older).state).toBe('resting');
+  });
+
+  test('a run that observes the item moves it nowhere: standing reads past it', () => {
+    const observer = (id: string, status: WorkflowRun['status'], outcome?: string) =>
+      run(id, status, {
+        ...(outcome === undefined ? {} : { outcome }),
+        metadata: { observes_item: true },
+      });
+    const failed = standing([run('r1', 'failed'), observer('r2', 'completed', 'recorded')]);
+    expect(failed).toEqual({ runId: 'r1', state: 'failed', pack: null });
+    expect(standing([run('r1', 'completed'), observer('r2', 'running')]).state).toBe('resting');
+    expect(standing([observer('r1', 'completed', 'recorded')]).runId).toBeNull();
+  });
+
+  test('a start refused on the item with nothing since needs a decision, not an answer', () => {
+    expect(standing([], { refused: true }).state).toBe('stopped');
+    expect(standing([run('r1', 'cancelled')], { refused: true }).state).toBe('stopped');
+    expect(standing([run('r1', 'failed')], { refused: true }).state).toBe('failed');
+  });
+
+  test('the pack is the key its standing run recorded, even without the workflow name', () => {
+    const runs = [
+      run('r1', 'completed', { metadata: dispatch('flow', 'build') }),
+      run('r2', 'completed', { outcome: 'built', metadata: dispatch('other') }),
+    ];
+    expect(standing(runs).pack).toBe('other');
+  });
+
+  test('a standing run that recorded no pack counts for the newest pack its other runs did', () => {
+    const runs = [
+      run('r1', 'completed', { metadata: dispatch('old') }),
+      run('r2', 'completed', { metadata: dispatch('flow', 'build') }),
+      run('r3', 'completed', { outcome: 'landed' }),
+    ];
+    expect(standing(runs)).toMatchObject({ runId: 'r3', pack: 'flow' });
+    expect(standing([run('r1', 'completed')]).pack).toBeNull();
+    expect(standing([]).pack).toBeNull();
+  });
+});

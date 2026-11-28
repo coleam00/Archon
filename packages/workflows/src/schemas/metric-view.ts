@@ -30,8 +30,8 @@ const ratioViewSchema = z.strictObject({
   title: labelSchema,
   numerator: metricNameSchema,
   denominator: metricNameSchema,
-  /** Follows the denominator's value: "X of Y <denominator_label>". */
-  denominator_label: labelSchema,
+  /** Follows the denominator's value: "X of Y <denominator_label>". Optional: without it the card reads "X of Y". */
+  denominator_label: labelSchema.optional(),
   calibration: z
     .strictObject({
       /**

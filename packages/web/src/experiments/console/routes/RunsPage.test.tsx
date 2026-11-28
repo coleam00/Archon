@@ -183,8 +183,9 @@ test.each([false, true])(
     expect(html.match(/Attention coverage incomplete/g)).toHaveLength(2);
     expect(html.includes('bad-a')).toBe(!project);
     expect(html.includes('bad-b')).toBe(!project);
-    expect(html).toContain('data-pending-run-id="action-run"');
-    expect(html).toContain('Resume');
+    // A project's waiting runs live on its Needs you tab, not on its Runs tab.
+    expect(html.includes('data-pending-run-id="action-run"')).toBe(!project);
+    expect(html.includes('Resume')).toBe(!project);
     expect(html).not.toContain('data-pending-run-id="bad-');
     expect(html).not.toContain('/console/r/bad-');
   }

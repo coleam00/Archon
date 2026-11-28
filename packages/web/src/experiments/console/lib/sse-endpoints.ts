@@ -1,3 +1,6 @@
 export const DASHBOARD_SSE_PATH = '/api/stream/__dashboard__';
-/** `quiet` sends a line when an item that needs someone opens or closes, and nothing else. */
-export const ATTENTION_SSE_PATH = '/api/runs/attention/stream?level=quiet';
+/**
+ * `protocol` sends every line, each with what it `needs`, and `ready` once the open set has been
+ * sent; `quiet` would drop `ready`, and the console needs it to tell the replay from changes.
+ */
+export const ATTENTION_SSE_PATH = '/api/runs/attention/stream?level=protocol';

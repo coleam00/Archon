@@ -13,11 +13,10 @@ import {
   NativeScheduleUnsupportedError,
   type NativeScheduleOptions,
 } from '../triggers/native-schedule';
+import { readWakeLastPass, wakeLastPassPath } from '@archon/core/workflows/wake-last-pass';
 import {
   describeWakeLastPass,
-  readWakeLastPass,
   WAKE_SCHEDULE_INSTALL_COMMAND,
-  wakeLastPassPath,
   workflowWakeScheduleTarget,
 } from './wake-schedule';
 import type { WakeObservation } from './workflow-continuations';
@@ -53,9 +52,40 @@ async function loadObservingSources(
  * read: install passes the installing shell's file to the job with `--sources`.
  */
 async function observingSources(host: WorkflowHost): Promise<readonly ObservingSource[]> {
+  const recorded = await readWakeLastPass(wakeLastPassPath());
   const configPath =
-    process.env.ARCHON_WEBHOOK_SOURCES || (await readWakeLastPass(wakeLastPassPath()))?.sources;
+    process.env.ARCHON_WEBHOOK_SOURCES ||
+    (recorded.kind === 'read' ? recorded.pass.sources : undefined);
   return (await loadObservingSources(host, configPath))?.observing ?? [];
+}
+
+/**
+ * A registered wake watcher with the last pass it recorded. The job discards the watcher's
+ * output, so its last pass is the one sign of a watcher that runs but fails every pass, for
+ * example on a binding's unknown run-as user; a record that does not read is a problem too,
+ * never read as no pass.
+ */
+async function registeredWatcher(
+  target: ReturnType<typeof workflowWakeScheduleTarget>,
+  watcher: { installed: boolean; registered: boolean }
+) {
+  const path = wakeLastPassPath(target);
+  const recorded = await readWakeLastPass(path);
+  if (recorded.kind === 'unreadable')
+    return {
+      watcher,
+      problem: `The wake watcher runs, but its last-pass record ${path} could not be read: ${recorded.reason}`,
+    };
+  if (recorded.kind === 'none') return { watcher };
+  const lastPass = recorded.pass;
+  return {
+    watcher: { ...watcher, lastPass },
+    ...(!lastPass.ok || lastPass.lastFailure
+      ? {
+          problem: `The wake watcher runs, but ${describeWakeLastPass(lastPass).replace(/^Its/, 'its')}`,
+        }
+      : {}),
+  };
 }
 
 /**
@@ -79,18 +109,12 @@ export async function observingReport(host: WorkflowHost, schedules: NativeSched
     const job = await inspectNativeSchedule(target, schedules);
     const watcher = { installed: job !== undefined, registered: job?.registered ?? false };
     if (watcher.registered) {
-      // The job discards the watcher's output; its last pass is the one sign of a watcher
-      // that runs but fails every pass, for example on a binding's unknown run-as user.
-      const lastPass = await readWakeLastPass(wakeLastPassPath(target));
+      const seen = await registeredWatcher(target, watcher);
       return {
         sources,
-        watcher: { ...watcher, ...(lastPass ? { lastPass } : {}) },
+        watcher: seen.watcher,
         unwatched: false,
-        ...(lastPass && (!lastPass.ok || lastPass.lastFailure)
-          ? {
-              problem: `The wake watcher runs, but ${describeWakeLastPass(lastPass).replace(/^Its/, 'its')}`,
-            }
-          : {}),
+        ...(seen.problem === undefined ? {} : { problem: seen.problem }),
       };
     }
     return {

@@ -17,6 +17,7 @@ import {
   scriptToolsSchema,
 } from './provider-options';
 import { workflowNodeHooksSchema } from './hooks';
+import { nodeDisplaySchema } from './display';
 
 // ---------------------------------------------------------------------------
 // TriggerRule
@@ -70,6 +71,9 @@ export const dagNodeBaseSchema = z.object({
   // the executor never reads it. Declared so workflow authors can self-document
   // nodes inline in the YAML instead of Zod silently stripping the field (#2012).
   description: z.string().optional(),
+  // The node's words for a person (`display.ts`), served by the pack graph. Never read by
+  // the executor. Strict, so a misspelt key fails the node instead of showing no label.
+  display: nodeDisplaySchema.optional(),
   depends_on: z.array(z.string()).optional(),
   when: z.string().optional(),
   trigger_rule: triggerRuleSchema.optional(),

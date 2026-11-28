@@ -2387,6 +2387,10 @@ export interface paths {
           until?: string;
           limit?: number | null;
           after?: string;
+          /** @description Keep only the items whose standing.state is one of these, comma-separated (running, waiting, queued, failed, stopped, done, resting). With it the page comes most recently active first and the answer carries totals per state. Name it on every page; the cursor does not carry it. */
+          states?: string;
+          /** @description Keep only the items that count for this pack (standing.pack), by pack key. Ordered and counted as with states. Name it on every page. */
+          pack?: string;
         };
         header?: never;
         path?: never;
@@ -3821,6 +3825,70 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/workflows/runs/records': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * The records of several runs, without their events
+     * @description For each run asked (`runId`, repeated, at most 100): its status, the terminal record's `returns`, every node invocation with a completed node's structured output (as `$NODE_OUTCOMES_FILE` lists them), each loop iteration it started with its bound and whether it completed, and the steps running now. `outputKey` and `resultKey` keep only the named top-level fields of each output and of the result. An id no run has is listed under `missing`; a run whose events do not fold is listed under `unreadable` and the others still read.
+     */
+    get: {
+      parameters: {
+        query: {
+          /** @description A run id; repeat `runId` once per run, at most 100. */
+          runId: string | string[];
+          /** @description Keep only this top-level field of each node's structured output; repeat once per field. Absent: outputs whole. */
+          outputKey?: string | string[];
+          /** @description Keep only this top-level field of the run's result; repeat once per field. Absent: the result whole. */
+          resultKey?: string | string[];
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['RunRecords'];
+          };
+        };
+        /** @description Invalid query */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/workflows/runs/{runId}/provider-events': {
     parameters: {
       query?: never;
@@ -3994,6 +4062,128 @@ export interface paths {
           };
           content: {
             'application/json': components['schemas']['MetricViews'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/observing': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The sources this install observes and the last pass its wake watcher recorded */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Observing'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/forge/subjects': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * What the project's forge says of some issues and delivered changes
+     * @description Each issue's title, state and URL, and for each change a run delivered: its URL, pull request number and whether it merged. A change its item recorded as merged (a land run, or `archon workflow merged`) is merged at the recorded time without asking the forge. Otherwise answers are cached on the server, in memory and in a file under its home so a restarted server keeps them (a change that has not merged for 60 s, an issue for 6 h and an issue the forge could not read for 10 min, a stale answer served while it refreshes); a change URL is looked up only in the repository the project's registered remote resolves to, and one elsewhere answers `unknown` with a `reason`, without the forge being asked about it; a first lookup slower than a few seconds answers `pending` (a change) or `pending: true` (an issue) for that read only, so read again shortly.
+     */
+    get: {
+      parameters: {
+        query: {
+          /** @description The project whose forge to ask. */
+          codebaseId: string;
+          /** @description An issue number in the project remote; repeat once per issue. */
+          issue?: string | string[];
+          /** @description A run that delivered a change at a URL; repeat once per change, paired by position with `changeUrl`. */
+          changeRun?: string | string[];
+          /** @description The URL the `changeRun` at the same position delivered. */
+          changeUrl?: string | string[];
+          /** @description A run that delivered a change but named no URL: its item's run branches are searched for the pull request. */
+          branchRun?: string | string[];
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ForgeSubjects'];
+          };
+        };
+        /** @description Invalid query */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
           };
         };
         /** @description Codebase not found */
@@ -6052,7 +6242,10 @@ export interface components {
     CancelConversationBody: {
       turnId: string;
     };
-    CodebaseListResponse: components['schemas']['Codebase'][];
+    CodebaseListResponse: (components['schemas']['Codebase'] & {
+      /** @description The keys of the workflow packs with a run on an item of this project, as GET /api/packs/{pack}/graph takes them. Empty when the project has no item on a pack stage; null when the item runs could not be scanned. */
+      item_packs: string[] | null;
+    })[];
     Codebase: {
       id: string;
       name: string;
@@ -6221,6 +6414,60 @@ export interface components {
       deprecated?: {
         message: string;
       };
+      display?: {
+        label: string;
+        short?: string;
+        blurb?: string;
+        story?:
+          | string
+          | {
+              withChange: string;
+              withoutChange: string;
+            };
+        outcomes?: {
+          [key: string]: {
+            label?: string;
+            story?:
+              | string
+              | {
+                  withChange: string;
+                  withoutChange: string;
+                };
+          };
+        };
+        phases?: {
+          label: string;
+          cards: {
+            title: string;
+            text: string;
+            icon: string;
+            kind: string;
+            covers: string[];
+          }[];
+        }[];
+        marks?: {
+          node: string;
+          outcome: string;
+          means: string;
+        }[];
+        results?: {
+          [key: string]: string;
+        };
+        replaces?: {
+          workflow: string;
+          loops?: {
+            [key: string]: string;
+          };
+          marks?: {
+            node: string;
+            outcome: string;
+            means: string;
+          }[];
+          results?: {
+            [key: string]: string;
+          };
+        }[];
+      };
       nodes: components['schemas']['DagNode'][];
       result?: {
         outcome?: string;
@@ -6232,6 +6479,7 @@ export interface components {
           does: string;
           /** @description What this option costs: what is given up, what breaks, what has to follow. */
           cost: string;
+          label?: string;
         }[];
         waits?: string;
         ends?: string[];
@@ -6241,6 +6489,10 @@ export interface components {
     DagNode: {
       id: string;
       description?: string;
+      display?: {
+        label: string;
+        text?: string;
+      };
       depends_on?: string[];
       when?: string;
       /** @enum {string} */
@@ -7748,6 +8000,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -7818,6 +8071,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -7859,6 +8113,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -7901,6 +8156,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -7950,6 +8206,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -7994,6 +8251,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -8026,6 +8284,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -8089,6 +8348,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -8133,6 +8393,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -8163,6 +8424,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           priority: boolean;
           revision: number;
@@ -8257,6 +8519,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8327,6 +8590,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8368,6 +8632,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8410,6 +8675,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8459,6 +8725,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8503,6 +8770,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8535,6 +8803,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8598,6 +8867,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8642,6 +8912,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8672,6 +8943,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8709,6 +8981,13 @@ export interface components {
         id: string;
         projectKey: string;
         key: string;
+        title?: string | null;
+      };
+      standing: {
+        runId: string | null;
+        /** @enum {string} */
+        state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'done' | 'resting';
+        pack: string | null;
       };
       runs: {
         id: string;
@@ -8908,6 +9187,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -8978,6 +9258,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9019,6 +9300,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9061,6 +9343,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9110,6 +9393,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9154,6 +9438,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9186,6 +9471,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9249,6 +9535,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9293,6 +9580,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9323,6 +9611,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             priority: boolean;
             revision: number;
@@ -9486,6 +9775,7 @@ export interface components {
           id: string;
           projectKey: string;
           key: string;
+          title?: string | null;
         };
         /** Format: date-time */
         at: string;
@@ -9547,6 +9837,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
             };
       } | null;
@@ -9556,6 +9847,7 @@ export interface components {
           id: string;
           projectKey: string;
           key: string;
+          title?: string | null;
         }[];
       } | null;
       ended: {
@@ -9587,6 +9879,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           /** @enum {string} */
           state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
@@ -9597,6 +9890,7 @@ export interface components {
           id: string;
           projectKey: string;
           key: string;
+          title?: string | null;
         };
         /** @enum {string} */
         state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
@@ -9653,6 +9947,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             report:
               | {
@@ -9677,6 +9972,15 @@ export interface components {
                   linkId: string;
                 };
           }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'held_start_unplaced';
+            receiptId: string;
+            workflow: string | null;
+            message: string;
+          }
       )[];
     };
     ItemWindow: {
@@ -9691,6 +9995,13 @@ export interface components {
           id: string;
           projectKey: string;
           key: string;
+          title?: string | null;
+        };
+        standing: {
+          runId: string | null;
+          /** @enum {string} */
+          state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'done' | 'resting';
+          pack: string | null;
         };
         runs: {
           id: string;
@@ -9890,6 +10201,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -9960,6 +10272,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10001,6 +10314,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10043,6 +10357,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10092,6 +10407,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10142,6 +10458,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10174,6 +10491,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10237,6 +10555,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10281,6 +10600,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10311,6 +10631,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               priority: boolean;
               revision: number;
@@ -10474,6 +10795,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           /** Format: date-time */
           at: string;
@@ -10535,6 +10857,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
               };
         } | null;
@@ -10544,6 +10867,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           }[];
         } | null;
         ended: {
@@ -10575,6 +10899,7 @@ export interface components {
               id: string;
               projectKey: string;
               key: string;
+              title?: string | null;
             };
             /** @enum {string} */
             state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
@@ -10585,6 +10910,7 @@ export interface components {
             id: string;
             projectKey: string;
             key: string;
+            title?: string | null;
           };
           /** @enum {string} */
           state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
@@ -10641,6 +10967,7 @@ export interface components {
                 id: string;
                 projectKey: string;
                 key: string;
+                title?: string | null;
               };
               report:
                 | {
@@ -10665,9 +10992,27 @@ export interface components {
                     linkId: string;
                   };
             }
+          | {
+              /** @enum {string} */
+              type: 'degraded';
+              /** @enum {string} */
+              reason: 'held_start_unplaced';
+              receiptId: string;
+              workflow: string | null;
+              message: string;
+            }
         )[];
       }[];
       next: string | null;
+      totals: {
+        running: number;
+        waiting: number;
+        queued: number;
+        failed: number;
+        stopped: number;
+        done: number;
+        resting: number;
+      } | null;
     };
     ItemRuling: {
       /** @enum {string} */
@@ -10797,6 +11142,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -10867,6 +11213,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -10908,6 +11255,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -10950,6 +11298,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -10999,6 +11348,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -11049,6 +11399,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -11081,6 +11432,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -11144,6 +11496,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -11188,6 +11541,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -11218,6 +11572,7 @@ export interface components {
                   id: string;
                   projectKey: string;
                   key: string;
+                  title?: string | null;
                 };
                 priority: boolean;
                 revision: number;
@@ -11654,6 +12009,187 @@ export interface components {
     WorkflowRunOutcome: 'succeeded' | 'failed' | null;
     WorkflowRunByWorkerResponse: {
       run: components['schemas']['WorkflowRun'];
+    };
+    RunRecords: {
+      records: components['schemas']['RunRecord'][];
+      missing: string[];
+      unreadable: {
+        id: string;
+        error: string;
+      }[];
+    };
+    RunRecord: {
+      id: string;
+      /** @enum {string} */
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+      /** Format: date-time */
+      completed_at: string | null;
+      returns?:
+        | {
+            /** @enum {string} */
+            availability: 'available';
+            node_id: string;
+            value?: unknown;
+          }
+        | {
+            /** @enum {string} */
+            availability: 'unavailable';
+            node_id: string | null;
+            /** @enum {string} */
+            reason:
+              | 'not_declared'
+              | 'graph_unavailable'
+              | 'node_not_completed'
+              | 'output_not_persisted';
+          }
+        | {
+            /** @enum {string} */
+            availability: 'truncated';
+            node_id: string;
+            spill_path: string | null;
+            original_bytes: number | null;
+          };
+      node_outcomes: {
+        run_id: string;
+        first_failed_node: string | null;
+        nodes: {
+          node_id: string;
+          /** @enum {string} */
+          state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+          error?: string;
+          /** @enum {string} */
+          failure_kind?:
+            | 'fatal'
+            | 'transient'
+            | 'unknown'
+            | 'rate_limited'
+            | 'overloaded'
+            | 'timeout'
+            | 'exec_failed'
+            | 'output_contract'
+            | 'schema_unmet'
+            | 'max_iterations'
+            | 'child_failed'
+            | 'cancelled'
+            | 'config'
+            | 'outcome_unknown';
+          /** @enum {string} */
+          reason?:
+            | 'prior_success'
+            | 'when_condition'
+            | 'when_condition_parse_error'
+            | 'trigger_rule'
+            | 'timeout';
+          cause?:
+            | {
+                /** @enum {string} */
+                kind: 'condition';
+                expr: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'condition_parse_error';
+                expr: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'timeout';
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'upstream_failed';
+                origin: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'upstream_skipped';
+                origin: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
+              };
+          fan_out_outcome?: {
+            tally: {
+              total: number;
+              completed: number;
+              failed: number;
+              not_started: number;
+              cancelled_by_engine: number;
+              cancelled_by_workflow: number;
+              cancelled_out_of_band: number;
+              cancelled_unattributed: number;
+            };
+            slots: (
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'completed';
+                  child_run_id: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'failed';
+                  child_run_id: string;
+                  error?: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome: 'not_started';
+                  error: string;
+                }
+              | {
+                  index: number;
+                  /** @enum {string} */
+                  outcome:
+                    | 'cancelled_by_engine'
+                    | 'cancelled_by_workflow'
+                    | 'cancelled_out_of_band'
+                    | 'cancelled_unattributed';
+                  child_run_id: string;
+                  /** @enum {string} */
+                  cancel_reason?:
+                    | 'approval_rejected'
+                    | 'operator'
+                    | 'halt_node'
+                    | 'precondition_failed'
+                    | 'conversation_reset'
+                    | 'fan_out';
+                }
+            )[];
+          };
+          loop_group_path?: {
+            groupId: string;
+            iteration: number;
+          }[];
+          output?: unknown;
+        }[];
+      };
+      loop_iterations: {
+        group: string;
+        iteration: number;
+        max: number | null;
+        completed: boolean;
+      }[];
+      running: string[];
     };
     WorkflowRunDetail: {
       run: components['schemas']['WorkflowRun'] & {
@@ -12626,7 +13162,7 @@ export interface components {
               title: string;
               numerator: string;
               denominator: string;
-              denominator_label: string;
+              denominator_label?: string;
               calibration?: {
                 metric: string;
                 label: string;
@@ -12649,6 +13185,65 @@ export interface components {
         error: string;
       }[];
     };
+    Observing: {
+      sources: {
+        source: string;
+        everySeconds: number;
+        labels: {
+          bindingId: string;
+          repo: {
+            host: string;
+            path: string;
+          };
+          label: string;
+        }[];
+        unserved: {
+          bindingId: string;
+          reason: string;
+        }[];
+      }[];
+      lastPass: {
+        at: string;
+        pid: number;
+        ok: boolean;
+        parts: {
+          wake?: {
+            at: string;
+            ok: boolean;
+            errors: string[];
+          };
+          observe?: {
+            at: string;
+            ok: boolean;
+            errors: string[];
+          };
+        };
+        lastFailure?: {
+          at: string;
+          errors: string[];
+        };
+        sources?: string;
+      } | null;
+      lastPassUnreadable: string | null;
+    };
+    ForgeSubjects: {
+      issues: {
+        number: number;
+        title: string | null;
+        /** @enum {string|null} */
+        state: 'open' | 'closed' | null;
+        url: string | null;
+        pending: boolean;
+      }[];
+      changes: {
+        run: string;
+        url: string | null;
+        merged: boolean | 'unknown' | 'pending';
+        mergedAt: string | null;
+        number: number | null;
+        reason?: string;
+      }[];
+    };
     PackGraph: {
       pack: string;
       loaded: {
@@ -12665,6 +13260,13 @@ export interface components {
       }[];
       stages: {
         name: string;
+        workflow: string;
+        entry: boolean;
+        roles: {
+          role: string;
+          fallback: string;
+        }[];
+        inFlow: boolean;
         returns: string | null;
         outcome: {
           field: string;
@@ -12675,11 +13277,28 @@ export interface components {
             startsNothing: boolean;
             ends: boolean;
             stops: boolean;
+            display?: {
+              label?: string;
+              story?:
+                | string
+                | {
+                    withChange: string;
+                    withoutChange: string;
+                  };
+            };
           }[];
         } | null;
         observes: boolean;
         asks: boolean;
         waits: boolean;
+        options:
+          | {
+              id: string;
+              label?: string;
+              does?: string;
+              cost?: string;
+            }[]
+          | null;
         nodes: {
           id: string;
           kind: string;
@@ -12692,8 +13311,133 @@ export interface components {
           fanOut: {
             workflow: string;
           } | null;
+          display?: {
+            label: string;
+            text?: string;
+          };
         }[];
+        display?: {
+          label: string;
+          short?: string;
+          blurb?: string;
+          story?:
+            | string
+            | {
+                withChange: string;
+                withoutChange: string;
+              };
+          phases?: {
+            label: string;
+            cards: {
+              title: string;
+              text: string;
+              icon: string;
+              kind: string;
+              covers: string[];
+            }[];
+          }[];
+          marks?: {
+            node: string;
+            outcome: string;
+            means: string;
+          }[];
+          results?: {
+            [key: string]: string;
+          };
+          replaces?: {
+            workflow: string;
+            loops?: {
+              [key: string]: string;
+            };
+            marks?: {
+              node: string;
+              outcome: string;
+              means: string;
+            }[];
+            results?: {
+              [key: string]: string;
+            };
+          }[];
+        };
       }[];
+      entries: {
+        binding: string;
+        /** @enum {string} */
+        kind: 'timer' | 'event' | 'fire';
+        stage: string;
+      }[];
+      document: {
+        path: string;
+        problems: string[];
+        text: string;
+        words?: {
+          [key: string]: string;
+        };
+        exit?: string;
+      } | null;
+      metricViews: {
+        names: {
+          [key: string]: string;
+        };
+        cards: (
+          | {
+              /** @enum {string} */
+              shape: 'count';
+              title: string;
+              metric: string;
+              breakdown?: {
+                metric: string;
+                label: string;
+              }[];
+            }
+          | {
+              /** @enum {string} */
+              shape: 'ratio';
+              title: string;
+              numerator: string;
+              denominator: string;
+              denominator_label?: string;
+              calibration?: {
+                metric: string;
+                label: string;
+                rough_below: number;
+              };
+            }
+          | {
+              /** @enum {string} */
+              shape: 'cost_per';
+              title: string;
+              metric: string;
+              cost_of?: string;
+            }
+        )[];
+        problem: string | null;
+      } | null;
+      groups: {
+        name: string;
+        blurb?: string;
+        stages: string[];
+        kind?: string;
+      }[];
+      capacity: {
+        resource: string;
+        stages: string[];
+        declared: number | null;
+        limit: number | null;
+        held: number;
+      }[];
+      settings: {
+        name: string;
+        description: string | null;
+        /** @enum {string} */
+        type: 'string' | 'bool' | 'list' | 'enum';
+        default: string | null;
+        value: string | null;
+      }[];
+      settingsFile: {
+        path: string;
+        problems: string[];
+      };
       arrows: (
         | {
             from:
@@ -12776,6 +13520,10 @@ export interface components {
           fanOut: {
             workflow: string;
           } | null;
+          display?: {
+            label: string;
+            text?: string;
+          };
         }[];
       }[];
       discoveryErrors: {
