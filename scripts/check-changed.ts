@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, normalize } from 'node:path';
 import { BASELINE_PATH } from './check-mock-modules';
 import type { PackageManifest } from './check-package-edges';
 import { LINT_CHECKS, type LintStep, lintSteps } from './lint';
@@ -10,6 +10,7 @@ import {
   shouldRunEveryJob,
   shouldRunPackTests,
   shouldRunTestSuite,
+  trackedFiles,
   workspaceTestInputs,
 } from './should-run-test-suite';
 import {
@@ -53,11 +54,13 @@ export interface WorkspaceGraph {
 export interface ClassifierInputs {
   packRunner: ReadonlySet<string>;
   workspaceTest: ReadonlySet<string>;
+  /** Changed files outside `packages/` that a workspace package ships, to the packages that do. */
+  shipped: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 export interface ScopedChange {
   kind: 'scoped';
-  /** Package name to why it is checked: `changed` or `depends on <name>`. */
+  /** Package name to why it is checked: `changed`, `imported` or `depends on <name>`. */
   packages: Map<string, string>;
   rootScripts: boolean;
   pack: boolean;
@@ -100,6 +103,39 @@ type FileScope =
   | { kind: 'everything'; because: string }
   | { kind: 'checked'; packages: string[]; reason: string; rootScripts: boolean; pack: boolean };
 
+/**
+ * The changed files outside `packages/` that a workspace package ships, each to the packages that
+ * ship it, derived the way CI derives root-script inputs: a tracked non-Markdown file under a
+ * package that names the file's path makes that package an owner. `.claude/skills/` is here
+ * because `packages/cli/src/bundled-skill.ts` imports it as text.
+ */
+export function packageShippedInputs(
+  repo: string,
+  directories: ReadonlyMap<string, string>,
+  changed: Iterable<string>
+): Map<string, Set<string>> {
+  const wanted = new Set(changed);
+  const owners = new Map<string, Set<string>>();
+  if (wanted.size === 0) return owners;
+  const byDirectory = new Map([...directories].map(([name, directory]) => [directory, name]));
+  for (const file of trackedFiles(repo, 'packages')) {
+    if (file.endsWith('.md') || file.endsWith('.mdx')) continue;
+    const name = byDirectory.get(/^packages\/[^/]+/.exec(file)?.[0] ?? '');
+    if (name === undefined) continue;
+    const source = readFileSync(join(repo, file), 'utf8');
+    for (const match of source.matchAll(/[\w./-]+\.(?:md|mdx|sql|txt|yaml|yml)\b/g)) {
+      const token = match[0].replace(/^\.\//, '');
+      // A relative import resolves against the naming file; a repository path is taken as is.
+      const target = [token, normalize(join(dirname(file), token)).replaceAll('\\', '/')].find(
+        path => wanted.has(path)
+      );
+      if (target === undefined) continue;
+      owners.set(target, (owners.get(target) ?? new Set()).add(name));
+    }
+  }
+  return owners;
+}
+
 function packageScope(file: string, graph: WorkspaceGraph): FileScope | undefined {
   const packageDirectory = /^packages\/[^/]+/.exec(file)?.[0];
   if (packageDirectory === undefined) return undefined;
@@ -132,6 +168,16 @@ function classify(file: string, graph: WorkspaceGraph, inputs: ClassifierInputs)
   if (file.startsWith('.archon/')) {
     // Root script tests import pack modules, so a pack change runs them too.
     return { kind: 'checked', packages: [], reason: '', rootScripts: true, pack: true };
+  }
+  const shipped = inputs.shipped.get(file);
+  if (shipped !== undefined && shipped.size > 0) {
+    return {
+      kind: 'checked',
+      packages: [...shipped],
+      reason: 'imported',
+      rootScripts: false,
+      pack: false,
+    };
   }
   return { kind: 'everything', because: `${file} maps to no package or root project` };
 }
@@ -424,6 +470,7 @@ async function main(argv: readonly string[]): Promise<number> {
   const scope = changeScope(files, graph, {
     packRunner: packRunnerInputs(REPO_ROOT, files),
     workspaceTest: workspaceTestInputs(REPO_ROOT, files),
+    shipped: packageShippedInputs(REPO_ROOT, graph.directories, files),
   });
   const lint = lintPlan(scope, files, graph, lintInputs(REPO_ROOT, files));
   printScope(scope, graph, lint);
