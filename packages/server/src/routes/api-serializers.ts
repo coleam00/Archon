@@ -4,6 +4,7 @@ import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun, RunOwnerObservation } from '@archon/core/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { operatorPause } from '@archon/workflows/schemas/operator-pause';
+import type { RunProgress } from '@archon/workflows/schemas/run-progress';
 import { runCostMetadataShape } from '@archon/workflows/schemas/run-usage';
 import {
   isApprovalContext,
@@ -122,11 +123,13 @@ export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
 
 export function toApiDashboardWorkflowRun(
   row: DashboardWorkflowRun,
-  ownerObservation: RunOwnerObservation | null
+  ownerObservation: RunOwnerObservation | null,
+  progress: RunProgress | null
 ): ApiDashboardWorkflowRun {
   return {
     ...row,
     owner_observation: ownerObservation,
+    progress,
     metadata: toApiRunMetadata(row.metadata),
     supplied_inputs: readSuppliedRunInputs(row.metadata),
     attention: toApiRunAttention(row),

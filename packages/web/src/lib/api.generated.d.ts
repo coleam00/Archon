@@ -6816,6 +6816,7 @@ export interface components {
         | unknown;
       item_id: string | null;
       codebase_name: string | null;
+      item_key: string | null;
       platform_type: string | null;
       worker_platform_id: string | null;
       parent_platform_id: string | null;
@@ -6861,6 +6862,7 @@ export interface components {
        * @enum {string|null}
        */
       owner_observation: 'reachable' | 'unreachable' | 'unknown' | null;
+      progress: components['schemas']['RunProgress'];
     };
     WorkflowRunMetadata: {
       tool_call_attention?: {
@@ -7709,6 +7711,29 @@ export interface components {
       /** @enum {string} */
       signal?: 'SIGINT' | 'SIGTERM';
     };
+    /** @description What an active run is doing: its steps, when it last recorded anything (the later of its heartbeat and its newest event), its last agent message and its branch. */
+    RunProgress: {
+      steps: {
+        node_id: string;
+        /** @enum {string} */
+        state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+        kind?: string;
+        /** Format: date-time */
+        started_at?: string;
+        duration_ms?: number;
+        model?: string;
+      }[];
+      last_observed_at: string | null;
+      last_message: {
+        node_id: string;
+        at: string;
+        text: string;
+        /** @enum {boolean} */
+        truncated?: true;
+      } | null;
+      branch: string | null;
+      base_branch: string | null;
+    } | null;
     AttentionQueueItem:
       | {
           /** @enum {string} */

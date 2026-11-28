@@ -13,6 +13,7 @@ import {
   buildLoopRounds,
   buildNodeOutcomes,
   buildRunNodeStates,
+  buildRunSteps,
   buildTerminalRecord,
   getTerminalRecord,
   terminalArtifactsFor,
@@ -777,6 +778,99 @@ describe('loop rounds', () => {
     expect(
       buildLoopRounds(run, [node('node_completed', 'discover', { node_output: 'ok' })])
     ).toEqual([]);
+  });
+});
+
+describe('run steps', () => {
+  const agent = { node: { id: 'build', kind: 'agent', source: { kind: 'inline' } } };
+
+  it('lists the graph nodes in authored order with what each has recorded', () => {
+    const steps = buildRunSteps(run, [
+      invocation('node_started', 'build', [], { ...agent, model: 'sonnet' }),
+      invocation('node_started', 'discover', []),
+      invocation('node_completed', 'discover', [], {}, 1500),
+      invocation('node_started', 'discover.inner', [{ groupId: 'discover', iteration: 1 }]),
+    ]);
+    expect(steps).toEqual([
+      {
+        node_id: 'discover',
+        state: 'completed',
+        kind: 'exec',
+        started_at: '2026-11-16T10:00:00Z',
+        duration_ms: 1500,
+      },
+      {
+        node_id: 'build',
+        state: 'running',
+        kind: 'agent',
+        model: 'sonnet',
+        started_at: '2026-11-16T10:00:00Z',
+      },
+      { node_id: 'report', state: 'pending' },
+      { node_id: 'untouched', state: 'pending' },
+    ]);
+  });
+
+  it('times a retried step over every attempt, and not while the retry runs', () => {
+    const attempt = (id: string, durationMs?: number) => ({
+      attempt: { id, startedAt: '2026-11-16T10:00:00Z' },
+      timing: {
+        startedAt: '2026-11-16T10:00:00Z',
+        ...(durationMs === undefined ? {} : { durationMs }),
+      },
+    });
+    const events = [
+      invocation('node_started', 'build', [], attempt('a1')),
+      invocation('node_failed', 'build', [], { ...attempt('a1', 25), error: 'capacity' }),
+      invocation('node_started', 'build', [], attempt('a2')),
+    ];
+    const build = (all: TerminalRecordEvent[]) =>
+      buildRunSteps(run, all).find(step => step.node_id === 'build');
+    expect(build(events)).not.toHaveProperty('duration_ms');
+    expect(
+      build([...events, invocation('node_completed', 'build', [], attempt('a2', 4))])
+    ).toMatchObject({ state: 'completed', duration_ms: 29 });
+  });
+
+  it('times a step a resume runs again from that invocation, not the failed one', () => {
+    const second = {
+      invocation: { id: 'resumed', startedAt: '2026-11-16T12:00:00Z', loopPath: [] },
+      attempt: { id: 'resumed-attempt', startedAt: '2026-11-16T12:00:00Z' },
+      timing: { startedAt: '2026-11-16T12:00:00Z' },
+    };
+    const steps = buildRunSteps(run, [
+      invocation('node_failed', 'build', [], { error: 'boom' }, 40),
+      invocation('node_started', 'build', [], second),
+    ]);
+    expect(steps.find(step => step.node_id === 'build')).toEqual({
+      node_id: 'build',
+      state: 'running',
+      kind: 'exec',
+      started_at: '2026-11-16T12:00:00Z',
+    });
+  });
+
+  it('drops the timing of a step reset for a re-run', () => {
+    const steps = buildRunSteps(run, [
+      invocation('node_completed', 'build', [], {}, 40),
+      node('node_always_run_reset', 'build'),
+    ]);
+    expect(steps.find(step => step.node_id === 'build')).toEqual({
+      node_id: 'build',
+      state: 'pending',
+    });
+  });
+
+  it('lists every recorded node, in first-appearance order, when the run recorded no graph', () => {
+    const steps = buildRunSteps({ id: 'run-1', metadata: {} }, [
+      node('node_started', 'second'),
+      node('node_completed', 'first'),
+      node('node_completed', 'second'),
+    ]);
+    expect(steps).toEqual([
+      { node_id: 'second', state: 'completed' },
+      { node_id: 'first', state: 'completed' },
+    ]);
   });
 });
 

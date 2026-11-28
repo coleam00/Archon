@@ -414,7 +414,7 @@ export function registerRunAttentionRoutes(
       }
       // A row is a paused run, and only a running run has an owner to observe.
       return c.json({
-        runs: runs.map(run => toApiDashboardWorkflowRun(run, null)),
+        runs: runs.map(run => toApiDashboardWorkflowRun(run, null, null)),
         items: selected,
         answerRefusals,
         ...reports,

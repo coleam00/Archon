@@ -183,6 +183,7 @@ export function makeDashboardRun(
   return {
     ...makeWorkflowRun(),
     codebase_name: 'Archon',
+    item_key: null,
     platform_type: 'cli',
     worker_platform_id: null,
     parent_platform_id: null,

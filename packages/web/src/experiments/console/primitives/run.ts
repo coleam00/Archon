@@ -24,6 +24,19 @@ export interface Run {
   id: WorkflowRun['id'];
   projectId: WorkflowRun['codebase_id'];
   projectName: components['schemas']['DashboardWorkflowRun']['codebase_name'];
+  /**
+   * The item this run is on, as its key reads in that item's project
+   * (`owner/repo#123`). Null or absent for a run on none, including a `workflow:`
+   * sub-run, which belongs to its item through its parent, and for a run this
+   * client assembled rather than read from a dashboard payload.
+   */
+  itemKey?: components['schemas']['DashboardWorkflowRun']['item_key'];
+  /**
+   * What an active run is doing, as the dashboard list serves it. Null or absent for a run
+   * that is not running or paused, one whose node records the server could not read, and
+   * one this client did not read from a dashboard list.
+   */
+  progress?: components['schemas']['DashboardWorkflowRun']['progress'];
   /** Total USD cost from the agent SDK. Populated for completed Claude runs;
    *  Pi/Codex runs may not report cost. Null when the run hasn't recorded any. */
   costUsd: number | null;
@@ -110,6 +123,8 @@ export interface Run {
    * affordance in the console so a sub-run isn't mistaken for an orphan top-level run.
    */
   parentRunId?: WorkflowRun['parent_run_id'];
+  /** The run this one continues or supersedes; null for a run that began fresh. */
+  adoptedFromRunId?: WorkflowRun['adopted_from_run_id'];
 }
 
 /**
@@ -150,16 +165,19 @@ type RawWorkflowRun = Pick<
       | 'attention'
       | 'operator_pause'
       | 'parent_run_id'
+      | 'adopted_from_run_id'
     >
   > &
   Partial<
     Pick<
       DashboardWorkflowRun,
       | 'codebase_name'
+      | 'item_key'
       | 'platform_type'
       | 'active_nodes'
       | 'worker_platform_id'
       | 'owner_observation'
+      | 'progress'
     >
   > &
   Partial<Pick<DetailRun, 'conversation_platform_id' | 'terminal_record'>>;
@@ -244,6 +262,7 @@ function readRunProvenance(raw: RawWorkflowRun) {
     workerPlatformId: raw.worker_platform_id ?? null,
     origin: normalizeOrigin(raw.platform_type),
     parentRunId: raw.parent_run_id ?? null,
+    adoptedFromRunId: raw.adopted_from_run_id ?? null,
   };
 }
 
@@ -283,6 +302,8 @@ export function toRun(raw: RawWorkflowRun): Run {
     id: raw.id,
     costUsd: readCost(raw.metadata),
     workflow: raw.workflow_name,
+    itemKey: raw.item_key ?? null,
+    progress: raw.progress ?? null,
     status: normalizeStatus(raw.status),
     ownerObservation: raw.owner_observation,
     attention: raw.attention ?? null,

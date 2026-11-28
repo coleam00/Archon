@@ -4,6 +4,10 @@ import {
   mockListDashboardRuns,
   mockGetWorkflowRunByWorkerPlatformId,
   mockListWorkflowEvents,
+  mockListEventsForRuns,
+  mockListLatestEventTimes,
+  mockListLatestAgentMessages,
+  mockGetIsolationEnvironment,
   mockListProviderEvents,
   mockGetConversationById,
   mockObserveRunOwner,
@@ -36,6 +40,7 @@ import {
   startNodeExecution,
 } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import { RUN_PROGRESS_MESSAGE_LENGTH } from '@archon/workflows/schemas/run-progress';
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { z } from '@hono/zod-openapi';
 import type { ApprovalContext } from '@archon/workflows/schemas/workflow-run';
@@ -87,7 +92,7 @@ describe('workflow run API cost metadata', () => {
         for (const [wire, schema] of [
           [toApiWorkflowRun(run), apiWorkflowRunSchema],
           [
-            toApiDashboardWorkflowRun(makeDashboardWorkflowRun(run), null),
+            toApiDashboardWorkflowRun(makeDashboardWorkflowRun(run), null, null),
             apiDashboardWorkflowRunSchema,
           ],
         ] as const) {
@@ -903,6 +908,146 @@ describe('GET /api/dashboard/runs', () => {
     } finally {
       mockObserveRunOwner.mockImplementation(async () => null);
     }
+  });
+
+  describe('progress', () => {
+    const nodeEvent = (
+      runId: string,
+      event_type: string,
+      step_name: string,
+      data: Record<string, unknown> = {}
+    ): MockWorkflowEvent => ({
+      id: `${runId}-${event_type}-${step_name}`,
+      workflow_run_id: runId,
+      event_type,
+      step_index: null,
+      step_name,
+      data,
+      created_at: NOW_DATE.toISOString(),
+    });
+    const listProgress = async (): Promise<
+      z.infer<typeof apiDashboardWorkflowRunSchema>['progress'][]
+    > => {
+      const response = await makeApp().app.request('/api/dashboard/runs');
+      expect(response.status).toBe(200);
+      const body = z
+        .object({ runs: z.array(apiDashboardWorkflowRunSchema) })
+        .parse(await response.json());
+      return body.runs.map(run => run.progress);
+    };
+
+    test('serves an active run its steps, last message, branch and last observed time', async () => {
+      const heartbeat = new Date('2026-11-27T10:00:00.000Z');
+      const eventTime = new Date('2026-11-27T10:05:00.000Z');
+      const running = {
+        ...MOCK_RUNNING_RUN,
+        last_activity_at: heartbeat,
+        metadata: {
+          [RUN_GRAPH_METADATA_KEY]: { node_ids: ['plan', 'build'] },
+          isolation_env_id: 'env-1',
+          dispatch: { base_branch: 'dev' },
+        },
+      };
+      const quietLater = {
+        ...running,
+        id: 'run-uuid-9',
+        last_activity_at: eventTime,
+        metadata: {},
+      };
+      mockListDashboardRuns.mockImplementationOnce(async () =>
+        makeDashboardRunsResult({
+          runs: [running, MOCK_COMPLETED_RUN, quietLater].map(makeDashboardWorkflowRun),
+        })
+      );
+      mockListEventsForRuns.mockImplementationOnce(
+        async runIds =>
+          new Map(
+            runIds.map(id => [
+              id,
+              id === running.id ? [nodeEvent(id, 'node_completed', 'plan')] : [],
+            ])
+          )
+      );
+      mockListLatestEventTimes.mockImplementationOnce(
+        async () =>
+          new Map([
+            [running.id, eventTime],
+            [quietLater.id, heartbeat],
+          ])
+      );
+      mockListLatestAgentMessages.mockImplementationOnce(
+        async () =>
+          new Map([
+            [
+              running.id,
+              { stepName: 'plan', observedAt: '2026-11-27T10:04:00.000Z', text: 'x'.repeat(600) },
+            ],
+            [quietLater.id, null],
+          ])
+      );
+      mockGetIsolationEnvironment.mockImplementationOnce(async () => ({
+        branch_name: 'archon/task-1',
+      }));
+
+      const [active, completed, other] = await listProgress();
+
+      expect(active).toEqual({
+        steps: [
+          { node_id: 'plan', state: 'completed' },
+          { node_id: 'build', state: 'pending' },
+        ],
+        last_observed_at: eventTime.toISOString(),
+        last_message: {
+          node_id: 'plan',
+          at: '2026-11-27T10:04:00.000Z',
+          text: 'x'.repeat(RUN_PROGRESS_MESSAGE_LENGTH),
+          truncated: true,
+        },
+        branch: 'archon/task-1',
+        base_branch: 'dev',
+      });
+      expect(completed).toBeNull();
+      expect(other).toEqual({
+        steps: [],
+        last_observed_at: eventTime.toISOString(),
+        last_message: null,
+        branch: null,
+        base_branch: null,
+      });
+      expect(mockListEventsForRuns.mock.calls.at(-1)?.[0]).toEqual([running.id, quietLater.id]);
+      expect(mockGetIsolationEnvironment.mock.calls.at(-1)).toEqual(['env-1']);
+    });
+
+    test('serves a run whose node records cannot be read without progress, and the rest with it', async () => {
+      const damaged = { ...MOCK_RUNNING_RUN, id: 'run-uuid-8' };
+      mockListDashboardRuns.mockImplementationOnce(async () =>
+        makeDashboardRunsResult({
+          runs: [damaged, MOCK_RUNNING_RUN].map(makeDashboardWorkflowRun),
+        })
+      );
+      mockListEventsForRuns.mockImplementationOnce(
+        async runIds =>
+          new Map(
+            runIds.map(id => [
+              id,
+              [
+                nodeEvent(
+                  id,
+                  'node_started',
+                  'build',
+                  // Execution metadata with its required keys missing.
+                  id === damaged.id ? { node: { id: 'build', kind: 'exec', runtime: 'sh' } } : {}
+                ),
+              ],
+            ])
+          )
+      );
+
+      const [unreadable, readable] = await listProgress();
+
+      expect(unreadable).toBeNull();
+      expect(readable?.steps).toEqual([{ node_id: 'build', state: 'running' }]);
+    });
   });
 
   test('returns paginated runs with total and counts', async () => {

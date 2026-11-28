@@ -188,6 +188,7 @@ function makeDashboardRun(): DashboardWorkflowRun {
   return {
     ...makeRun(),
     codebase_name: null,
+    item_key: null,
     platform_type: null,
     worker_platform_id: null,
     parent_platform_id: null,
