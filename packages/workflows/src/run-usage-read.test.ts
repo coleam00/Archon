@@ -401,6 +401,39 @@ describe('strict usage history reads', () => {
     });
   });
 
+  it('reads a child a legacy completion names while recording a zero increment for it', async () => {
+    const legacy: WorkflowEventRow = {
+      id: 'legacy',
+      workflow_run_id: 'parent',
+      event_type: 'node_completed',
+      step_name: 'children',
+      step_index: null,
+      created_at: new Date().toISOString(),
+      data: {
+        type: 'workflow',
+        cost_usd: 0,
+        tokens: { input: 0, output: 0 },
+        child_run_id: 'child',
+      },
+    };
+    const child = run('child', { total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 });
+    const fixture = source(
+      [child],
+      [legacy, agentEvent('child', { costUsd: 0, tokens: { input: 0, output: 0 } })]
+    );
+    const report = await readRunUsageReport(
+      fixture.store,
+      run('parent', { total_cost_usd: 0, total_tokens_in: 0, total_tokens_out: 0 })
+    );
+    expect(fixture.childBatches).toEqual([['child']]);
+    expect(report.coverage.usd).toEqual({
+      state: 'complete',
+      recordedNodes: 1,
+      expectedNodes: 1,
+      gaps: [],
+    });
+  });
+
   it('terminates corrupt child cycles without another database read', async () => {
     const event = parentEvent(['parent']);
     const fixture = source([], [event]);
