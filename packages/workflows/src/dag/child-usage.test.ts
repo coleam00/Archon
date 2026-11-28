@@ -148,6 +148,31 @@ it.each(
   }
 );
 
+it.each(legacyIdentities)(
+  'folds a zero record with an empty call list without a child baseline: %j',
+  async attribution => {
+    const snapshot = await foldDagResumeSnapshot(
+      [
+        {
+          step_name: 'sub',
+          event_type: 'node_completed',
+          data: {
+            type: 'workflow',
+            cost_usd: 0,
+            tokens: { input: 0, output: 0, calls: [] },
+            ...attribution,
+          },
+        },
+      ],
+      'parent'
+    );
+    expect(snapshot.costUsd).toBe(0);
+    expect(snapshot.tokens).toEqual({ input: 0, output: 0, calls: [] });
+    expect(snapshot.reportedChildUsage?.size).toBe(0);
+    expect(snapshot.unattributedChildUsagePaths?.size).toBe(0);
+  }
+);
+
 it.each(
   [legacyIdentities[0], legacyIdentities[2]].flatMap(attribution =>
     ['node_completed', 'node_failed'].flatMap(eventType =>
