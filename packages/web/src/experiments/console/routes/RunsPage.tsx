@@ -284,8 +284,10 @@ export function RunsPage(): ReactElement {
       {/* Status sub-tabs — their own strip; the active underline overlaps the
           hairline below (design: .subtabs). */}
       <div className="flex shrink-0 items-center gap-4 border-b border-border px-6">
-        {/* Only the tabs scroll on a narrow page, so the switch stays in view. */}
-        <div className="min-w-0 flex-1 overflow-x-auto">
+        {/* Only the tabs scroll on a narrow page, so the switch stays in view.
+            A box that scrolls sideways clips downward too, so it reaches one
+            pixel over the hairline to hold the underline that overlaps it. */}
+        <div className="-mb-px min-w-0 flex-1 overflow-x-auto pb-px">
           <FilterChips value={filter} onChange={setFilter} counts={counts} />
         </div>
         <DetailsSwitch on={showDetails} onChange={setShowDetails} />
