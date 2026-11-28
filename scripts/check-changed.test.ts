@@ -236,6 +236,11 @@ describe('changedFiles', () => {
       join(repo, 'packages/cli/src/loader.ts'),
       "import settings from './config/settings.yaml';\n"
     );
+    writeFileSync(
+      join(repo, 'packages/cli/src/example.ts'),
+      // Names the example file, not the root settings file changed below.
+      "import example from 'config/settings.yaml.example';\n"
+    );
     writeFileSync(join(repo, '.claude/skills/archon-cli/SKILL.md'), '# skill\n');
     git(repo, 'add', '.');
     const owners = packageShippedInputs(repo, new Map([['@archon/cli', 'packages/cli']]), [
@@ -247,6 +252,7 @@ describe('changedFiles', () => {
     ]);
     expect(owners.get('.claude/skills/archon-cli/SKILL.md')).toEqual(new Set(['@archon/cli']));
     expect(owners.has('.claude/skills/archon-cli/operate/other.md')).toBe(false);
+    // Neither the relative import nor the `.example` reference names this root file.
     expect(owners.has('config/settings.yaml')).toBe(false);
   });
 

@@ -133,8 +133,12 @@ export function packageShippedInputs(
 function namedFiles(repo: string, file: string, wanted: ReadonlySet<string>): string[] {
   const source = readFileSync(join(repo, file), 'utf8');
   const found: string[] = [];
-  for (const match of source.matchAll(/[\w./-]+\.(?:md|mdx|sql|txt|yaml|yml)\b/g)) {
-    const token = match[0];
+  // A reference is the whole run of path characters, and only then is its extension checked:
+  // stopping `config/settings.yaml.example` at `.yaml` would name a file nobody referenced.
+  // Trailing dots end a sentence, not a path.
+  for (const match of source.matchAll(/[\w./-]+/g)) {
+    const token = match[0].replace(/\.+$/, '');
+    if (!/\.(?:md|mdx|sql|txt|yaml|yml)$/.test(token)) continue;
     // `./` and `../` name a path relative to the naming file only; anything else is a
     // repository path. Looking a relative reference up at the root as well would give a
     // package an unrelated root file that happens to share the relative path.
