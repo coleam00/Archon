@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
+import * as paths from '@archon/paths';
 import {
   readRunUsageReport,
   readRunUsageReports,
@@ -10,6 +11,16 @@ import { serializeDeferredNodeUsage, serializeNodeStateRecord } from './node-rec
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { USAGE_METRICS } from './schemas/run-usage-report';
+
+/** Every warning the reader logs; installed before its lazily created logger exists. */
+const loggedWarnings: Record<string, unknown>[] = [];
+{
+  const logger = paths.createLogger('test');
+  spyOn(paths, 'createLogger').mockReturnValue(logger);
+  spyOn(logger, 'warn').mockImplementation((...args: Parameters<typeof logger.warn>) => {
+    loggedWarnings.push(args[0] as Record<string, unknown>);
+  });
+}
 
 function run(
   id: string,
@@ -45,7 +56,13 @@ function run(
   };
 }
 
-function agentEvent(runId: string): WorkflowEventRow {
+function agentEvent(
+  runId: string,
+  usage: { costUsd: number; tokens: { input: number; output: number } } = {
+    costUsd: 0.25,
+    tokens: { input: 4, output: 2 },
+  }
+): WorkflowEventRow {
   const started = startNodeExecution({
     runId,
     path: 'build',
@@ -58,7 +75,7 @@ function agentEvent(runId: string): WorkflowEventRow {
     finishNodeExecution(
       started,
       { status: 'completed' },
-      { costUsd: 0.25, tokens: { input: 4, output: 2 }, output: { text: 'PRIVATE_OUTPUT' } }
+      { ...usage, output: { text: 'PRIVATE_OUTPUT' } }
     )
   );
   return {
@@ -190,17 +207,57 @@ describe('strict usage history reads', () => {
     });
   });
 
-  it('degrades only the run carrying malformed typed metadata', async () => {
+  it('degrades only the run carrying malformed typed metadata, and logs why', async () => {
     const roots = [run('bad'), run('good')];
     const malformed = agentEvent('bad');
     malformed.data = { ...malformed.data, invocation: { invalid: true } };
     const fixture = source(roots, [malformed, agentEvent('good')]);
+    const before = loggedWarnings.length;
     const reports = await readRunUsageReports(fixture.store, roots);
     expect(reports.get('bad')?.coverage.usd.gaps).toContainEqual({
       path: 'build',
       reason: 'record_unreadable',
     });
     expect(reports.get('good')?.coverage.usd.state).toBe('complete');
+    // A validation error names the field that failed and never its value, so it is logged whole.
+    const warnings = loggedWarnings.slice(before);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ path: 'build', err: { name: 'ZodError' } });
+  });
+
+  it('keeps the text a store read error quotes out of its warnings', async () => {
+    const fixture = source([run('one'), run('two')], []);
+    fixture.store.listEventsForRuns = async () => {
+      throw new Error(
+        'Failed to list events for runs: JSON Parse error: Unexpected identifier "PRIVATE_ROW"'
+      );
+    };
+    const before = loggedWarnings.length;
+    const reports = await readRunUsageReports(fixture.store, [run('one'), run('two')]);
+    expect(reports.get('one')?.coverage.usd.gaps).toContainEqual({
+      reason: 'history_unavailable',
+    });
+    const warnings = loggedWarnings.slice(before);
+    expect(warnings).toHaveLength(3);
+    for (const warning of warnings) {
+      expect(warning).not.toHaveProperty('err');
+      expect(warning).toMatchObject({ errorName: 'Error' });
+    }
+    expect(JSON.stringify(warnings)).not.toContain('PRIVATE_ROW');
+  });
+
+  it('keeps the text a child row error quotes out of its warnings', async () => {
+    const fixture = source([], [parentEvent(['child'])]);
+    fixture.store.getWorkflowRunsByIds = async () => {
+      throw new Error(
+        'Failed to get workflow runs by id: JSON Parse error: Unexpected identifier "PRIVATE_ROW"'
+      );
+    };
+    const before = loggedWarnings.length;
+    await readRunUsageReport(fixture.store, run('parent'));
+    const warnings = loggedWarnings.slice(before);
+    expect(warnings.map(warning => warning.err)).toEqual([undefined, undefined]);
+    expect(JSON.stringify(warnings)).not.toContain('PRIVATE_ROW');
   });
 
   it('strict malformed JSON remains unavailable instead of an empty certified population', async () => {

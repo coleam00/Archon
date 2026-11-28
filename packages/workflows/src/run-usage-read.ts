@@ -38,6 +38,26 @@ interface UsageHistory {
   limitations: UsageLimitation[];
 }
 
+/**
+ * What a warning may carry about a record that failed to decode. A JSON.parse error's message
+ * quotes the rejected text, which may be a user's, so only its name is logged, also when a
+ * reader wrapped it as a cause. A validation error names the field that failed, never its value.
+ */
+function decodeFailure(error: unknown): Record<string, unknown> {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const parse =
+    error instanceof SyntaxError ? error : cause instanceof SyntaxError ? cause : undefined;
+  return parse === undefined ? { err: error } : { errorName: parse.name };
+}
+
+/**
+ * What a warning may carry about a store read that failed. The store logs the cause at its own
+ * boundary, and the error it rethrows carries that message, which can quote a row's text.
+ */
+function storeReadFailure(error: unknown): Record<string, unknown> {
+  return { errorName: error instanceof Error ? error.name : typeof error };
+}
+
 /** A read keeps each run's evidence, so a parent folds its children in before any report exists. */
 type EvidenceReport = { evidence: UsageEvidence };
 
@@ -59,7 +79,7 @@ function readHistory(run: WorkflowRun, events: readonly WorkflowEventRow[]): Usa
       }
     } catch (error) {
       getLog().warn(
-        { err: error, workflowRunId: run.id, path: row.step_name },
+        { ...decodeFailure(error), workflowRunId: run.id, path: row.step_name },
         'run_usage.record_unreadable'
       );
       limitations.push({ runId: run.id, path: row.step_name, reason: 'record_unreadable' });
@@ -84,7 +104,7 @@ async function loadHistories(
     );
   } catch (batchError) {
     getLog().warn(
-      { err: batchError, workflowRunIds: runs.map(run => run.id) },
+      { ...storeReadFailure(batchError), workflowRunIds: runs.map(run => run.id) },
       'run_usage.history_batch_unavailable'
     );
     for (const run of runs) {
@@ -94,7 +114,10 @@ async function loadHistories(
         });
         histories.set(run.id, readHistory(run, events.get(run.id) ?? []));
       } catch (error) {
-        getLog().warn({ err: error, workflowRunId: run.id }, 'run_usage.history_unavailable');
+        getLog().warn(
+          { ...storeReadFailure(error), workflowRunId: run.id },
+          'run_usage.history_unavailable'
+        );
         unavailable.set(run.id, unknownRunUsageEvidence(run, 'history_unavailable'));
       }
     }
@@ -124,7 +147,7 @@ async function loadReferencedChildren(
       children = await store.getWorkflowRunsByIds(childIds);
     } catch (error) {
       getLog().warn(
-        { err: error, childRunIds: childIds },
+        { ...storeReadFailure(error), childRunIds: childIds },
         'run_usage.child_lookup_batch_unavailable'
       );
       // One malformed row rejects the combined lookup. Read each child on its
@@ -136,7 +159,10 @@ async function loadReferencedChildren(
           const rows = await store.getWorkflowRunsByIds([id]);
           children.push(...rows.filter(row => row.id === id));
         } catch (childError) {
-          getLog().warn({ err: childError, childRunId: id }, 'run_usage.child_lookup_unavailable');
+          getLog().warn(
+            { ...storeReadFailure(childError), childRunId: id },
+            'run_usage.child_lookup_unavailable'
+          );
         }
       }
     }
