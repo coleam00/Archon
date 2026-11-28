@@ -9,6 +9,7 @@ import {
 } from '@archon/core/workflows/continuation-resume';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { createLogger } from '@archon/paths';
+import { currentProcessOwner } from '@archon/paths/process-owner';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { spellWorkflowCommand, type IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -287,6 +288,13 @@ export function startWorkflowContinuationScheduler(
   onTick?: () => void
 ): void {
   if (continuationScheduler !== undefined) return;
+  // Recorded so the attention queue can tell when nothing will resume a due continuation.
+  // A failed record can only list one this server would resume: logged, never fatal.
+  void host.deps.store
+    .recordContinuationWaker({ kind: 'process', ...currentProcessOwner })
+    .catch((error: unknown) => {
+      log.warn({ err: error }, 'workflow_continuation_waker_record_failed');
+    });
   const tick = (): void => {
     if (!scanInProgress) {
       scanInProgress = true;

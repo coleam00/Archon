@@ -8212,6 +8212,10 @@ export interface components {
             requestId: string;
             hostId: string;
           };
+          continuation?: {
+            /** @enum {string} */
+            wakers: 'none_recorded' | 'all_gone';
+          };
         }
       | {
           /** @enum {string} */
@@ -8730,6 +8734,10 @@ export interface components {
             start?: {
               requestId: string;
               hostId: string;
+            };
+            continuation?: {
+              /** @enum {string} */
+              wakers: 'none_recorded' | 'all_gone';
             };
           }
         | {
@@ -9398,6 +9406,10 @@ export interface components {
             start?: {
               requestId: string;
               hostId: string;
+            };
+            continuation?: {
+              /** @enum {string} */
+              wakers: 'none_recorded' | 'all_gone';
             };
           }
         | {
@@ -10419,6 +10431,10 @@ export interface components {
                 requestId: string;
                 hostId: string;
               };
+              continuation?: {
+                /** @enum {string} */
+                wakers: 'none_recorded' | 'all_gone';
+              };
             }
           | {
               /** @enum {string} */
@@ -11359,6 +11375,10 @@ export interface components {
                 start?: {
                   requestId: string;
                   hostId: string;
+                };
+                continuation?: {
+                  /** @enum {string} */
+                  wakers: 'none_recorded' | 'all_gone';
                 };
               }
             | {

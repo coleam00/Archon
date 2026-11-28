@@ -320,6 +320,11 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
           `admitted but not started, and no process runs it${holding}`,
           `start it: archon trigger execute ${item.start.requestId} --host ${item.start.hostId}, or end it: ${command(`abandon ${run.id}`)}`,
         ];
+      if (item.continuation !== undefined)
+        return [
+          `due to continue, but ${item.continuation.wakers === 'none_recorded' ? 'nothing on this install resumes continuations' : 'the process that resumed continuations here is gone'}${holding}`,
+          `start a waker: archon serve, ${command('wake --watch')} or ${command('wake schedule install')}; or end it: ${command(`abandon ${run.id}`)}`,
+        ];
       return [
         `${item.observedStatus} but its owner is gone${holding}`,
         `continue it: ${command(`resume ${run.id}`)}, or end it: ${command(`abandon ${run.id}`)}`,
@@ -338,7 +343,9 @@ function headingLine(item: AttentionQueueItem): string {
   if (isHeldByRun(item)) {
     const paused =
       item.kind === 'owner_lost'
-        ? 'owner gone'
+        ? item.continuation === undefined
+          ? 'owner gone'
+          : 'due, no waker'
         : item.pausedAt === null
           ? 'pause time not recorded'
           : `paused ${formatAge(item.pausedAt)} ago`;

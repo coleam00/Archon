@@ -38,6 +38,11 @@ import * as itemWaitsDb from '../db/item-waits';
 import * as itemStopsDb from '../db/item-stops';
 import * as workflowDb from '../db/workflows';
 import { listUnfinishedRuns } from '../db/unfinished-runs';
+import {
+  listContinuationWakers,
+  recordContinuationWaker,
+  removeContinuationSchedule,
+} from '../db/continuation-wakers';
 import * as resourceStarts from '../db/resource-starts';
 import { acceptStartReceipt } from '../db/start-receipt-writes';
 import { createWakeMapping } from './wake-start';
@@ -412,6 +417,9 @@ export function createWorkflowStore(): IWorkflowStore {
     listDueWorkflowContinuations: (now, limit = 25) =>
       workflowDb.listDueWorkflowContinuations(now, limit),
     deferWorkflowContinuation: workflowDb.deferWorkflowContinuation,
+    recordContinuationWaker,
+    removeContinuationSchedule,
+    listContinuationWakers,
     releaseRunForUnreadableSource: workflowDb.releaseRunForUnreadableSource,
     pauseWorkflowRunForOperator: workflowDb.pauseWorkflowRunForOperator,
     requestOperatorPause: workflowDb.requestOperatorPause,

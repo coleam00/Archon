@@ -257,9 +257,11 @@ function OwnerLostCard({
           ) : null}
         </div>
         <p className="mt-3 text-sm text-text-primary">
-          {holder.start === null
-            ? `${holder.observedStatus} but its owner is gone`
-            : 'admitted but not started, and no process runs it'}
+          {holder.start !== null
+            ? 'admitted but not started, and no process runs it'
+            : holder.dueWithoutWaker
+              ? 'due to continue, but no waker resumes continuations on this install'
+              : `${holder.observedStatus} but its owner is gone`}
           {holder.itemKey === null ? '' : ', holding item '}
           {holder.itemKey === null ? null : <span className="font-mono">{holder.itemKey}</span>}
           {holder.start === null ? null : (

@@ -221,6 +221,7 @@ test('attention list keeps a lost-owner item holder, which has no paused run row
       itemKey: 'issue-1',
       observedStatus: 'running',
       start: null,
+      dueWithoutWaker: false,
     },
   ]);
 });

@@ -9,6 +9,7 @@
  * re-exported here, so this stays the one import path for the port.
  */
 import type { AttentionRead } from './schemas/attention-degraded';
+import type { ContinuationWaker } from './schemas/continuation-waker';
 import type { IResourceStartStore } from './resource-start-store';
 import type { LinkedRunEndedStart, SourceReceiptAcceptance } from './schemas/resource-start';
 import type { CheckoutObservation } from './schemas/checkout-observation';
@@ -493,6 +494,16 @@ export interface IWorkflowStore
    * (`readSourceRelease`). Timed ones come earliest first, answered pauses after.
    */
   listDueWorkflowContinuations(now: Date, limit?: number): Promise<WorkflowRun[]>;
+  /**
+   * Record that `waker` may resume due continuations (`ContinuationWaker`). A process
+   * records itself once when it starts; recording also forgets this host's processes that
+   * are provably gone. A store that keeps no waker record ignores it.
+   */
+  recordContinuationWaker(waker: ContinuationWaker): Promise<void>;
+  /** Forget this host's `schedule` waker, once `wake schedule remove` removed the job. */
+  removeContinuationSchedule(host: string): Promise<void>;
+  /** The recorded wakers; null for a store that keeps no record, whose wakers are unknown. */
+  listContinuationWakers(): Promise<ContinuationWaker[] | null>;
   /** Back off only the unchanged wait, quota, answered or source occurrence; a stale cursor writes nothing. */
   deferWorkflowContinuation(
     id: string,

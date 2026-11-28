@@ -1077,6 +1077,21 @@ CREATE INDEX IF NOT EXISTS idx_item_waits_open
 CREATE INDEX IF NOT EXISTS idx_item_waits_run_id
   ON remote_agent_item_waits(run_id);
 
+-- What may resume a due continuation (a paused wait past its deadline, an answered gate,
+-- a released source): `archon serve` and `archon workflow wake --watch` record a `process`
+-- row (host, pid, instance) when they start, `wake schedule install` a `schedule` row that
+-- `wake schedule remove` deletes, and a one-shot `archon workflow wake` a `pass` row. The
+-- attention queue lists a due continuation only when every row is a process provably gone,
+-- or there is none. id names the waker, so a restart of the same waker updates its row.
+CREATE TABLE IF NOT EXISTS remote_agent_continuation_wakers (
+  id TEXT PRIMARY KEY,
+  host TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  pid INTEGER,
+  instance TEXT,
+  recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 -- Codebase env vars
 CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id
   ON remote_agent_codebase_env_vars(codebase_id);

@@ -472,6 +472,11 @@ export async function createFileWorkflowStore(
       query('all', view => view.listDueWorkflowContinuations(now, limit)),
     deferWorkflowContinuation: (id, retry, cursor) =>
       write([id], view => view.deferWorkflowContinuation(id, retry, cursor)),
+    // No waker record here: a file store's wakers read as unknown, so no due continuation
+    // is listed for want of one.
+    recordContinuationWaker: async () => undefined,
+    removeContinuationSchedule: async () => undefined,
+    listContinuationWakers: async () => null,
     answerAttentionWait: (id, answered) =>
       write([id], view => view.answerAttentionWait(id, answered)),
     labelAttentionWait: (id, labelWrite) =>
