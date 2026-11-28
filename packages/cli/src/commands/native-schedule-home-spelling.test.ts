@@ -310,6 +310,38 @@ describe.each(commands)('%s home spelling', (_name, idPrefix, command) => {
     }
   );
 
+  testOnPosixHost.skipIf(idPrefix !== 'workflow-wake-')(
+    'remove reports a last-pass record it could not delete',
+    async () => {
+      const { archonHome, schedules } = await fixture(idPrefix);
+      process.env.ARCHON_HOME = archonHome;
+      await invoke(command, 'install', schedules);
+      const target = { id: idForHome(idPrefix, archonHome), archonHome };
+      const record = join(archonHome, 'schedules', `${target.id}.last-pass.json`);
+      await mkdir(dirname(record), { recursive: true });
+      await writeFile(record, '{}');
+      const directory = dirname(record);
+      await chmod(directory, 0);
+      try {
+        expect(await invokeResult(command, 'remove', schedules)).toEqual({
+          exitCode: 0,
+          result: {
+            ok: true,
+            action: expect.any(String),
+            removed: true,
+            lastPassNotRemoved: [record],
+          },
+        });
+      } finally {
+        await chmod(directory, 0o700);
+      }
+      await expect(stat(record)).resolves.toBeDefined();
+      expect(await invoke(command, 'remove', schedules)).toMatchObject({
+        removed: false,
+      });
+    }
+  );
+
   testOnPosixHost('status and reinstall prefer the registered duplicate', async () => {
     const { archonHome, alias, schedules, jobFiles } = await fixture(idPrefix);
     const targets = [archonHome, `${archonHome}${sep}`].map(home => ({

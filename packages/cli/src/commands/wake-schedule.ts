@@ -163,13 +163,23 @@ async function remove(
   schedules: NativeScheduleOptions
 ): Promise<Outcome> {
   let removed = false;
+  const recordsLeft: string[] = [];
   for (const target of targets) {
     if (await removeNativeSchedule(target, schedules)) removed = true;
-    await unlink(wakeLastPassPath(target)).catch(() => undefined);
+    // A record left behind is still read as a pass of a job that no longer exists, so a
+    // failure to delete it is reported. Only a record that was never written is ignored.
+    const record = wakeLastPassPath(target);
+    await unlink(record).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') recordsLeft.push(record);
+    });
   }
+  const left =
+    recordsLeft.length === 0
+      ? ''
+      : `, but could not delete its last-pass record: ${recordsLeft.join(', ')}. Delete it by hand`;
   return {
-    result: { removed },
-    text: removed ? 'Removed the wake watcher job.' : NOT_INSTALLED,
+    result: { removed, ...(recordsLeft.length === 0 ? {} : { lastPassNotRemoved: recordsLeft }) },
+    text: removed ? `Removed the wake watcher job${left}.` : NOT_INSTALLED,
   };
 }
 
