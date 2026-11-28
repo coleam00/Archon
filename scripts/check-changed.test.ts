@@ -229,16 +229,25 @@ describe('changedFiles', () => {
     writeFileSync(join(repo, 'packages/cli/package.json'), '{"name":"@archon/cli"}');
     writeFileSync(
       join(repo, 'packages/cli/src/bundled-skill.ts'),
-      "import core from '../../../.claude/skills/archon-cli/SKILL.md' with { type: 'text' };\n"
+      "import core from '../../../.claude/skills/archon-cli/SKILL.md' with { type: 'text' };\n" +
+        "import loader from './loader.ts';\n"
+    );
+    writeFileSync(
+      join(repo, 'packages/cli/src/loader.ts'),
+      "import settings from './config/settings.yaml';\n"
     );
     writeFileSync(join(repo, '.claude/skills/archon-cli/SKILL.md'), '# skill\n');
     git(repo, 'add', '.');
     const owners = packageShippedInputs(repo, new Map([['@archon/cli', 'packages/cli']]), [
       '.claude/skills/archon-cli/SKILL.md',
       '.claude/skills/archon-cli/operate/other.md',
+      // Named only relative to packages/cli/src/, which has no config/ of its own: the
+      // root file that shares that path is not what the import names.
+      'config/settings.yaml',
     ]);
     expect(owners.get('.claude/skills/archon-cli/SKILL.md')).toEqual(new Set(['@archon/cli']));
     expect(owners.has('.claude/skills/archon-cli/operate/other.md')).toBe(false);
+    expect(owners.has('config/settings.yaml')).toBe(false);
   });
 
   test('the real CLI owns the bundled skill file it imports', () => {

@@ -124,12 +124,15 @@ export function packageShippedInputs(
     if (name === undefined) continue;
     const source = readFileSync(join(repo, file), 'utf8');
     for (const match of source.matchAll(/[\w./-]+\.(?:md|mdx|sql|txt|yaml|yml)\b/g)) {
-      const token = match[0].replace(/^\.\//, '');
-      // A relative import resolves against the naming file; a repository path is taken as is.
-      const target = [token, normalize(join(dirname(file), token)).replaceAll('\\', '/')].find(
-        path => wanted.has(path)
-      );
-      if (target === undefined) continue;
+      const token = match[0];
+      // `./` and `../` name a path relative to the naming file only; anything else is a
+      // repository path. Looking a relative reference up at the root as well would give a
+      // package an unrelated root file that happens to share the relative path.
+      const target =
+        token.startsWith('./') || token.startsWith('../')
+          ? normalize(join(dirname(file), token)).replaceAll('\\', '/')
+          : token;
+      if (!wanted.has(target)) continue;
       owners.set(target, (owners.get(target) ?? new Set()).add(name));
     }
   }
