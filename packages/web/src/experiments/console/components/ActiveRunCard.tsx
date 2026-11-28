@@ -457,7 +457,7 @@ function RunCardDetails({
           </span>
         ) : null}
         <span className="flex items-center gap-1.5">
-          <OriginBadge origin={run.origin} />
+          {run.origin !== 'unknown' ? <OriginBadge origin={run.origin} /> : null}
           <RelativeRunTime
             className="whitespace-nowrap text-text-tertiary"
             at={run.startedAt}

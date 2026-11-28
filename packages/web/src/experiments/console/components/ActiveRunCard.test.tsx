@@ -182,6 +182,10 @@ describe('ActiveRunCard', () => {
     expect(noProgress).toContain('Cancel');
   });
 
+  test('a run whose origin is not known shows no origin badge', () => {
+    expect(render({ ...itemRun, origin: 'unknown' }, true)).not.toContain('Origin:');
+  });
+
   test('a run that has reported no cost shows none', () => {
     expect(render({ ...itemRun, costUsd: null }, true)).not.toContain('Reported cost');
   });
