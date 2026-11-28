@@ -1,6 +1,6 @@
 {
   "name": "@archon/workflows",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
