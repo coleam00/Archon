@@ -102,7 +102,9 @@ describe('GitHub outbound producer', () => {
         'pr.review.submit',
         'attachment.put',
         'actor.self',
+        'repo.overview',
       ],
+      display: { name: 'GitHub', icon: expect.stringMatching(/^[A-Za-z0-9+/]+=*$/) },
       mutationConditions: { 'pr.merge': ['head'] },
       token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
       remedies: {

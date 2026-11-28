@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   CHECKS_LOGS_DEFAULT_BYTES,
+  REPO_OVERVIEW_DEFAULT_LIMIT,
   WORKITEM_SEARCH_DEFAULT_LIMIT,
   contentDigest,
   isMutationRequest,
@@ -334,6 +335,25 @@ function matchesSearch(
   );
 }
 
+function matchesOverview(
+  request: OpRequest<'repo.overview'>,
+  value: OpValue<'repo.overview'>
+): boolean {
+  const limit = request.limit ?? REPO_OVERVIEW_DEFAULT_LIMIT;
+  const listed = (items: OpValue<'repo.overview'>['issues'], kind: 'issue' | 'pr'): boolean =>
+    items === undefined ||
+    (items.length <= limit &&
+      items.every(
+        item => item.kind === kind && item.state === 'open' && sameRepo(item.ref.repo, request.repo)
+      ));
+  return (
+    sameRepo(value.repo, request.repo) &&
+    value.since === request.since &&
+    listed(value.pull_requests, 'pr') &&
+    listed(value.issues, 'issue')
+  );
+}
+
 function matchesLogs(request: OpRequest<'checks.logs'>, value: OpValue<'checks.logs'>): boolean {
   return (
     sameRepo(value.repo, request.repo) &&
@@ -363,6 +383,7 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
       : value.branch !== null),
   'checks.logs': matchesLogs,
   'workitem.search': matchesSearch,
+  'repo.overview': matchesOverview,
   'pr.merge-state': byRef,
   'pr.files': byRef,
   'repo.file': (request, value) =>

@@ -12,19 +12,11 @@ import {
   type ForgeResponse,
   type reviewThreadSchema,
 } from '@archon/forge/operations';
-import type { PrRef, RepoRef, SourceActor } from '@archon/forge';
+import type { PrRef, RepoRef } from '@archon/forge';
 import { GitHubError, githubGraphql, repositoryPath, type Fetch } from './api';
-import { accountType } from './actor';
+import { GRAPHQL_ACTOR_FIELDS, graphqlActor, graphqlActorSchema } from './actor';
 import { applied, failure, refused, unreadable, unverified } from './mutation-outcome';
 
-const graphqlActorSchema = z
-  .object({
-    __typename: z.string().optional(),
-    login: z.string().min(1),
-    id: z.string().min(1),
-    databaseId: z.number().int().nullable().optional(),
-  })
-  .nullable();
 const threadCommentNodeSchema = z.object({
   id: z.string().min(1),
   author: graphqlActorSchema,
@@ -46,23 +38,7 @@ const threadNodeSchema = z.object({
   line: z.number().int().nullable(),
   comments: commentConnectionSchema,
 });
-const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{__typename login ... on Node{id} ... on User{databaseId} ... on Bot{databaseId} ... on Organization{databaseId} ... on Mannequin{databaseId}} createdAt originalCommit{oid} body url}`;
-
-/**
- * `id` is the account's database id, the number REST and webhooks report. An author kind
- * GitHub gives no database id (an enterprise user account) keeps its GraphQL node id, which
- * survives a rename as the login does not.
- */
-function threadActor(host: string, author: z.infer<typeof graphqlActorSchema>): SourceActor | null {
-  return author
-    ? {
-        host,
-        id: author.databaseId == null ? author.id : String(author.databaseId),
-        login: author.login,
-        type: accountType(author.__typename),
-      }
-    : null;
-}
+const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{${GRAPHQL_ACTOR_FIELDS}} createdAt originalCommit{oid} body url}`;
 
 /** The remaining comments of one thread, after the first page the thread query returned. */
 async function remainingThreadComments(
@@ -170,7 +146,7 @@ export async function handleGithubPrThreads(
         line: node.line,
         comments: comments.map(comment => ({
           id: comment.id,
-          author: threadActor(request.ref.repo.host, comment.author),
+          author: graphqlActor(request.ref.repo.host, comment.author),
           createdAt: comment.createdAt,
           commit: comment.originalCommit?.oid ?? null,
           body: comment.body,

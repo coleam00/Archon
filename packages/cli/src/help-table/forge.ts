@@ -16,6 +16,8 @@ const forgeOperationDescriptions = {
   'workitem.assignee.add': 'Assign one user to an issue, keeping its other assignees',
   'workitem.assignee.remove': 'Unassign one user from an issue, keeping its other assignees',
   'actor.self': 'Read the forge account the plugin acts as for a repository',
+  'repo.overview':
+    'Read a repository at a glance: facts, issue and pull request counts with list URLs, and the newest open ones',
   'workitem.list': 'List open issues and pull requests that carry one label',
   'workitem.label.added': 'Read when a label was last added to an issue or pull request',
   'workitem.opened': 'List the open issues created since a time, without pull requests',

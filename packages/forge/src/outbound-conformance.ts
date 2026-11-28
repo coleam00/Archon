@@ -10,6 +10,7 @@ import {
   type ForgeRequest,
   type ForgeResponse,
   type PluginMetadata,
+  type RepoOverview,
 } from './operations';
 
 export interface ForgeReadConformanceCase {
@@ -113,6 +114,68 @@ export async function runForgeMutationConformance(
       failures.push(
         `${fixture.name}: expected ${fixture.expectedOutcome}, received ${String(outcome)}`
       );
+  }
+  return failures;
+}
+
+type OverviewStat = keyof RepoOverview['stats'];
+
+/**
+ * What the fixture's repository holds: the count of each stat it reports, the stats it
+ * does not have, and each list's item numbers in order (`undefined` for a list it does
+ * not report).
+ */
+export interface ForgeOverviewConformanceCase {
+  name: string;
+  request: Extract<ForgeRequest, { op: 'repo.overview' }>;
+  expected: {
+    counts: Partial<Record<OverviewStat, number>>;
+    absent: readonly OverviewStat[];
+    pullRequests: readonly number[] | undefined;
+    issues: readonly number[] | undefined;
+  };
+}
+
+/**
+ * Run an adapter's controlled repository fixtures through `repo.overview`. A stat the
+ * fixture lists as absent must be missing from the answer, never present as zero.
+ */
+export async function runForgeOverviewConformance(
+  invoke: (request: ForgeRequest) => Promise<ForgeResponse>,
+  metadata: PluginMetadata,
+  cases: readonly ForgeOverviewConformanceCase[]
+): Promise<string[]> {
+  const failures: string[] = [];
+  for (const fixture of cases) {
+    const { request, expected } = fixture;
+    const parsed = forgeResponseSchema.safeParse(await invoke(request));
+    if (
+      !parsed.success ||
+      !parsed.data.ok ||
+      parsed.data.result.op !== 'repo.overview' ||
+      parsed.data.operationId !== request.operationId ||
+      !matchesForgeOperationResponse(request, parsed.data, metadata, request.repo.host)
+    ) {
+      failures.push(`${fixture.name}: no valid overview of the requested repository`);
+      continue;
+    }
+    const value = parsed.data.result.value;
+    for (const [stat, count] of Object.entries(expected.counts)) {
+      const observed = value.stats[stat as OverviewStat];
+      if (observed?.count !== count)
+        failures.push(
+          `${fixture.name}: ${stat} expected ${String(count)}, received ${String(observed?.count)}`
+        );
+    }
+    for (const stat of expected.absent) {
+      if (value.stats[stat] !== undefined)
+        failures.push(`${fixture.name}: ${stat} is reported but the fixture has no such fact`);
+    }
+    const numbers = (items: RepoOverview['issues']) => items?.map(item => item.ref.number);
+    if (JSON.stringify(numbers(value.pull_requests)) !== JSON.stringify(expected.pullRequests))
+      failures.push(`${fixture.name}: listed pull requests differ`);
+    if (JSON.stringify(numbers(value.issues)) !== JSON.stringify(expected.issues))
+      failures.push(`${fixture.name}: listed issues differ`);
   }
   return failures;
 }

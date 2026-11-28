@@ -583,3 +583,55 @@ test('a check log answers its unit within the size asked for, or says the unit h
     result: { value: { log: { kind: 'none', reason: 'log_unavailable' } } },
   });
 });
+
+test('an overview answers its repository, window and limit with open items of each kind', () => {
+  const request = {
+    operationId: 'read',
+    op: 'repo.overview',
+    repo,
+    since: '2026-11-20T00:00:00Z',
+    limit: 1,
+  } satisfies ForgeRequest;
+  const issue = { ...item, title: 'sentinel title', updatedAt: '2026-11-21T10:00:00Z' };
+  const pr = { ...issue, kind: 'pr', url: 'https://forge.example/group/team/repo/pulls/3' };
+  const overview = (value: object): ForgeResponse =>
+    read(request.op, {
+      repo,
+      since: request.since,
+      url: 'https://forge.example/group/team/repo',
+      name: 'group/team/repo',
+      description: 'sentinel description',
+      stats: { issues_open: { count: 0, url: 'https://forge.example/group/team/repo/issues' } },
+      pull_requests: [pr],
+      issues: [issue],
+      ...value,
+    });
+  expect(matches(request, overview({}))).toBe(true);
+  expect(matches(request, overview({ pull_requests: undefined, issues: undefined }))).toBe(true);
+  for (const wrong of [
+    overview({ repo: { ...repo, path: 'other/repo' } }),
+    overview({ since: '2026-11-19T00:00:00Z' }),
+    overview({ issues: [issue, issue] }),
+    overview({ issues: [{ ...issue, state: 'closed' }] }),
+    overview({ issues: [pr] }),
+    overview({
+      pull_requests: [{ ...pr, ref: { ...ref, repo: { ...repo, path: 'other/repo' } } }],
+    }),
+  ])
+    expect(matches(request, wrong)).toBe(false);
+
+  const audit = forgeAuditResponse(overview({}));
+  expect(JSON.stringify(audit)).not.toContain('sentinel');
+  expect(audit).toMatchObject({
+    result: {
+      value: {
+        description: { digest: contentDigest('sentinel description') },
+        issues: [{ ref, content: { digest: contentDigest('sentinel title') } }],
+        stats: { issues_open: { count: 0 } },
+      },
+    },
+  });
+  expect(forgeAuditResponse(overview({ description: null }))).toMatchObject({
+    result: { value: { description: null } },
+  });
+});
