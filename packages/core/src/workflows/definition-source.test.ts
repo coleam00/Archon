@@ -21,6 +21,7 @@ import { definitionsStartCommit } from './binding-definitions';
 import {
   DefinitionSourceError,
   discoverBindingWorkflows,
+  withOneDefinitionsRead,
   withLayeredDefinitions,
 } from './definition-source';
 
@@ -532,6 +533,48 @@ describe("a run's definitions", () => {
     const onLaunch = await names(await discoverBindingWorkflows(launch, deps, launchRun));
     expect(onLaunch).toContain('captured-stage');
     expect(onLaunch).not.toContain('release-stage');
+  }, 30_000);
+
+  test('bindings checked in one operation share one read of the base; the next operation reads it afresh', async () => {
+    const { checkout, upstream } = project();
+    git(upstream, 'switch', '-qc', 'release', 'dev');
+    write(upstream, '.archon/workflows/release-stage.yaml', stage('release-stage'));
+    commitAll(upstream, 'release');
+    git(upstream, 'push', '-q', 'origin', 'release');
+    let projectReads = 0;
+    const base = checkDeps(checkout, 'release');
+    const deps = {
+      ...base,
+      projectOf: async (cwd: string) => {
+        projectReads += 1;
+        return base.projectOf(cwd);
+      },
+    };
+    const launch = (workflowName: string) => ({
+      cwd: checkout,
+      workflowName,
+      isolation: { kind: 'default' as const },
+    });
+
+    const operation = withOneDefinitionsRead(deps);
+    const [first, second] = await Promise.all([
+      discoverBindingWorkflows(launch('release-stage'), operation),
+      discoverBindingWorkflows(launch('other-stage'), operation),
+    ]);
+    expect('discovered' in first && 'discovered' in second && first.discovered).toBe(
+      'discovered' in second ? second.discovered : undefined
+    );
+    expect(projectReads).toBe(1);
+
+    // A stage pushed after that operation is seen by the next one.
+    write(upstream, '.archon/workflows/later-stage.yaml', stage('later-stage'));
+    commitAll(upstream, 'later');
+    git(upstream, 'push', '-q', 'origin', 'release');
+    const next = await names(
+      await discoverBindingWorkflows(launch('later-stage'), withOneDefinitionsRead(deps))
+    );
+    expect(next).toContain('later-stage');
+    expect(projectReads).toBe(2);
   }, 30_000);
 
   test('a binding check reads the checkout for a workflow pinned in place, with no remote', async () => {

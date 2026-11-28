@@ -73,6 +73,7 @@ import type {
 import { loadWorkflows } from './workflow-list';
 import { loadedLine, otherCopyLine } from './pack-copies';
 import { checkReplacedFiles } from './pack-replaced-files';
+import { withOneDefinitionsRead } from '@archon/core/workflows/definition-source';
 
 export interface PackBindingsOptions {
   /** The checkout the bindings launch in, and where the pack is discovered from. */
@@ -582,16 +583,15 @@ async function assertRunEndedChecks(
     );
   const found = await runEndedTriggerCheck(
     ended.map(item => item.check),
-    // Without the install's codebase records each checkout counts as its own project, so a
-    // duplicate of a file already installed, or one in another checkout of the project, is
-    // left to `archon trigger check`.
-    {
+    // Without the install's codebase records each checkout is its own project: a duplicate
+    // of an installed file, or one in another checkout, is left to `archon trigger check`.
+    withOneDefinitionsRead({
       loadConfig,
       providers: providerRegistry,
       projectKeyOf: async () => null,
       // The base is the one a start reads: the binding's, else the registered default.
       projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
-    }
+    })
   );
   const problems = ended.flatMap(({ id, check }, index) =>
     found[index].map(
@@ -617,13 +617,13 @@ async function assertAsksSettledChecks(
   const found = await asksSettledTriggerCheck(
     asks.map(item => item.check),
     // As for run-ended bindings, a duplicate among installed files is left to `trigger check`.
-    {
+    withOneDefinitionsRead({
       loadConfig,
       providers: providerRegistry,
       projectKeyOf: async () => null,
       // The base is the one a start reads: the binding's, else the registered default.
       projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
-    }
+    })
   );
   const problems = asks.flatMap(({ id, check }, index) =>
     found[index].map(

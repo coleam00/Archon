@@ -38,7 +38,7 @@ import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
 import { asksSettledBindingCheck } from './asks-settled';
-import type { BindingDefinitionsDeps } from './definition-source';
+import { type BindingDefinitionsDeps, withOneDefinitionsRead } from './definition-source';
 import {
   bindingProjectKey,
   readOnBindings,
@@ -110,6 +110,7 @@ async function installedArrows(
   touches: (workflowName: string) => boolean,
   deps: GraphDeps
 ): Promise<InstalledArrow[]> {
+  deps = withOneDefinitionsRead(deps);
   const files = await readOnBindings(deps.triggersDirectory());
   if (files.length === 0) return [];
   // The file store has no items, so a binding with `on` can never start anything there.
