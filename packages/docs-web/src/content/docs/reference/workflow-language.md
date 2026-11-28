@@ -3134,9 +3134,9 @@ bindings:
     resource: host
     overlap: queue
     event:
-      kind: check.changed
-      actions: [changed]
-    wake: { workflow: review-host, wait: checks, about: check.revision, checkout: waiting-run }  # meets an open wait
+      kind: checks.settled            # once no check on the commit is still pending
+      actions: [settled]
+    wake: { workflow: review-host, wait: checks, about: checks.revision, checkout: waiting-run }  # meets an open wait
     inputs:
       waited: { wait: true }          # the met wait; event bindings with wake only
       change: { input: change }       # an input of the run that left the wait; wake bindings too

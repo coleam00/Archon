@@ -830,7 +830,7 @@ function receiptStore(knownUser: (id: string) => boolean = () => true) {
   };
 }
 
-test('before-deadline waits are read normally, after-deadline waits are not read', async () => {
+test('a wait found overdue is read once more, and reported', async () => {
   const configPath = await observingFixture({ acceptances: [acceptance()] });
   const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
   const sources = await loadWebhookSourcePlugins(configPath, {
@@ -848,10 +848,11 @@ test('before-deadline waits are read normally, after-deadline waits are not read
     store: waitStore([{ deadlineAt: '2026-01-01T01:00:00.000Z' }]),
     forge,
   });
+  // The last check can finish between the previous pass and the deadline: one more read.
   const [report] = (await observer?.pass(deadlineTime)) ?? [];
-  expect(report?.waits).toBe(0);
-  expect(report?.reads).toBe(0);
-  expect(forge.reads).toEqual([]);
+  expect(report?.waits).toBe(1);
+  expect(report?.reads).toBe(1);
+  expect(forge.reads).toEqual([{ remote: REMOTE, revision: REVISION }]);
   expect(report?.unserved).toHaveLength(1);
   expect(report?.unserved?.[0]?.reason).toContain('deadline passed at');
 });
@@ -879,13 +880,13 @@ test('one overdue report per observer process across repeated passes', async () 
   expect(report1?.unserved).toHaveLength(1);
   expect(report1?.unserved?.[0]?.reason).toContain('deadline passed at');
 
-  // Second pass: same overdue wait should not be reported again (once per process)
+  // Second pass: same overdue wait is neither reported nor read again (once per process)
   const again = (await observer?.pass(new Date(deadlineTime.getTime() + 60_000))) ?? [];
   expect(again).toEqual([]);
-  expect(forge.reads).toEqual([]);
+  expect(forge.reads).toHaveLength(1);
 });
 
-test('active and overdue waits mixed: only active are read', async () => {
+test('active and freshly overdue waits mixed: both are read, the overdue one reported', async () => {
   const configPath = await observingFixture({ acceptances: [acceptance()] });
   const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
   const sources = await loadWebhookSourcePlugins(configPath, {
@@ -907,12 +908,12 @@ test('active and overdue waits mixed: only active are read', async () => {
   });
 
   const [report] = (await observer?.pass(now)) ?? [];
-  expect(report?.waits).toBe(1); // only active
-  expect(report?.reads).toBe(1); // only active is read
+  expect(report?.waits).toBe(2); // the active wait and the overdue one's last read
+  expect(report?.reads).toBe(1); // both name the same commit
   expect(report?.unserved).toHaveLength(1); // overdue is reported
 });
 
-test('only-overdue waits with no labels perform zero plugin calls but report once', async () => {
+test('only-overdue waits are read on the first pass that finds them, then never', async () => {
   const configPath = await observingFixture({ acceptances: [acceptance()] });
   const acceptReceipt = mock(async () => ({ receiptId: 'unused', replay: false }));
   const sources = await loadWebhookSourcePlugins(configPath, {
@@ -931,10 +932,11 @@ test('only-overdue waits with no labels perform zero plugin calls but report onc
   });
 
   const [report] = (await observer?.pass(now)) ?? [];
-  expect(report?.waits).toBe(0);
-  expect(report?.reads).toBe(0);
+  expect(report?.waits).toBe(1);
+  expect(report?.reads).toBe(1);
   expect(report?.unserved).toHaveLength(1);
-  expect(acceptReceipt).not.toHaveBeenCalled();
+  expect(await observer?.pass(new Date(now.getTime() + 60_000))).toEqual([]);
+  expect(forge.reads).toHaveLength(1);
 });
 
 async function backedOff(kind: string, failOnce = false) {

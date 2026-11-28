@@ -450,13 +450,14 @@ test('passes the public read conformance kit for an external-status-only reposit
 });
 
 test.each([
-  ['action_required', 'head', true],
-  ['action_required', 'old-head', false],
-  [null, 'head', false],
-  ['success', 'head', false],
+  ['action_required', 'head', true, false],
+  ['action_required', 'old-head', false, false],
+  [null, 'head', false, true],
+  [null, 'old-head', false, false],
+  ['success', 'head', false, false],
 ] as const)(
-  'approval evidence uses explicit workflow conclusions at the current head: %s %s',
-  async (conclusion, head, approvalPending) => {
+  'approval and unfinished-run evidence come from workflow runs at the current head: %s %s',
+  async (conclusion, head, approvalPending, runsPending) => {
     const response = await handleGithubOperation(checksRequest, {
       token: 'token',
       fetch: async input => {
@@ -483,10 +484,30 @@ test.each([
     });
     expect(response).toMatchObject({
       ok: true,
-      result: { value: { approvalPending, units: [], summary: { state: 'none' } } },
+      result: { value: { approvalPending, runsPending, units: [], summary: { state: 'none' } } },
     });
   }
 );
+
+test('a requested check run is pending, not unknown', async () => {
+  const response = await handleGithubOperation(checksRequest, {
+    token: 'token',
+    fetch: async input => {
+      const url = String(input);
+      if (url.includes('/pulls/')) return json({ head: { sha: 'head' } });
+      if (url.includes('/actions/runs')) return json({ total_count: 0, workflow_runs: [] });
+      if (url.includes('/check-runs'))
+        return json({
+          check_runs: [{ id: 7, name: 'build', status: 'requested', conclusion: null }],
+        });
+      return json([]);
+    },
+  });
+  expect(response).toMatchObject({
+    ok: true,
+    result: { value: { units: [{ state: 'pending', phase: 'pending' }] } },
+  });
+});
 
 test('failed or truncated Actions enumeration cannot certify absence of approval', async () => {
   for (const reply of [json({}, 403), json({ total_count: 1001, workflow_runs: [] })]) {

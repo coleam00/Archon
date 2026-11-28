@@ -57,11 +57,12 @@ function failure(operationId: string, error: ForgeError): ForgeResponse {
 function checkRunObservation(run: z.infer<typeof checkRunSchema>): CheckObservation {
   const nativeResult = run.conclusion ?? null;
   const normalizedResult = checkResult(nativeResult);
-  if (['queued', 'waiting', 'pending', 'in_progress'].includes(run.status)) {
+  const phase = checkPhase(run.status);
+  if (phase === 'pending' || phase === 'running') {
     return {
       unit: { kind: 'check', id: String(run.id), name: run.name },
       nativeState: run.status,
-      phase: checkPhase(run.status),
+      phase,
       nativeResult,
       result: normalizedResult,
       state: 'pending',
@@ -144,6 +145,7 @@ async function readCommitChecks(
   units: CheckObservation[];
   summary: ReturnType<typeof summarizeChecks>;
   approvalPending: boolean;
+  runsPending: boolean;
 }> {
   const { root, path } = location(repo);
   const ref = encodeURIComponent(revision);
@@ -193,6 +195,8 @@ async function readCommitChecks(
     approvalPending:
       workflows.some(run => run.head_sha === revision && run.conclusion === 'action_required') ||
       units.some(unit => unit.result === 'action_required'),
+    // A queued run may have no check run yet, so the units alone can read as finished.
+    runsPending: workflows.some(run => run.head_sha === revision && run.status !== 'completed'),
   };
 }
 

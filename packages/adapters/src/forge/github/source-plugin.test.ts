@@ -7,6 +7,7 @@ import {
   createItemWaitObserver,
   loadWebhookSourcePlugins,
 } from '@archon/core/workflows/source-plugins';
+import { type CheckObservation, summarizeChecks } from '@archon/forge/operations';
 import { removeTempTree } from '@archon/paths/test-utils';
 import createGitHubWebhookSource from './source-plugin';
 import { githubWebhookSourceConfigSchema } from './source-config';
@@ -529,13 +530,22 @@ describe('GitHub source plugin observing open waits', () => {
     item: { field: 'subject.number', prefix: 'pr-' },
     wake: { workflow: 'host', wait: 'review', about: { field: 'review.commit' } },
   });
-  const unit = (id: string, status: 'in_progress' | 'completed' | 'unknown') => ({
+  const unit = (
+    id: string,
+    status: 'in_progress' | 'completed' | 'unknown',
+    outcome: 'success' | 'failure' = 'success'
+  ) => ({
     unit: { kind: 'check' as const, id, name: 'build' },
     nativeState: status,
     phase: status === 'in_progress' ? ('running' as const) : status,
-    nativeResult: status === 'completed' ? 'success' : null,
-    result: status === 'completed' ? ('success' as const) : null,
-    state: status === 'completed' ? ('green' as const) : ('pending' as const),
+    nativeResult: status === 'completed' ? outcome : null,
+    result: status === 'completed' ? outcome : null,
+    state:
+      status !== 'completed'
+        ? ('pending' as const)
+        : outcome === 'success'
+          ? ('green' as const)
+          : ('red' as const),
   });
   const review = (id: string, state: string, commit: string) => ({
     kind: 'review' as const,
@@ -552,7 +562,7 @@ describe('GitHub source plugin observing open waits', () => {
     body: 'looks good',
   });
   function reader(
-    units: ReturnType<typeof unit>[],
+    units: CheckObservation[],
     reviews: ReturnType<typeof review>[] = [],
     host = 'github.com'
   ) {
@@ -563,23 +573,12 @@ describe('GitHub source plugin observing open waits', () => {
         async commitChecks(input: { remote: string; revision: string }) {
           reads.push(input);
           if (input.revision === 'gone') throw new Error('commit not found');
-          const green = units.filter(candidate => candidate.state === 'green').length;
           return {
             repo: { host, path: 'owner/repo' },
             branch: null,
             revision: input.revision,
             units,
-            summary: {
-              state: green === units.length ? ('green' as const) : ('pending' as const),
-              counts: {
-                total: units.length,
-                green,
-                red: 0,
-                pending: units.length - green,
-                gated: 0,
-                unknown: 0,
-              },
-            },
+            summary: summarizeChecks(units),
           };
         },
         async prReviews(input: { remote: string; number: number }) {
@@ -991,6 +990,104 @@ describe('GitHub source plugin observing open waits', () => {
     });
   });
 
+  const settledWake = binding({
+    bindingId: 'checks-settled',
+    selector: { kind: 'checks.settled', actions: ['settled'] },
+    inputMapping: { result: { source: 'field', field: 'checks.result' } },
+    wake: { workflow: 'host', wait: 'checks', about: { field: 'checks.revision' } },
+  });
+
+  test('a commit’s checks wake a settled-check wait once, when none is still pending', async () => {
+    const { observe } = await observer([settledWake]);
+    // A failure while another check still runs reads red, but has not settled.
+    const running = reader([
+      unit('77', 'completed'),
+      unit('78', 'completed', 'failure'),
+      unit('79', 'in_progress'),
+    ]);
+    expect(
+      (await observe({ labels: [], waits: [wait], forge: running.forge })).acceptances
+    ).toEqual([]);
+
+    const done = reader([
+      unit('77', 'completed'),
+      unit('78', 'completed', 'failure'),
+      unit('79', 'completed'),
+    ]);
+    const { acceptances } = await observe({ labels: [], waits: [wait], forge: done.forge });
+    expect(acceptances).toHaveLength(1);
+    const [start] = acceptances[0]?.bindings ?? [];
+    expect(start?.wake?.about).toBe(revision);
+    expect(start?.wake?.observedItemKey).toBe('pr-7');
+    expect(start?.eventInputs).toEqual({ result: 'red' });
+    const deliveryId = acceptances[0]?.receipt.deliveryId ?? '';
+    expect(deliveryId).toStartWith(`observe:checks-settled:github.com/owner/repo@${revision}:red:`);
+    expect(deliveryId).toEndWith(':checks-settled:pr-7');
+
+    // The same settled state observed again is the same delivery, which the engine replays.
+    const again = await observe({ labels: [], waits: [wait], forge: done.forge });
+    expect(again.acceptances.map(a => a.receipt.deliveryId)).toEqual([deliveryId]);
+
+    // A rerun has new check-run ids, so it settles as a new delivery.
+    const rerun = reader([
+      unit('77', 'completed'),
+      unit('88', 'completed'),
+      unit('79', 'completed'),
+    ]);
+    const after = await observe({ labels: [], waits: [wait], forge: rerun.forge });
+    expect(after.acceptances).toHaveLength(1);
+    expect(after.acceptances[0]?.receipt.deliveryId).not.toBe(deliveryId);
+  });
+
+  test('a commit status posted again with the same result settles as the same delivery', async () => {
+    const { observe } = await observer([settledWake]);
+    const status = (id: string, context: string) => ({
+      unit: { kind: 'commit_status' as const, id, name: context },
+      nativeState: 'success',
+      phase: 'completed' as const,
+      nativeResult: 'success',
+      result: 'success' as const,
+      state: 'green' as const,
+    });
+    const first = await observe({
+      labels: [],
+      waits: [wait],
+      forge: reader([status('100', 'build')]).forge,
+    });
+    const again = await observe({
+      labels: [],
+      waits: [wait],
+      forge: reader([status('101', 'Build')]).forge,
+    });
+    expect(again.acceptances.map(a => a.receipt.deliveryId)).toEqual(
+      first.acceptances.map(a => a.receipt.deliveryId)
+    );
+  });
+
+  test('a source that receives webhooks delivers settled checks only by observing', async () => {
+    // A check's webhook does not meet a settled-check wait: it is recorded unmatched.
+    const recorded = recorder();
+    const github = await adapter(config([settledWake]), recorded.intake);
+    const payload = JSON.stringify(
+      checkRunPayload({
+        action: 'completed',
+        check_run: {
+          ...(checkRunPayload().check_run as Record<string, unknown>),
+          head_sha: revision,
+          status: 'completed',
+          conclusion: 'success',
+        },
+      })
+    );
+    await github.receiveWebhook(payload, sign(payload), 'delivery-77', 'check_run');
+    expect(recorded.calls.map(call => call.outcome)).toEqual(['unmatched']);
+
+    const { observe } = await observer([settledWake], true);
+    const { forge } = reader([unit('77', 'completed')]);
+    const observed = await observe({ labels: [], waits: [wait], forge });
+    expect(observed.acceptances.map(a => a.bindings[0]?.bindingId)).toEqual(['checks-settled']);
+  });
+
   test('a source with no webhook secret refuses every delivery', async () => {
     const { plugin } = await observer([checksWake]);
     const payload = JSON.stringify(checkRunPayload());
@@ -1001,6 +1098,121 @@ describe('GitHub source plugin observing open waits', () => {
         receivedAt: '2026-09-22T10:00:00.000Z',
       })
     ).toEqual({ status: 'rejected', reason: 'unauthenticated' });
+  });
+});
+
+describe('GitHub source plugin settled checks, observed through the engine', () => {
+  const roots: string[] = [];
+  afterAll(async () => {
+    await Promise.all(roots.map(removeTempTree));
+  });
+
+  test('a wait opened after its checks finished is met on the first pass, and once', async () => {
+    const revision = 'a'.repeat(40);
+    const remote = 'https://github.com/owner/repo.git';
+    const root = await mkdtemp(join(tmpdir(), 'archon-settled-observe-'));
+    roots.push(root);
+    const configPath = join(root, 'sources.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sources: [
+          {
+            sourceInstanceId: 'github-primary',
+            module: join(import.meta.dir, 'source-plugin.ts'),
+            config: {
+              version: 1,
+              webhookSecretEnv: 'ARCHON_SOURCE_PLUGIN_TEST_SECRET',
+              host: 'github.com',
+              bindings: [
+                binding({
+                  bindingId: 'checks-settled',
+                  selector: { kind: 'checks.settled', actions: ['settled'] },
+                  inputMapping: {},
+                  wake: { workflow: 'host', wait: 'checks', about: { field: 'checks.revision' } },
+                }),
+              ],
+            },
+            observe: { everySeconds: 15 },
+          },
+        ],
+      })
+    );
+    const receipts = new Map<string, SourceReceiptAcceptance>();
+    const sources = await loadWebhookSourcePlugins(configPath, {
+      acceptReceipt: async input => {
+        const deliveryId = input.receipt.deliveryId ?? input.receipt.id;
+        const replay = receipts.has(deliveryId);
+        if (!replay) receipts.set(deliveryId, input);
+        return { receiptId: deliveryId, replay };
+      },
+      isKnownUser: async () => true,
+      hasDeliveryReceipt: async (_source, deliveryId) => receipts.has(deliveryId),
+      getReceipt: async () => null,
+    });
+    // Every check had completed by the time the waiting run completed and opened the wait,
+    // so no webhook delivery follows; the first pass reads the settled state.
+    const completed = (id: string) => ({
+      unit: { kind: 'check' as const, id, name: `check-${id}` },
+      nativeState: 'completed',
+      phase: 'completed' as const,
+      nativeResult: 'success',
+      result: 'success' as const,
+      state: 'green' as const,
+    });
+    const units = [completed('1'), completed('2'), completed('3')];
+    let reads = 0;
+    const refused = async (): Promise<never> => {
+      throw new Error('no read expected');
+    };
+    const observer = createItemWaitObserver({
+      sources,
+      store: {
+        listOpenItemWaits: async () => [
+          {
+            id: 'wait-1',
+            itemId: 'item-1',
+            runId: 'run-1',
+            workflowName: 'host',
+            position: 0,
+            event: 'checks',
+            about: revision,
+            subject: null,
+            openedAt: '2026-01-01T00:00:00.000Z',
+            deadlineAt: new Date(Date.now() + 86_400_000).toISOString(),
+            closed: null,
+          },
+        ],
+        getItem: (async () => ({ key: 'pr-7' })) as never,
+        getWorkflowRun: (async () => ({ codebase_id: 'codebase-1' })) as never,
+        getCodebase: (async () => ({ repository_url: remote })) as never,
+      },
+      forge: {
+        // The second read lists the same checks in another order: still the same state.
+        commitChecks: async input => ({
+          repo: { host: 'github.com', path: 'owner/repo' },
+          branch: null,
+          revision: input.revision,
+          units: reads++ === 0 ? units : [...units].reverse(),
+          summary: {
+            state: 'green',
+            counts: { total: 3, green: 3, red: 0, pending: 0, gated: 0, unknown: 0 },
+          },
+        }),
+        prReviews: refused,
+        issuesWithLabel: refused,
+        labelAdded: refused,
+        issuesOpened: refused,
+      },
+    });
+    const [first] = (await observer?.pass(new Date())) ?? [];
+    expect(first?.error).toBeUndefined();
+    expect(first?.receipts).toHaveLength(1);
+    expect(first?.receipts[0]).toStartWith('observe:checks-settled:');
+    const [second] = (await observer?.pass(new Date(Date.now() + 15_000))) ?? [];
+    expect(second?.receipts).toEqual([]);
+    expect(second?.replayed).toEqual(first?.receipts ?? []);
   });
 });
 

@@ -1,6 +1,12 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { checkChangedEventSchema, type CheckResult } from './events';
+import {
+  checkChangedEventSchema,
+  checksStateSchema,
+  type CheckResult,
+  type ChecksState,
+  type SettledChecksResult,
+} from './events';
 import { gitObjectIdSchema, prRefSchema, repoRefSchema } from './identity';
 import {
   actorSelfRequestSchema,
@@ -53,8 +59,7 @@ import {
   rerunGroupSchema,
 } from './checks';
 
-export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
-export type ChecksState = z.infer<typeof checksStateSchema>;
+export { checksStateSchema, type ChecksState } from './events';
 
 /**
  * How a concluded check's result gates. `action_required` waits on a maintainer's
@@ -120,6 +125,8 @@ export const checksObservationSchema = checkSetSchema.safeExtend({
   revision: gitObjectIdSchema,
   required: checkSetSchema.nullable(),
   approvalPending: z.boolean().nullable().optional(),
+  /** Whether CI runs on the commit have not completed, some perhaps with no check reported yet. */
+  runsPending: z.boolean().nullable().optional(),
 });
 export type ChecksObservation = z.infer<typeof checksObservationSchema>;
 /** Checks on one commit; `branch` names the default branch when that is how the commit was chosen. */
@@ -128,6 +135,8 @@ export const commitChecksObservationSchema = checkSetSchema.safeExtend({
   branch: z.string().min(1).nullable(),
   revision: gitObjectIdSchema,
   approvalPending: z.boolean().nullable().optional(),
+  /** Whether CI runs on the commit have not completed, some perhaps with no check reported yet. */
+  runsPending: z.boolean().nullable().optional(),
 });
 export type CommitChecksObservation = z.infer<typeof commitChecksObservationSchema>;
 export type PrReviewsObservation = z.infer<typeof prReviewsSchema>;
@@ -523,4 +532,22 @@ export function summarizeChecks(
     (['red', 'gated', 'unknown', 'pending', 'green'] as const).find(value => counts[value] > 0) ??
     'none';
   return { state, counts };
+}
+
+/**
+ * What a set of checks came to, or null while it has not settled: while a check is pending,
+ * a CI run has not completed (it may have reported no check yet), or runs wait for approval
+ * to run. The pending count decides, not the state: the state is red as soon as one check
+ * fails, while others still run. No checks at all is not settled either: right after a push
+ * none may be registered yet.
+ */
+export function settledChecks(set: {
+  summary: z.infer<typeof checksSummarySchema>;
+  approvalPending?: boolean | null;
+  runsPending?: boolean | null;
+}): SettledChecksResult | null {
+  const { state, counts } = set.summary;
+  if (counts.pending > 0 || set.runsPending === true || set.approvalPending === true) return null;
+  if (state === 'none' || state === 'pending') return null;
+  return state;
 }

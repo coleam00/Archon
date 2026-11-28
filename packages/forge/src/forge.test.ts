@@ -6,6 +6,7 @@ import {
   forgeEventEnvelopeSchema,
   mapForgeInputs,
   matchForgeEvent,
+  settledChecks,
   sourceActorSchema,
 } from './index';
 
@@ -19,6 +20,39 @@ describe('source actor account type', () => {
   });
   test('refuses a value outside the named kinds', () => {
     expect(sourceActorSchema.safeParse({ ...base, type: 'Bot' }).success).toBe(false);
+  });
+});
+
+describe('settled checks', () => {
+  const summary = (
+    state: 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown',
+    counts: Partial<Record<'green' | 'red' | 'pending' | 'gated' | 'unknown', number>>
+  ) => {
+    const full = { green: 0, red: 0, pending: 0, gated: 0, unknown: 0, ...counts };
+    const total = Object.values(full).reduce((sum, count) => sum + count, 0);
+    return { state, counts: { total, ...full } };
+  };
+  test.each([
+    ['one check still pending', summary('pending', { green: 2, pending: 1 }), {}, null],
+    ['a failure while another still runs', summary('red', { red: 1, pending: 1 }), {}, null],
+    ['all concluded green', summary('green', { green: 3 }), {}, 'green'],
+    ['all concluded with a failure', summary('red', { green: 2, red: 1 }), {}, 'red'],
+    ['no checks registered yet', summary('none', {}), {}, null],
+    [
+      'a CI run with no check reported yet',
+      summary('green', { green: 1 }),
+      { runsPending: true },
+      null,
+    ],
+    ['runs waiting for approval to run', summary('none', {}), { approvalPending: true }, null],
+    [
+      'green beside runs waiting for approval',
+      summary('green', { green: 1 }),
+      { approvalPending: true },
+      null,
+    ],
+  ] as const)('%s', (_name, checks, runs, expected) => {
+    expect(settledChecks({ summary: checks, ...runs })).toBe(expected);
   });
 });
 
