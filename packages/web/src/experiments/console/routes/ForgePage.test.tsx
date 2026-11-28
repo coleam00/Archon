@@ -73,29 +73,30 @@ function overview(facts: Partial<ForgeOverview> = {}): ForgeOverview {
 function forge(name: string, value: ForgeOverview = overview()): ForgeProject {
   return {
     kind: 'forge',
-    forge: { id: name.toLowerCase(), name },
+    forge: { name },
     repo: { host: 'forge.example', path: 'acme/archon' },
     plugin: { name: name.toLowerCase(), version: '1' },
     overview: { status: 'ok', syncedAt: '2026-11-27T12:00:00.000Z', value },
   };
 }
 
-const workflow = (name: string): Workflow => ({
+const workflow = (name: string, ...inputs: string[]): Workflow => ({
   name,
   description: null,
   source: 'bundled',
   parseWarnings: [],
-  inputs: [],
+  inputs: inputs.map(input => ({ name: input, required: false, default: null, description: null })),
 });
 
 function render(
-  data: ProjectForge,
+  data: ProjectForge | undefined,
   element: ReactElement = <ForgePage />,
-  workflows = ['archon-review', 'archon-ship']
+  workflows = [workflow('archon-review', 'scope'), workflow('archon-ship', 'target')]
 ): string {
   set(K.project(PROJECT.id), PROJECT);
-  set(K.projectForge(PROJECT.id), data);
-  set(K.workflows(PROJECT.path), { workflows: workflows.map(workflow), recommended: [] });
+  if (data === undefined) invalidate(K.projectForge(PROJECT.id));
+  else set(K.projectForge(PROJECT.id), data);
+  set(K.workflows(PROJECT.path), { workflows, recommended: [] });
   return renderToStaticMarkup(
     <MemoryRouter initialEntries={[`/console/p/${PROJECT.id}/forge`]}>
       <Routes>
@@ -204,9 +205,26 @@ describe('the forge tab', () => {
   });
 
   test('an action is offered only for a workflow the project has', () => {
-    const html = render(forge('GitHub'), <ForgePage />, ['archon-ship']);
+    const html = render(forge('GitHub'), <ForgePage />, [workflow('archon-ship', 'target')]);
     expect(html).not.toContain('workflow=archon-review');
     expect(html).toContain('workflow=archon-ship');
+  });
+
+  test('an action is not offered when the workflow no longer takes the item', () => {
+    // The draft card drops an input the workflow does not declare, so the run would
+    // start on something other than the row.
+    const html = render(forge('GitHub'), <ForgePage />, [
+      workflow('archon-review', 'pull_request'),
+      workflow('archon-ship', 'target'),
+    ]);
+    expect(html).not.toContain('workflow=archon-review');
+    expect(html).toContain('workflow=archon-ship');
+  });
+
+  test('the forge page shows its own tab while the forge is still being read', () => {
+    expect(render(undefined)).toContain('href="/console/p/p1/forge"');
+    const runs = render(undefined, <ProjectViewTabs projectId="p1" active="runs" />);
+    expect(runs).not.toContain('/forge');
   });
 
   test('a failed read says why and how to fix it, with no tiles', () => {
@@ -220,7 +238,8 @@ describe('the forge tab', () => {
     };
     const html = render(failed);
     expect(html).toContain('GitHub could not be read (no_credential)');
-    expect(html).toContain('No credential for github.com. Set GH_TOKEN.');
+    expect(html).toContain('No credential for github.com.');
+    expect(html).toContain('Set GH_TOKEN.');
     expect(html).not.toContain('Open on GitHub');
     expect(html).not.toContain('Issues');
     // The tab stays, without a count; the header names the repository without a link.

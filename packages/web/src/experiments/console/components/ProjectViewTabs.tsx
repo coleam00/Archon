@@ -30,21 +30,28 @@ function openCount(forge: ProjectForge): number | undefined {
   return counts.length === 0 ? undefined : counts.reduce((sum, count) => sum + count, 0);
 }
 
-/** The tab named after the project's forge. A project with no forge has none. */
-function forgeTab(forge: ProjectForge | undefined): Tab[] {
-  if (forge === undefined || forge.kind === 'none') return [];
-  const count = openCount(forge);
+/**
+ * The tab named after the project's forge. A project with no forge has none; until the
+ * forge is known, only the forge page itself shows the tab it is on.
+ */
+function forgeTab(forge: ProjectForge | undefined, active: ProjectView): Tab[] {
+  if (forge === undefined ? active !== 'forge' : forge.kind === 'none') return [];
+  const named = forge?.kind === 'forge' ? forge.forge : undefined;
+  const count = forge === undefined ? undefined : openCount(forge);
   return [
     {
       key: 'forge',
       suffix: '/forge',
       label: (
         <span className="inline-flex items-center gap-1.5">
-          <ForgeIcon icon={forge.kind === 'forge' ? forge.forge.icon : undefined} />
-          {forge.kind === 'forge' ? forge.forge.name : 'Forge'}
+          <ForgeIcon icon={named?.icon} />
+          {named?.name ?? 'Forge'}
           {count === undefined ? null : (
-            <span className="rounded-full bg-surface-bright px-1.5 font-mono text-console-10 text-text-secondary">
-              {count.toString()}
+            <span
+              title="Open issues and pull/merge requests"
+              className="rounded-full bg-surface-bright px-1.5 font-mono text-console-10 text-text-secondary"
+            >
+              {count.toLocaleString('en-US')}
             </span>
           )}
         </span>
@@ -90,9 +97,9 @@ function RepoLink({ forge }: { forge: ProjectForge | undefined }): ReactElement 
 export function ProjectViewTabs({ projectId, active }: ProjectViewTabsProps): ReactElement {
   const { data: forge } = useProjectForge(projectId);
   return (
-    <div className="flex items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
       <div className="flex items-center gap-1">
-        {[...TABS, ...forgeTab(forge)].map(({ key, label, suffix }) => {
+        {[...TABS, ...forgeTab(forge, active)].map(({ key, label, suffix }) => {
           const isActive = key === active;
           return (
             <Link

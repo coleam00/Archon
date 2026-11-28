@@ -116,15 +116,6 @@ function RailNavLink({
 }
 
 /**
- * Left rail, design v2: header with count pill, filter input, projects
- * grouped by owner with hairline section labels, and a drag handle on the
- * right edge (232–440px, persisted).
- *
- * Note: ProjectRail mounts outside the inner `<Routes>` (sibling to the
- * <main> that hosts them), so `useParams()` returns `{}` here even on a
- * project URL. We extract the project id from the pathname directly.
- */
-/**
  * The selected project's open issues and pull requests, each linking to that list on its
  * forge. Only the project in view is read, so the rail never reads every project's forge.
  * A sibling of the row, not a child: the row is itself a button.
@@ -153,6 +144,15 @@ export function RailForgeCounts({ projectId }: { projectId: string }): ReactElem
   );
 }
 
+/**
+ * Left rail, design v2: header with count pill, filter input, projects
+ * grouped by owner with hairline section labels, and a drag handle on the
+ * right edge (232–440px, persisted).
+ *
+ * Note: ProjectRail mounts outside the inner `<Routes>` (sibling to the
+ * <main> that hosts them), so `useParams()` returns `{}` here even on a
+ * project URL. We extract the project id from the pathname directly.
+ */
 export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
   const navigate = useNavigate();
   const location = useLocation();

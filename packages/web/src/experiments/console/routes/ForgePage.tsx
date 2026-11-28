@@ -3,7 +3,7 @@ import { Link, Navigate, useParams } from 'react-router';
 import { EmptyState } from '../components/EmptyState';
 import { ForgeIcon } from '../components/ForgeIcon';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
-import { relativeTime } from '../lib/format';
+import { formatDateTime } from '../lib/format';
 import {
   useProjectForge,
   type ForgeItem,
@@ -12,6 +12,7 @@ import {
 } from '../lib/project-forge';
 import { rerunPath } from '../lib/rerun';
 import type { Project } from '../primitives/project';
+import type { Workflow } from '../primitives/workflow';
 import * as skill from '../skills';
 import type { ProjectForge } from '../skills/forge';
 import { useEntity } from '../store/cache';
@@ -21,13 +22,24 @@ type Stats = ForgeOverview['stats'];
 type Stat = NonNullable<Stats[keyof Stats]>;
 
 /**
- * The workflow each row's action starts, and the input that takes the item. A shortcut:
- * the action is offered only when the project has the workflow.
+ * The workflow each row's action starts, and the input that takes the item. The draft card
+ * falls back to another workflow when the project lacks the one a link names, and drops an
+ * input the workflow does not declare, so an action is offered only when the project's
+ * workflow of that name declares that input.
  */
 const ITEM_ACTIONS = {
   pr: { label: 'Review', workflow: 'archon-review', input: 'scope' },
   issue: { label: 'Ship', workflow: 'archon-ship', input: 'target' },
 } as const;
+type ItemAction = (typeof ITEM_ACTIONS)[keyof typeof ITEM_ACTIONS];
+
+function takesItem(workflows: readonly Workflow[], action: ItemAction): boolean {
+  return workflows.some(
+    workflow =>
+      workflow.name === action.workflow &&
+      workflow.inputs.some(input => input.name === action.input)
+  );
+}
 
 /** `/console/p/:projectId/forge`: the project's repository on its forge. */
 export function ForgePage(): ReactElement {
@@ -81,7 +93,10 @@ function ForgeBody({
     return (
       <EmptyState
         title={`${forge.forge.name} could not be read (${failure.kind})`}
-        hint={remedy === undefined ? failure.message : `${failure.message} ${remedy}`}
+        hint={failure.message}
+        action={
+          remedy === undefined ? undefined : <p className="text-xs text-text-secondary">{remedy}</p>
+        }
       />
     );
   }
@@ -112,13 +127,11 @@ function ForgeOverviewView({
   const { stats, actor } = overview;
   const you = actor === undefined ? 'you' : `@${actor.login}`;
   const days = Math.round((Date.parse(syncedAt) - Date.parse(overview.since)) / 86_400_000);
-  // The draft card falls back to another workflow when the project lacks the one a link
-  // names, so an action is offered only for a workflow the project has.
-  const { data: workflows } = useEntity(
+  const { data: listed } = useEntity(
     project === undefined ? 'noop:forge-workflows' : K.workflows(project.path),
     () => (project === undefined ? Promise.resolve(undefined) : skill.listWorkflows(project.path))
   );
-  const available = new Set(workflows?.workflows.map(workflow => workflow.name));
+  const workflows = listed?.workflows ?? [];
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
       <RepoCard forge={forge} overview={overview} syncedAt={syncedAt} />
@@ -150,13 +163,13 @@ function ForgeOverviewView({
         title="Newest open pull/merge requests"
         items={overview.pull_requests}
         projectId={projectId}
-        available={available}
+        workflows={workflows}
       />
       <ItemList
         title="Newest open issues"
         items={overview.issues}
         projectId={projectId}
-        available={available}
+        workflows={workflows}
       />
     </div>
   );
@@ -235,7 +248,7 @@ function RepoCard({
         </dl>
       )}
       <p className="text-console-11 text-text-tertiary">
-        Synced {relativeTime(syncedAt)} through the {forge.plugin.name} plugin{' '}
+        Synced {formatDateTime(syncedAt)} through the {forge.plugin.name} plugin{' '}
         {forge.plugin.version}
       </p>
     </div>
@@ -264,7 +277,7 @@ function TileGroup({
               href={stat.url}
               {...external}
               title={`${label}: open this list`}
-              className="font-mono text-console-18 font-medium text-text-primary hover:text-accent-bright"
+              className="font-mono text-console-18 font-medium text-text-primary underline decoration-border underline-offset-4 hover:text-accent-bright"
             >
               {stat.count.toLocaleString('en-US')}
             </a>
@@ -280,12 +293,12 @@ function ItemList({
   title,
   items,
   projectId,
-  available,
+  workflows,
 }: {
   title: string;
   items: readonly ForgeItem[] | undefined;
   projectId: string;
-  available: ReadonlySet<string>;
+  workflows: readonly Workflow[];
 }): ReactElement | null {
   if (items === undefined) return null;
   return (
@@ -299,7 +312,7 @@ function ItemList({
               key={item.ref.number}
               item={item}
               projectId={projectId}
-              available={available}
+              workflows={workflows}
             />
           ))}
         </ul>
@@ -311,11 +324,11 @@ function ItemList({
 function ItemRow({
   item,
   projectId,
-  available,
+  workflows,
 }: {
   item: ForgeItem;
   projectId: string;
-  available: ReadonlySet<string>;
+  workflows: readonly Workflow[];
 }): ReactElement {
   const action = ITEM_ACTIONS[item.kind];
   return (
@@ -331,7 +344,7 @@ function ItemRow({
         </a>
         <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-console-11 text-text-tertiary">
           {item.author?.login ? <span>{item.author.login}</span> : null}
-          <span>updated {relativeTime(item.updatedAt)}</span>
+          <span>updated {formatDateTime(item.updatedAt)}</span>
           {item.is_draft === true ? (
             <span className="rounded border border-border px-1.5 text-text-secondary">Draft</span>
           ) : null}
@@ -342,7 +355,7 @@ function ItemRow({
           ))}
         </div>
       </div>
-      {available.has(action.workflow) ? (
+      {takesItem(workflows, action) ? (
         <Link
           to={rerunPath({
             projectId,
