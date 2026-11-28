@@ -1055,7 +1055,7 @@ describe('workflow status arguments', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      'Usage: archon workflow status [--all] [--json] [--verbose] [--events]'
+      'Usage: archon workflow status [--all] [--lost] [--json] [--verbose] [--events]'
     );
     expect(result.stderr).toContain('archon workflow get <run-id>');
     expect(result.stdout).toBe('');

@@ -226,6 +226,12 @@ export const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--lost',
+    description:
+      "For 'workflow status': show only active runs whose owner process this host proves gone",
+    owners: [{ command: 'workflow', subcommand: 'status' }],
+  },
+  {
     spec: '--all',
     description: "For 'workflow status/runs': list across all projects (ignore cwd scope)",
     owners: [

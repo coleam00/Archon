@@ -33,6 +33,7 @@ export const workflowHelp: HelpGroup = {
       subcommand: 'status',
       spec: 'workflow status',
       description: 'Show running/paused workflows for this project',
+      scopedFlags: [{ spec: '--lost', description: 'Only runs whose owner process is gone' }],
     },
     {
       command: 'workflow',

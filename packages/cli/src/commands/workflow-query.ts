@@ -21,7 +21,6 @@ import { describeInstallHold } from '@archon/workflows/schemas/resource-start';
 import { heldStartLine, readHeldStarts } from './workflow-held-starts';
 import { resolveDryRunEnvironment } from './workflow-dry-run';
 import { createCliWorkflowHost } from '../utils/workflow-host';
-import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
 import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
@@ -32,7 +31,6 @@ import type { WorkflowLoadError, WorkflowWithSource } from '@archon/workflows/sc
 import {
   displayedRunOutcome,
   workflowRunStatusSchema,
-  runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
@@ -43,15 +41,9 @@ import {
   WORKFLOW_DESCRIPTION_TRUNCATION_MARKER,
   type WorkflowJsonEntry,
 } from './workflow-list';
-import { buildNodeSummaries, fetchVerboseEvents, withRunDetail } from './workflow-node-summaries';
+import { withRunDetail } from './workflow-node-summaries';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import {
-  formatAge,
-  getLog,
-  inheritedWorkflowCodebase,
-  resolveRunIdArg,
-  resolveRunTranscriptPath,
-} from './workflow-shared';
+import { formatAge, getLog, resolveRunIdArg, resolveRunTranscriptPath } from './workflow-shared';
 import {
   TRANSCRIPT_POLL_INTERVAL_MS,
   type TranscriptFormat,
@@ -61,7 +53,14 @@ import {
   finishTranscriptDecode,
   transcriptUnavailableMessage,
 } from './workflow-transcript';
-import { printStatusRun, announceWaitAttached, writeWaitOutcome } from './workflow-inspect';
+import { announceWaitAttached, writeWaitOutcome } from './workflow-inspect';
+import {
+  lostOnly,
+  printStatusText,
+  resolveStatusCodebase,
+  statusOwners,
+  writeStatusJson,
+} from './workflow-status';
 import { findRunsCodebase, type RunsCodebase } from './workflow-item-runs';
 
 async function reportUnavailablePlugins(): Promise<void> {
@@ -295,44 +294,17 @@ export async function workflowListCommand(
   }
 }
 
-async function verboseStatusRuns(
-  host: WorkflowHost,
-  runs: DashboardWorkflowRun[],
-  rawEvents = false
-) {
-  const fetchedPerRun = await Promise.all(
-    runs.map(run => fetchVerboseEvents(host, run.id, rawEvents))
-  );
-  if (fetchedPerRun.some(result => result.failed)) {
-    throw new Error('Failed to fetch workflow events for verbose status.');
-  }
-  return runs.map((run, i) => {
-    const runEvents = fetchedPerRun[i]?.events ?? [];
-    return rawEvents
-      ? { ...run, attention: runAttention(run), events: runEvents }
-      : { ...run, attention: runAttention(run), nodes: buildNodeSummaries(runEvents) };
-  });
-}
-
-async function resolveStatusCodebase(host: WorkflowHost, cwd: string, all: boolean | undefined) {
-  try {
-    const codebase = await inheritedWorkflowCodebase(host, all);
-    if (codebase === undefined && !all) {
-      return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-    }
-    return codebase;
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, cwd }, 'cli.workflow_status_codebase_lookup_failed');
-    throw new Error(`Failed to resolve workflow status project: ${err.message}`, { cause: err });
-  }
-}
-
 /** Show active workflow runs for the current project, or every project with `--all`. */
 export async function workflowStatusCommand(
   host: WorkflowHost,
   cwd: string,
-  opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
+  opts: {
+    json?: boolean;
+    verbose?: boolean;
+    rawEvents?: boolean;
+    all?: boolean;
+    lost?: boolean;
+  } = {}
 ): Promise<void> {
   const codebase = await resolveStatusCodebase(host, cwd, opts.all);
   let runs: DashboardWorkflowRun[];
@@ -355,29 +327,10 @@ export async function workflowStatusCommand(
 
   const scopeFallback = !opts.all && !codebase;
   const { hold, heldStarts } = await readHeldStarts(host, codebase?.id);
-
+  const owners = await statusOwners(host, runs);
+  if (opts.lost) runs = lostOnly(runs, owners);
   if (opts.json) {
-    if (!opts.verbose) {
-      await writeJsonLine({
-        runs: runs.map(run => ({
-          ...run,
-          attention: runAttention(run),
-          notice: notices.get(run.id) ?? null,
-        })),
-        scopeFallback,
-        hold,
-        heldStarts,
-      });
-      return;
-    }
-
-    const runsOutput = await verboseStatusRuns(host, runs, opts.rawEvents);
-    await writeJsonLine({
-      runs: runsOutput.map(run => ({ ...run, notice: notices.get(run.id) ?? null })),
-      scopeFallback,
-      hold,
-      heldStarts,
-    });
+    await writeStatusJson(host, runs, owners, notices, scopeFallback, hold, heldStarts, opts);
     return;
   }
 
@@ -394,15 +347,7 @@ export async function workflowStatusCommand(
     for (const start of heldStarts) console.log(heldStartLine(start));
   }
 
-  if (runs.length === 0) {
-    console.log('No active workflows.');
-    return;
-  }
-
-  console.log(`\nActive workflows (${runs.length}):\n`);
-  for (const run of runs) {
-    await printStatusRun(host, run, opts.verbose, notices.get(run.id));
-  }
+  await printStatusText(host, runs, owners, notices, opts);
 }
 
 /**
