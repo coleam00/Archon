@@ -8,11 +8,18 @@ import { KeymapHelp } from './components/KeymapHelp';
 import { BuilderConnected } from './builder/BuilderConnected';
 import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
+import { BoardPage } from './routes/BoardPage';
+import { OverviewPage } from './routes/OverviewPage';
+import { NeedsYouPage } from './routes/NeedsYouPage';
+import { ProjectNeedsYouPage } from './routes/ProjectNeedsYouPage';
+import { PackSettingsPage } from './routes/PackSettingsPage';
+import { PackSetupPage } from './routes/PackSetupPage';
 import { MetricsPage } from './routes/metrics/MetricsPage';
 import { ForgePage } from './routes/ForgePage';
 import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
 import { SettingsPage } from './routes/SettingsPage';
+import { FactoryHome, HowItWorksPage } from './factory/how-it-works/HowItWorksPage';
 import { invalidate } from './store/cache';
 import { K } from './store/keys';
 import { useKeymap, type Binding } from './lib/keymap';
@@ -20,6 +27,7 @@ import { useAttentionStreamSSE, useDashboardSSE } from './lib/sse';
 import { useRunAttentionAlerts } from './lib/attention-alerts';
 import { SHORTCUTS } from './lib/shortcuts';
 import './theme.css';
+import './factory/factory.css';
 
 // console-token-exception max-w-[calc(100vw-3rem)] -- Leave a dismissible strip beside the mobile navigation rail.
 const MOBILE_RAIL = 'fixed inset-y-0 left-0 z-30 flex max-w-[calc(100vw-3rem)] shadow-xl';
@@ -112,6 +120,7 @@ export function ConsoleApp(): ReactElement {
         <main className="flex min-w-0 flex-1 flex-col">
           <Routes>
             <Route index element={<RunsPage />} />
+            <Route path="needs-you" element={<NeedsYouPage />} />
             <Route path="metrics" element={<MetricsPage />} />
             <Route path="metrics/details" element={<MetricsPage view="details" />} />
             <Route path="settings" element={<SettingsPage />} />
@@ -119,8 +128,16 @@ export function ConsoleApp(): ReactElement {
             <Route path="builder/:name" element={<BuilderConnected />} />
             <Route path="_preview" element={<PreviewPage />} />
             <Route path="r/:runId" element={<RunDetailPage />} />
+            <Route path="factory" element={<FactoryHome />} />
+            <Route path="factory/:pack" element={<Navigate to="how-it-works" replace />} />
+            <Route path="factory/:pack/how-it-works" element={<HowItWorksPage />} />
             <Route path="*" element={<Navigate to="/console" replace />} />
             <Route path="p/:projectId" element={<RunsPage />} />
+            <Route path="p/:projectId/overview" element={<OverviewPage />} />
+            <Route path="p/:projectId/board" element={<BoardPage />} />
+            <Route path="p/:projectId/needs-you" element={<ProjectNeedsYouPage />} />
+            <Route path="p/:projectId/packs/:pack/setup" element={<PackSetupPage />} />
+            <Route path="p/:projectId/packs/:pack/settings" element={<PackSettingsPage />} />
             <Route path="p/:projectId/chat" element={<ChatPage />} />
             <Route path="p/:projectId/metrics" element={<MetricsPage />} />
             <Route path="p/:projectId/metrics/details" element={<MetricsPage view="details" />} />

@@ -167,7 +167,7 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/codebases` | List codebases with one representative per resolved repository remote |
+| GET | `/api/codebases` | List codebases with one representative per resolved repository remote. Each has `item_packs`: the keys of the workflow packs with a run on an item of the project, empty when it has none, or null on every codebase when the item runs could not be scanned (the list still answers) |
 | GET | `/api/codebases/{id}` | Get a single codebase |
 | POST | `/api/codebases` | Register a codebase (clone or local path) |
 | PATCH | `/api/codebases/{id}` | Rename a codebase |
@@ -253,7 +253,8 @@ Returns the active isolation environments (worktrees and containers) associated 
 | POST | `/api/workflows/validate` | Validate a workflow definition (in-memory, no save) |
 | PUT | `/api/workflows/{name}` | Save (create or update) a workflow |
 | DELETE | `/api/workflows/{name}` | Delete a user-defined workflow |
-| GET | `/api/packs/{pack}/graph` | A pack's [stage graph](/guides/workflow-triggers/#see-how-a-packs-stages-connect) as `PackGraph`: its stages with their outcomes and nodes, and the run-ended arrows between them, each active or declared and inactive. `codebaseId` (required) names the project the pack is discovered from and its arrows launch in; `workflowSource` (an absolute directory, optional) discovers the pack there instead, as a binding's `launch.discoveryCwd` does. 400 for a relative `workflowSource`; 404 for an unknown codebase or a pack with no workflow there; 422 naming the file for a trigger file that cannot be read, or for run-ended files under `store: files`. The same read as `archon pack graph --json` |
+| GET | `/api/observing` | What this install reads for event bindings without receiving webhooks, as `Observing`: `sources`, the observing sources of the file the server started with (`ARCHON_WEBHOOK_SOURCES`), each with its interval, the label reads its bindings name and the label bindings it cannot read with why; `lastPass`, the last pass the wake watcher recorded with its failures, null when none is recorded or its record does not read; and `lastPassUnreadable`, why a record that exists could not be read or validated, null otherwise. The reads are the whole install's, not a project's. It does not say whether a scheduler job runs the watcher: `archon workflow wake schedule status` does |
+| GET | `/api/packs/{pack}/graph` | A pack's [stage graph](/guides/workflow-triggers/#see-how-a-packs-stages-connect) as `PackGraph`: its stages with their outcomes and nodes, and the run-ended arrows between them, each active or declared and inactive. A stage, outcome value and node carry the workflow's `display:` words as written, absent when it has none, and the pack's document its groups, `words` and `exit`. A stage's `options` are the options every ask of it offers, its declared `returns.options` in order, each with its `label` when it declares one, then the reserved `other`; null when it declares none. `codebaseId` (required) names the project the pack is discovered from and its arrows launch in; `workflowSource` (an absolute directory, optional) discovers the pack there instead, as a binding's `launch.discoveryCwd` does. 400 for a relative `workflowSource`; 404 for an unknown codebase or a pack with no workflow there; 422 naming the file for a trigger file that cannot be read, or for run-ended files under `store: files`. The same read as `archon pack graph --json` |
 | DELETE | `/api/workflows/{name}/node-sessions` | Reset persisted per-node provider sessions with optional `scope` and `node` filters; omitting `scope` requires `confirm=all-scopes`, and returns `403` when conversations are private ([Security](/reference/security/#adapter-authorization)); there `scope` must name an existing conversation, and a web or CLI one must be the caller's own (chat and forge conversations need no ownership) |
 
 #### List Workflows
@@ -327,6 +328,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart). A start the engine refuses (a workflow that does not resolve, a missing required input, an undeclared input, an unmet `requires:`) returns **400** with the engine's reason, and nothing is written or queued; for the input refusals it is the text `archon workflow run` prints. A start that names `adopt_run_id`, whose conversation sits in a worktree, or that continues a paused run of the same workflow in the conversation, is judged on the definition it will run and is answered on the conversation after a **200** |
 | GET | `/api/workflows/runs` | List workflow runs |
 | GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below). `run.nodes[]` is the engine's per-node state; a `workflow:` fan-out node also carries `fan_out_outcome`, its [per-slot record and tally](/reference/workflow-language/#a-completed-fan-out-node-is-not-completed-child-work). A loop body node in `nodes[]` holds its latest round; `run.loop_rounds[]` lists every round of each `loop_group` the run entered, with its body nodes' state, timing and output, and is absent for a run with no loop. See [node execution records](/reference/node-execution/) for event fields, reporting availability, and cost scope |
+| GET | `/api/workflows/runs/records` | The records of up to 100 runs without their events: `?runId=` repeated once per run. Each record has the run's `status`, `completed_at`, its terminal record's `returns` (absent without one), `node_outcomes` (every node invocation with a completed node's structured output, as `$NODE_OUTCOMES_FILE` lists them), `loop_iterations` (each loop iteration started, its `group`, bound and whether it completed) and `running` (the steps running now, in start order). `?outputKey=` and `?resultKey=`, each repeatable, keep only those top-level fields of each output and of the result. An unknown id is listed under `missing`, a run whose events do not fold under `unreadable`. More than 100 ids returns **400** |
 | GET | `/api/workflows/runs/{runId}/provider-events` | The run's provider events as `{events: ProviderEventRecord[]}`: each is `{runId, stepName, attemptId, seq, observedAt, event}`, grouped by node and in emission order within one. `?step=` limits it to one node. `?attemptId=&afterSeq=` (both, and with `step`) returns only the events after that one: the attempt's later events and every later attempt's. Rows written before the engine recorded envelopes come back translated, with `attemptId: null`. Returns **400** for a partial cursor |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/artifacts/{runId}/{filename}` | Read an artifact's text content; encode the complete relative filename, including slashes, as one path value |
@@ -503,7 +505,7 @@ These routes record the decision and return. The server's continuation scheduler
 | POST | `/api/attention/answer` | Answer the item a queue `ref` names, from `{ ref, choose?, recommended?, text? }`; `recommended: true` takes the place of `choose`. The only way to answer an [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left. 200 with `{ ref, action: "answer", unchanged, settled?, nothingStarted? }`, where `settled` is true when the answer closed the last open ask of its set and `nothingStarted: true` when that settlement started no [asks-settled binding](/guides/workflow-triggers/#start-a-different-stage-for-each-option), or with `runId`, `continues` and `cancelled` for an item a paused run holds; 400 when the answer does not fit the item; 404 when nothing the caller may answer has the ref; 409 when the item is closed, moved, takes no answer, or was answered differently |
 | POST | `/api/attention/withdraw` | Withdraw an ask, or the open [waits](/reference/workflow-language/#waits-what-an-item-waits-for-outside-archon) a run left (`wait:<run-id>`), by its `ref`, from `{ ref }`; it closes unanswered, or unmet, and a withdrawn wait starts nothing. 200 with `{ ref, action: "withdraw", unchanged, settled?, nothingStarted? }`, as for an answer; 400 for an item a paused run holds, which is answered instead; 404 when nothing the caller may withdraw has the ref; 409 when the ask was already answered or replaced, or the waits already met or replaced |
 | GET | `/api/items` | Read the [item](/reference/cli/#items) named by `key` in `project`: its runs, open waits, open questions, answers with rulings, links, and its end while it holds, as `archon workflow runs --item --json` prints them; 404 when nothing has named the key. `project` takes a codebase id, a codebase name or a project key |
-| GET | `/api/items/window` | A page of the project's items with a run started in a window, as `archon workflow items --json` prints it: `{ window, items, next }`. Takes `project`, and either `since`/`until` (`archon metrics` syntax, default the last 30 days) or the `after` cursor a page returned, and `limit` (1 to 100, default 20). 400 for an unknown project, a malformed window or limit, or a cursor that is not one this read returned or is for another project |
+| GET | `/api/items/window` | A page of the project's items with a run started in a window, as `archon workflow items --json` prints it: `{ window, items, next }`. Takes `project`, and either `since`/`until` (`archon metrics` syntax, default the last 30 days) or the `after` cursor a page returned, and `limit` (1 to 100, default 20). `states=<state,...>` keeps only the items whose `standing.state` is one of them, and `pack=<key>` only the items that count for that pack (`standing.pack`). With either, every item of the window is placed, the page comes most recently active first, and the answer carries `totals`, a count per state for the window (of that pack, when named); without them `totals` is null. The cursor carries neither, so name them on every page. 400 for an unknown project, a malformed window or limit, or a cursor that is not one this read returned or is for another project |
 | POST | `/api/items/rulings` | Record a ruling on the item named by `key` in `project`, from `{ project, key, text, as? }`: a decision made without a question, which every later read of the item shows with the answers. Writes the item if nothing named it yet. 201 with the ruling; 403 unless the caller is the operator or an admin; `as` declares the operator's name and is ignored for an identified user |
 | POST | `/api/items/ends` | [End](/reference/cli/#workflow-end) the item named by `key` in `project`, from `{ project, key, reason, as? }`: nothing more will happen on it, so its stop leaves the attention queue and the item read shows the end under `ended` until a run created or resumed on the item since, or a waiting start, opens it again. Never writes an item. 201 with the end; 400 for a blank reason, an unknown project, or an operator request without `as`; 403 unless the caller is the operator or an admin; 404 when nothing has named the key; 409 with `{ error, blocker }` while a run, a start, an ask or a wait on the item is active or waiting, `blocker` naming the first one; `as` declares the operator's name and is ignored for an identified user |
 | POST | `/api/items/rulings/{rulingId}/withdraw` | Withdraw a ruling, from `{ project?, as? }`. The ruling stays in the item read with `withdrawn` set. With `project`, a ruling on another project's item is refused with 400 and stays as it was; without it the id alone names the ruling. 200 with the ruling; 400 for an unknown project; 404 for no such ruling; 409 when it was already withdrawn; 403 unless the caller is the operator or an admin |
@@ -614,6 +616,46 @@ source, `names` and `cards`) and the declarations that could not be read or did 
 validate as `errors[]`. With `codebaseId`, the codebase's project packs are included and its
 config decides whether bundled packs are; an unknown `codebaseId` returns **404**.
 See the [metrics guide](/guides/metrics/).
+
+---
+
+## Forge
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/forge/subjects` | What the project's forge says of some issues and of the changes runs delivered, as `ForgeSubjects` |
+
+`GET /api/forge/subjects?codebaseId=` asks the forge of the project's registered remote through
+Archon's forge seam, so the browser never calls it:
+
+- `issue=` (repeatable): an issue number. Each answers `{ number, title, state, url, pending }`;
+  the fields are null while the forge has not answered or could not.
+- `changeRun=` and `changeUrl=` (repeatable, paired by position): a run and the change URL it
+  delivered. `branchRun=` (repeatable): a run that delivered a change but named no URL; the
+  pull request is searched on the branches its item's runs recorded, newest first. Each answers
+  `{ run, url, merged, mergedAt, number }`. A change its item recorded as merged (a land run,
+  or `archon workflow merged`) is merged at the recorded time without asking the forge whether;
+  the record answers a `changeUrl` only when its `change` is that URL exactly, so a merge
+  recorded by hand as `#12` is asked of the forge like an unrecorded one.
+  Otherwise the forge's `pr.view` answers: a `changeUrl` by number, for the pull request the
+  run's forge operations recorded or else the one the forge resolves the URL to; a `branchRun`
+  by head on the item's run branches. Either is looked up only in the repository the project's
+  registered remote resolves to: a `changeUrl` of another repository answers `merged: "unknown"`
+  with a `reason`, and the forge is never asked about it (resolving the URL uses no credential).
+  A `reason` is set on any `unknown` answer. A `changeRun` or `branchRun` from another project
+  than `codebaseId`, or a `branchRun` whose item recorded no branch and no merge, has no change
+  and no entry.
+
+Answers are cached on the server, at most 5000 issues and 5000 changes, the oldest answer dropped
+first, in memory and in a file under its home so a restarted server keeps them; a change URL's
+answer is kept per project remote: a change that has not merged for 60 seconds, a merge for good, an issue for 6 hours,
+a stale answer served while it refreshes. A first lookup still running after 4 seconds answers
+`merged: "pending"` (a change) or `pending: true` (an issue) for that read only, so read again
+shortly; a lookup that failed answers `unknown` (a change, cached 60 seconds) or null fields (an
+issue, cached 10 minutes); the file keeps them with their time, so a restarted server shows them
+at once and asks again in the background. A `changeRun` without its `changeUrl`, or a
+number that is not a positive whole number, returns **400**; an unknown `codebaseId` returns
+**404**.
 
 ---
 

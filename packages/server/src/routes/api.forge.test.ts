@@ -1,329 +1,570 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { PluginDiscovery } from '@archon/forge/discovery';
-import type {
-  ForgeError,
-  ForgeRequest,
-  ForgeResponse,
-  PluginMetadata,
-  RepoOverview,
-} from '@archon/forge/operations';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import type { ChangeLookup, ChangeMergeState } from '@archon/adapters/forge-host';
 import {
-  createProjectForgeReader,
-  type ProjectCodebase,
-  type ProjectForgeDeps,
-} from '../services/project-forge';
-import { registerProjectForgeRoute } from './api.forge';
-import { projectForgeSchema, type ProjectForge } from './schemas/forge.schemas';
+  forgeSubjectsResponseSchema,
+  registerForgeRoutes,
+  type DeliveredRun,
+  type ForgeRouteDeps,
+} from './api.forge';
+import { CHANGES_KEPT, forgeAnswerFile, keepBounded, type Kept } from './forge-answer-file';
 
-const NOW = Date.parse('2026-11-27T12:00:00.000Z');
+const track = trackTempRoots();
 
-const github = {
-  protocol: 1,
-  name: 'github',
-  version: '1',
-  forge: 'github',
-  hosts: ['github.com'],
-  capabilities: ['resolve', 'repo.overview'],
-  token_env: ['GH_TOKEN'],
-  display: { name: 'GitHub', icon: 'PHN2Zy8+' },
-  remedies: { unsupported_op: 'Update the plugin.', no_credential: 'Set GH_TOKEN.' },
-} satisfies PluginMetadata;
-const gitlab = {
-  ...github,
-  name: 'gitlab',
-  version: '3',
-  forge: 'gitlab',
-  hosts: ['gitlab.example'],
-  display: { name: 'GitLab' },
-} satisfies PluginMetadata;
+const PR = 'https://github.com/coleam00/archon-factory-console/pull/112';
+const REMOTE = 'https://github.com/coleam00/archon-factory-console.git';
 
-const codebases: Record<string, ProjectCodebase> = {
-  archon: { id: 'archon', kind: 'repo', repository_url: 'https://github.com/acme/archon.git' },
-  lab: { id: 'lab', kind: 'repo', repository_url: 'https://gitlab.example/group/lab.git' },
-  unclaimed: { id: 'unclaimed', kind: 'repo', repository_url: 'https://forge.other/a/b.git' },
-  folder: { id: 'folder', kind: 'folder', repository_url: null },
-};
-
-function overviewOf(host: string, path: string, facts: Partial<RepoOverview> = {}): RepoOverview {
-  const url = `https://${host}/${path}`;
-  return {
-    repo: { host, path },
-    since: '2026-11-20T12:00:00.000Z',
-    url,
-    name: path,
-    description: null,
-    stars: 4,
-    stats: {
-      issues_open: { count: 3, url: `${url}/issues` },
-      prs_open: { count: 0, url: `${url}/pulls` },
-      prs_draft: { count: 1, url: `${url}/pulls?draft` },
+function appWith(opts: {
+  runs: Record<string, DeliveredRun>;
+  state?: (lookup: ChangeLookup) => Promise<ChangeMergeState>;
+  title?: (n: number) => Promise<string>;
+  now?: () => number;
+  answerFile?: string;
+}) {
+  const asked = { changes: 0, issues: 0 };
+  const answerFileAt = opts.answerFile;
+  const deps: ForgeRouteDeps = {
+    remote: async id => (id === 'p' ? REMOTE : undefined),
+    deliveredRun: async run => opts.runs[run] ?? null,
+    changeMergeState: async lookup => {
+      asked.changes++;
+      return (
+        opts.state?.(lookup) ??
+        Promise.resolve({ url: PR, merged: false, mergedAt: null, number: 112 })
+      );
     },
-    pull_requests: [],
-    issues: [],
-    ...facts,
+    viewWorkItem: async number => {
+      asked.issues++;
+      const title = await (opts.title?.(number) ?? Promise.resolve(`Issue ${String(number)}`));
+      return { number, title, state: 'open', url: `${REMOTE}/issues/${String(number)}` };
+    },
+    waitMs: 20,
+    now: opts.now,
+    answerFile: answerFileAt === undefined ? undefined : forgeAnswerFile(() => answerFileAt),
   };
-}
-
-/** What a test breaks before the overview is read. */
-interface Faults {
-  discovery?: Error;
-  resolve?: ForgeError;
-  credential?: Error;
-}
-
-/** A fake forge: two plugins, and an `repo.overview` answer the test chooses. */
-function forgeWorld(
-  overview: (request: ForgeRequest) => RepoOverview | ForgeError,
-  faults: Faults = {}
-) {
-  const plugins = [github, gitlab].map(metadata => ({
-    metadata,
-    command: 'unused',
-    args: [],
-    source: metadata.name,
-    origin: 'source' as const,
-  }));
-  const discovery: PluginDiscovery = {
-    plugins,
-    unavailable: [],
-    byHost: new Map(plugins.flatMap(plugin => plugin.metadata.hosts.map(host => [host, plugin]))),
-    hostConfig: new Map(),
-    pluginTokenEnv: new Map(),
-  };
-  const calls: { op: string; user: string | undefined }[] = [];
-  let now = NOW;
-  let discoveries = 0;
-  const deps: ProjectForgeDeps = {
-    discover: async () => {
-      discoveries++;
-      if (faults.discovery) throw faults.discovery;
-      return discovery;
-    },
-    dispatch: async (request, options) => {
-      calls.push({ op: request.op, user: options.credentialEnv?.FORGE_USER });
-      const answer = (response: object): { response: ForgeResponse } => ({
-        response: { operationId: request.operationId, ...response } as ForgeResponse,
-      });
-      if (request.op === 'resolve') {
-        if (faults.resolve) return answer({ ok: false, error: faults.resolve });
-        const { host, pathname } = new URL(request.remote ?? '');
-        const plugin = discovery.byHost.get(host)?.metadata;
-        const value = plugin
-          ? {
-              kind: 'resolved',
-              forge: plugin.forge,
-              repo: { host, path: pathname.slice(1).replace(/\.git$/, '') },
-              plugin: { name: plugin.name, version: plugin.version },
-            }
-          : { kind: 'none', forge: 'none' };
-        return answer({ ok: true, result: { op: 'resolve', value } });
-      }
-      const result = overview(request);
-      return 'kind' in result
-        ? answer({ ok: false, error: result })
-        : answer({ ok: true, result: { op: 'repo.overview', value: result } });
-    },
-    credentialEnv: async (_codebase, userId) => {
-      if (faults.credential) throw faults.credential;
-      return { FORGE_USER: userId };
-    },
-    now: () => new Date(now),
-  };
-  const read = createProjectForgeReader(deps);
   const app = new OpenAPIHono();
-  registerProjectForgeRoute(app, {
-    getCodebase: async id => codebases[id] ?? null,
-    userId: async c => c.req.header('x-test-user'),
-    readProjectForge: read,
-  });
-  return {
-    get: async (id: string, user?: string) => {
-      const response = await app.request(`/api/codebases/${id}/forge`, {
-        headers: user ? { 'x-test-user': user } : {},
-      });
-      return { status: response.status, body: (await response.json()) as ProjectForge };
-    },
-    overviews: () => calls.filter(call => call.op === 'repo.overview'),
-    discoveries: () => discoveries,
-    advance: (ms: number) => {
-      now += ms;
-    },
+  registerForgeRoutes(app, deps);
+  const read = async (query: string) => {
+    const res = await app.request(`/api/forge/subjects?codebaseId=p&${query}`);
+    const json: unknown = await res.json();
+    const parsed = forgeSubjectsResponseSchema.safeParse(json);
+    return { status: res.status, body: parsed.success ? parsed.data : { issues: [], changes: [] } };
   };
+  return { read, asked };
 }
 
-const answering = (faults?: Faults) =>
-  forgeWorld(
-    request =>
-      request.op === 'repo.overview'
-        ? overviewOf(request.repo.host, request.repo.path, { since: request.since })
-        : { kind: 'invalid_request', message: 'unexpected operation' },
-    faults
-  );
-const failing = (error: ForgeError) => forgeWorld(() => error);
+const delivered = (recorded: DeliveredRun['recorded']): DeliveredRun => ({
+  codebaseId: 'p',
+  audits: [],
+  branches: async () => ['archon/task-1'],
+  recorded,
+});
+const MERGED_AT = '2026-11-20T12:00:00.000Z';
+const url = `changeRun=r1&changeUrl=${encodeURIComponent(PR)}`;
 
-describe('GET /api/codebases/{id}/forge', () => {
-  test('a GitHub-backed project answers its forge, plugin and overview', async () => {
-    const world = answering();
-    const { status, body } = await world.get('archon');
-    expect(status).toBe(200);
-    expect(projectForgeSchema.parse(body)).toEqual(body);
-    expect(body).toMatchObject({
-      kind: 'forge',
-      forge: { name: 'GitHub', icon: 'PHN2Zy8+' },
-      repo: { host: 'github.com', path: 'acme/archon' },
-      plugin: { name: 'github', version: '1' },
-      overview: {
-        status: 'ok',
-        syncedAt: '2026-11-27T12:00:00.000Z',
-        // The window the server asks for is the seven days before now.
-        value: { name: 'acme/archon', since: '2026-11-20T12:00:00.000Z' },
+describe('GET /api/forge/subjects', () => {
+  test('a change whose item recorded its merge is merged without asking the forge whether', async () => {
+    const { read, asked } = appWith({
+      runs: { r1: delivered({ change: PR, at: '2026-11-20T12:00:00Z' }) },
+      state: async () => ({ url: PR, merged: true, mergedAt: null, number: 112 }),
+    });
+    const { body } = await read(url);
+    expect(body.changes).toEqual([
+      { run: 'r1', url: PR, merged: true, mergedAt: '2026-11-20T12:00:00Z', number: null },
+    ]);
+    // Only the pull request's number is asked, once, without waiting.
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect((await read(url)).body.changes[0]?.number).toBe(112);
+    expect(asked.changes).toBe(1);
+  });
+
+  test('an unrecorded change asks once within the cache time, then refreshes until it merged', async () => {
+    let clock = 0;
+    let merged = false;
+    const { read, asked } = appWith({
+      runs: { r1: delivered(null) },
+      now: () => clock,
+      state: async () => ({ url: PR, merged, mergedAt: merged ? MERGED_AT : null, number: 112 }),
+    });
+    expect((await read(url)).body.changes[0]).toMatchObject({ merged: false, number: 112 });
+    clock = 30_000;
+    await read(url);
+    expect(asked.changes).toBe(1);
+    // A minute on, the change merged on the forge: the stale answer is served once while it
+    // refreshes, and the next read has the merge.
+    merged = true;
+    clock = 60_000;
+    expect((await read(url)).body.changes[0]?.merged).toBe(false);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    expect((await read(url)).body.changes[0]).toMatchObject({ merged: true, mergedAt: MERGED_AT });
+    expect(asked.changes).toBe(2);
+    // A merge does not come undone: it is never asked again.
+    clock = 10_000_000;
+    await read(url);
+    expect(asked.changes).toBe(2);
+  });
+
+  test('a forge that throws answers unknown, and the read still answers', async () => {
+    const { read } = appWith({
+      runs: { r1: delivered(null) },
+      state: async () => {
+        throw new Error('forge down');
       },
     });
-  });
-
-  test('another forge is labelled by its own plugin, through the same path', async () => {
-    const { body } = await answering().get('lab');
-    expect(body).toMatchObject({
-      kind: 'forge',
-      forge: { name: 'GitLab' },
-      repo: { host: 'gitlab.example', path: 'group/lab' },
-      plugin: { name: 'gitlab', version: '3' },
-      overview: { status: 'ok', value: { url: 'https://gitlab.example/group/lab' } },
-    });
-    expect(body.kind === 'forge' && 'icon' in body.forge).toBe(false);
-  });
-
-  test('a folder project and a remote no plugin claims have no forge', async () => {
-    const world = answering();
-    expect(await world.get('folder')).toEqual({ status: 200, body: { kind: 'none' } });
-    expect(world.discoveries()).toBe(0);
-    expect(await world.get('unclaimed')).toEqual({ status: 200, body: { kind: 'none' } });
-    expect(world.overviews()).toHaveLength(0);
-  });
-
-  test('a fact the forge lacks is absent, and a zero count is present', async () => {
-    const world = forgeWorld(request => {
-      if (request.op !== 'repo.overview') throw new Error('unexpected operation');
-      const { stars: _stars, stats, ...facts } = overviewOf(request.repo.host, request.repo.path);
-      const { prs_draft: _drafts, ...reported } = stats;
-      return { ...facts, stats: reported };
-    });
-    const { body } = await world.get('archon');
-    if (body.kind !== 'forge' || body.overview.status !== 'ok') throw new Error('no overview');
-    expect('stars' in body.overview.value).toBe(false);
-    expect(Object.keys(body.overview.value.stats)).toEqual(['issues_open', 'prs_open']);
-    expect(body.overview.value.stats.prs_open?.count).toBe(0);
-  });
-
-  test('a plugin that predates the operation fails the overview with its remedy', async () => {
-    const { status, body } = await failing({
-      kind: 'unsupported_op',
-      message: 'plugin github does not support repo.overview',
-    }).get('archon');
+    const { status, body } = await read(url);
     expect(status).toBe(200);
-    expect(body).toMatchObject({
-      kind: 'forge',
-      forge: { name: 'GitHub' },
-      overview: {
-        status: 'failed',
-        error: { kind: 'unsupported_op' },
-        remedy: 'Update the plugin.',
+    expect(body.changes[0]).toMatchObject({ url: PR, merged: 'unknown' });
+  });
+
+  test('a slow forge answers pending, and the next read has its answer', async () => {
+    const { read } = appWith({
+      runs: { r1: delivered(null) },
+      state: () =>
+        new Promise(resolve =>
+          setTimeout(() => resolve({ url: PR, merged: true, mergedAt: null, number: 112 }), 60)
+        ),
+    });
+    expect((await read(url)).body.changes[0]?.merged).toBe('pending');
+    await new Promise(resolve => setTimeout(resolve, 80));
+    expect((await read(url)).body.changes[0]?.merged).toBe(true);
+  });
+
+  test('a run that named no URL with no branch on its item has no change', async () => {
+    const { read } = appWith({
+      runs: { r2: { codebaseId: 'p', audits: [], branches: async () => [], recorded: null } },
+    });
+    expect((await read('branchRun=r2')).body.changes).toEqual([]);
+  });
+
+  test('a merge the item recorded answers only for the change it names', async () => {
+    const PR113 = PR.replace('/112', '/113');
+    const { read, asked } = appWith({
+      runs: { r1: delivered({ change: PR, at: MERGED_AT }) },
+      state: async () => ({ url: PR113, merged: false, mergedAt: null, number: 113 }),
+    });
+    const { body } = await read(`changeRun=r1&changeUrl=${encodeURIComponent(PR113)}`);
+    expect(body.changes).toEqual([
+      { run: 'r1', url: PR113, merged: false, mergedAt: null, number: 113 },
+    ]);
+    expect(asked.changes).toBe(1);
+  });
+
+  test('a change URL is looked up in the project remote, and an unknown answer says why', async () => {
+    const seen: ChangeLookup[] = [];
+    const reason = `the change at ${PR} is not in this project's repository`;
+    const { read } = appWith({
+      runs: { r1: delivered(null) },
+      state: async lookup => {
+        seen.push(lookup);
+        return { url: null, merged: 'unknown', mergedAt: null, number: null, reason };
       },
     });
+    expect((await read(url)).body.changes).toEqual([
+      { run: 'r1', url: PR, merged: 'unknown', mergedAt: null, number: null, reason },
+    ]);
+    expect(seen).toEqual([{ kind: 'url', url: PR, audits: [], remote: REMOTE }]);
   });
 
-  test('a forge error is a failed overview with its kind, never an empty one', async () => {
-    for (const kind of ['authorization', 'rate_limited', 'unavailable'] as const) {
-      const { body } = await failing({ kind, message: `the forge said ${kind}` }).get('archon');
-      expect(body).toMatchObject({
-        kind: 'forge',
-        overview: { status: 'failed', error: { kind, message: `the forge said ${kind}` } },
-      });
-      expect(JSON.stringify(body)).not.toContain('"count"');
+  test('a change URL of a run of another project answers nothing, and the forge is not asked', async () => {
+    const { read, asked } = appWith({
+      runs: { r1: { ...delivered(null), codebaseId: 'other' } },
+    });
+    expect((await read(url)).body.changes).toEqual([]);
+    expect(asked.changes).toBe(0);
+  });
+
+  test('a run that named no URL answers only for its own project', async () => {
+    const { read, asked } = appWith({
+      runs: { r3: { ...delivered({ change: PR, at: MERGED_AT }), codebaseId: 'other' } },
+    });
+    expect((await read('branchRun=r3')).body.changes).toEqual([]);
+    expect(asked.changes).toBe(0);
+  });
+
+  test('at most eight change lookups run at once, and every one settles into the cache', async () => {
+    let inFlight = 0;
+    let most = 0;
+    const gates: (() => void)[] = [];
+    const urls = Array.from({ length: 20 }, (_, i) => PR.replace('/112', `/${String(200 + i)}`));
+    const { read, asked } = appWith({
+      runs: { r1: delivered(null) },
+      state: async lookup => {
+        inFlight++;
+        most = Math.max(most, inFlight);
+        await new Promise<void>(resolve => gates.push(resolve));
+        inFlight--;
+        const at = lookup.kind === 'url' ? lookup.url : PR;
+        return { url: at, merged: true, mergedAt: MERGED_AT, number: 112 };
+      },
+    });
+    const query = urls.map(u => `changeRun=r1&changeUrl=${encodeURIComponent(u)}`).join('&');
+    const first = await read(query);
+    expect(first.body.changes.every(change => change.merged === 'pending')).toBe(true);
+    expect(most).toBe(8);
+    while (asked.changes < urls.length || gates.length > 0) {
+      gates.splice(0).forEach(open => open());
+      await Bun.sleep(1);
     }
-    const { body } = await failing({ kind: 'no_credential', message: 'no token' }).get('archon');
-    expect(body).toMatchObject({ overview: { status: 'failed', remedy: 'Set GH_TOKEN.' } });
+    expect(most).toBe(8);
+    expect((await read(query)).body.changes.every(change => change.merged === true)).toBe(true);
   });
 
-  test('a plugin process failure never returns what the process printed', async () => {
-    const { body } = await failing({
-      kind: 'process_failed',
-      message: 'plugin exited 1: token ghp_leaked in stderr',
-      exitCode: 1,
-    }).get('archon');
-    expect(body).toMatchObject({
-      overview: { status: 'failed', error: { kind: 'process_failed' } },
+  test("an issue's title is answered, then served from the cache", async () => {
+    const { read, asked } = appWith({ runs: {} });
+    const first = await read('issue=111&issue=111');
+    expect(first.body.issues).toEqual([
+      {
+        number: 111,
+        title: 'Issue 111',
+        state: 'open',
+        url: `${REMOTE}/issues/111`,
+        pending: false,
+      },
+    ]);
+    await read('issue=111');
+    expect(asked.issues).toBe(1);
+  });
+
+  test('a failed issue lookup is asked again after ten minutes, an answer is kept six hours', async () => {
+    let at = Date.parse('2026-11-26T12:00:00.000Z');
+    const asked: number[] = [];
+    let failing = true;
+    const app = new OpenAPIHono();
+    registerForgeRoutes(app, {
+      remote: async () => REMOTE,
+      deliveredRun: async () => null,
+      changeMergeState: async () => ({ url: PR, merged: false, mergedAt: null, number: 112 }),
+      viewWorkItem: async number => {
+        asked.push(number);
+        if (failing && number === 7) return { number, unknown: 'gh: rate limited' };
+        return {
+          number,
+          title: `Issue ${String(number)}`,
+          state: 'open',
+          url: `${REMOTE}/issues/1`,
+        };
+      },
+      waitMs: 20,
+      now: () => at,
     });
-    expect(JSON.stringify(body)).not.toContain('ghp_leaked');
+    const titles = async (): Promise<(string | null)[]> => {
+      const res = await app.request('/api/forge/subjects?codebaseId=p&issue=7&issue=8');
+      return forgeSubjectsResponseSchema.parse(await res.json()).issues.map(i => i.title);
+    };
+    expect(await titles()).toEqual([null, 'Issue 8']);
+    failing = false;
+    at += 11 * 60_000;
+    // The failure is past its life and is asked again behind the stale answer; the answer is not.
+    expect(await titles()).toEqual([null, 'Issue 8']);
+    await Bun.sleep(10);
+    expect(await titles()).toEqual(['Issue 7', 'Issue 8']);
+    expect(asked).toEqual([7, 8, 7]);
   });
 
-  test('a failure the host explains, such as a broken login, keeps its message', async () => {
-    const message = 'gh auth token --hostname github.com failed; repair the gh login';
-    const { body } = await failing({ kind: 'process_failed', message }).get('archon');
-    expect(body).toMatchObject({
-      overview: { status: 'failed', error: { kind: 'process_failed', message } },
-    });
+  test('refuses a changeRun without its changeUrl', async () => {
+    const { read } = appWith({ runs: {} });
+    expect((await read('changeRun=r1')).status).toBe(400);
   });
+});
 
-  test('a credential Archon cannot resolve is a failed overview of the same forge', async () => {
-    const world = answering({ credential: new Error('no installation for acme-secret-org') });
-    const { status, body } = await world.get('archon');
-    expect(status).toBe(200);
-    expect(body).toMatchObject({
-      kind: 'forge',
-      forge: { name: 'GitHub' },
-      repo: { host: 'github.com', path: 'acme/archon' },
-      overview: { status: 'failed', error: { kind: 'no_credential' } },
-    });
-    expect(JSON.stringify(body)).not.toContain('acme-secret-org');
-    // The plugin's remedy is about its own token, which would not repair Archon's credential.
-    expect(body.kind === 'forge' && 'remedy' in body.overview).toBe(false);
-    expect(world.overviews()).toHaveLength(0);
-  });
+describe('GET /api/forge/subjects with an answer file', () => {
+  const NOW = Date.parse('2026-11-25T12:00:00.000Z');
+  const issue5 = { number: 5, title: 'Kept title', state: 'open', url: `${REMOTE}/issues/5` };
+  async function fileWith(body: unknown): Promise<string> {
+    const dir = track(await mkdtemp(join(tmpdir(), 'forge-answers-')));
+    const path = join(dir, 'cache', 'forge-subjects.json');
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, typeof body === 'string' ? body : JSON.stringify(body));
+    return path;
+  }
 
-  test('a remote Archon cannot resolve is unresolved, never no forge, and is read again', async () => {
-    const stopped = answering({
-      resolve: {
-        kind: 'process_failed',
-        message: 'forge plugin exited 2: token ghp_leaked in stderr',
-        exitCode: 2,
+  test('a restarted server answers from the file without asking the forge', async () => {
+    const answerFile = await fileWith({
+      version: 1,
+      issues: { [`${REMOTE}#5`]: { value: issue5, at: NOW } },
+      changes: {
+        [`${REMOTE}|${PR}`]: {
+          value: { url: PR, merged: true, mergedAt: MERGED_AT, number: 112 },
+          at: NOW,
+        },
       },
     });
-    const { status, body } = await stopped.get('archon');
-    expect(status).toBe(200);
-    expect(body).toMatchObject({ kind: 'unresolved', error: { kind: 'process_failed' } });
-    expect(JSON.stringify(body)).not.toContain('ghp_leaked');
-    await stopped.get('archon');
-    expect(stopped.discoveries()).toBe(2);
-    expect(stopped.overviews()).toHaveLength(0);
-
-    const undiscovered = answering({ discovery: new Error('plugins directory unreadable') });
-    expect((await undiscovered.get('archon')).body).toMatchObject({ kind: 'unresolved' });
-    await undiscovered.get('archon');
-    expect(undiscovered.discoveries()).toBe(2);
+    const { read, asked } = appWith({
+      runs: { r1: delivered(null) },
+      now: () => NOW + 1000,
+      answerFile,
+    });
+    const { body } = await read(`issue=5&${url}`);
+    expect(body.issues[0]?.title).toBe('Kept title');
+    expect(body.changes[0]).toMatchObject({ merged: true, mergedAt: MERGED_AT, number: 112 });
+    expect(asked).toEqual({ changes: 0, issues: 0 });
   });
 
-  test('one read answers a project and user for a minute, and a failure is read again', async () => {
-    const world = answering();
-    await world.get('archon', 'ada');
-    await world.get('archon', 'ada');
-    expect(world.overviews()).toEqual([{ op: 'repo.overview', user: 'ada' }]);
-
-    await world.get('archon', 'grace');
-    expect(world.overviews().map(call => call.user)).toEqual(['ada', 'grace']);
-
-    world.advance(61_000);
-    await world.get('archon', 'ada');
-    expect(world.overviews().map(call => call.user)).toEqual(['ada', 'grace', 'ada']);
-
-    const broken = failing({ kind: 'authorization', message: 'bad credentials' });
-    await broken.get('archon');
-    await broken.get('archon');
-    expect(broken.overviews()).toHaveLength(2);
+  test("a change kept for another project's remote, or by its bare URL, is not served", async () => {
+    const answerFile = await fileWith({
+      version: 1,
+      changes: {
+        [`https://github.com/someone/elsewhere.git|${PR}`]: {
+          value: { url: PR, merged: true, mergedAt: MERGED_AT, number: 112 },
+          at: NOW,
+        },
+        // How a server before the change was scoped kept it.
+        [PR]: { value: { url: PR, merged: true, mergedAt: MERGED_AT, number: 112 }, at: NOW },
+      },
+    });
+    const { read, asked } = appWith({
+      runs: { r1: delivered(null) },
+      now: () => NOW,
+      answerFile,
+    });
+    expect((await read(url)).body.changes[0]).toMatchObject({ merged: false, number: 112 });
+    expect(asked.changes).toBe(1);
   });
 
-  test('an unknown codebase is not found', async () => {
-    expect((await answering().get('missing')).status).toBe(404);
+  test('the newest answers are kept: a full cache drops its oldest for a new one', async () => {
+    const changeAt = (n: number) => PR.replace('/112', `/${String(1000 + n)}`);
+    const changes = Object.fromEntries(
+      Array.from({ length: CHANGES_KEPT + 1 }, (_, n) => [
+        `${REMOTE}|${changeAt(n)}`,
+        { value: { url: changeAt(n), merged: true, mergedAt: MERGED_AT, number: 112 }, at: n },
+      ])
+    );
+    const answerFile = await fileWith({ version: 1, changes });
+    const file = forgeAnswerFile(() => answerFile);
+    await file.load();
+    // The file held one more than is kept: the oldest answer went on load.
+    expect(file.changes.size).toBe(CHANGES_KEPT);
+    expect(file.changes.has(`${REMOTE}|${changeAt(0)}`)).toBe(false);
+    const app = new OpenAPIHono();
+    registerForgeRoutes(app, {
+      remote: async () => REMOTE,
+      deliveredRun: async () => delivered(null),
+      changeMergeState: async () => ({ url: PR, merged: false, mergedAt: null, number: 112 }),
+      viewWorkItem: async number => ({ number, unknown: 'unused' }),
+      waitMs: 20,
+      now: () => NOW,
+      answerFile: file,
+    });
+    await app.request(`/api/forge/subjects?codebaseId=p&${url}`);
+    // A new answer is kept, and the oldest the cache held makes room for it.
+    expect(file.changes.size).toBe(CHANGES_KEPT);
+    expect(file.changes.has(`${REMOTE}|${PR}`)).toBe(true);
+    expect(file.changes.has(`${REMOTE}|${changeAt(1)}`)).toBe(false);
+    expect(file.changes.has(`${REMOTE}|${changeAt(2)}`)).toBe(true);
+  });
+
+  test('an old answer is served while it is asked again', async () => {
+    const answerFile = await fileWith({
+      version: 1,
+      issues: { [`${REMOTE}#5`]: { value: issue5, at: NOW - 7 * 3600_000 } },
+    });
+    const { read, asked } = appWith({ runs: {}, now: () => NOW, answerFile });
+    expect((await read('issue=5')).body.issues[0]?.title).toBe('Kept title');
+    expect(asked.issues).toBe(1);
+    await Bun.sleep(10);
+    expect((await read('issue=5')).body.issues[0]?.title).toBe('Issue 5');
+  });
+
+  test('stale answers refresh two at a time, behind the answers already shown', async () => {
+    const stale = Object.fromEntries(
+      [1, 2, 3, 4, 5].map(n => [
+        `${REMOTE}#${String(n)}`,
+        { value: { ...issue5, number: n, title: `Kept ${String(n)}` }, at: NOW - 7 * 3600_000 },
+      ])
+    );
+    const answerFile = await fileWith({ version: 1, issues: stale });
+    let inFlight = 0;
+    let most = 0;
+    const { read } = appWith({
+      runs: {},
+      now: () => NOW,
+      answerFile,
+      title: async n => {
+        inFlight++;
+        most = Math.max(most, inFlight);
+        await Bun.sleep(5);
+        inFlight--;
+        return `Issue ${String(n)}`;
+      },
+    });
+    const { body } = await read('issue=1&issue=2&issue=3&issue=4&issue=5');
+    expect(body.issues.map(entry => entry.title)).toEqual([
+      'Kept 1',
+      'Kept 2',
+      'Kept 3',
+      'Kept 4',
+      'Kept 5',
+    ]);
+    await Bun.sleep(60);
+    expect(most).toBe(2);
+  });
+
+  test('what the route learns is written, and a restarted server answers from it', async () => {
+    const dir = track(await mkdtemp(join(tmpdir(), 'forge-answers-')));
+    const path = join(dir, 'cache', 'forge-subjects.json');
+    const ask = (file: ReturnType<typeof forgeAnswerFile>) => {
+      const asked = { issues: 0 };
+      const app = new OpenAPIHono();
+      registerForgeRoutes(app, {
+        remote: async () => REMOTE,
+        deliveredRun: async () => null,
+        changeMergeState: async () => ({ url: PR, merged: false, mergedAt: null, number: 112 }),
+        viewWorkItem: async number => {
+          asked.issues++;
+          return { number, title: 'Learned', state: 'open', url: `${REMOTE}/issues/7` };
+        },
+        waitMs: 20,
+        answerFile: file,
+      });
+      return { app, asked };
+    };
+    const first = forgeAnswerFile(() => path);
+    const before = ask(first);
+    await before.app.request('/api/forge/subjects?codebaseId=p&issue=7');
+    expect(before.asked.issues).toBe(1);
+    await first.flush();
+
+    const after = ask(forgeAnswerFile(() => path));
+    const res = await after.app.request('/api/forge/subjects?codebaseId=p&issue=7');
+    const body = forgeSubjectsResponseSchema.parse(await res.json());
+    expect(body.issues[0]?.title).toBe('Learned');
+    expect(after.asked.issues).toBe(0);
+  });
+
+  test('a kept failure is shown at once after a restart and asked again behind it', async () => {
+    const answerFile = await fileWith({
+      version: 1,
+      issues: {
+        [`${REMOTE}#5`]: { value: issue5, at: NOW },
+        [`${REMOTE}#9`]: { value: { number: 9, unknown: 'gh: not found' }, at: NOW - 11 * 60_000 },
+      },
+    });
+    // A forge slower than the read's wait: a first lookup would answer `pending`.
+    const { read, asked } = appWith({
+      runs: {},
+      now: () => NOW,
+      answerFile,
+      title: async n => {
+        await Bun.sleep(100);
+        return `Issue ${String(n)}`;
+      },
+    });
+    const { body } = await read('issue=5&issue=9');
+    expect(body.issues.map(entry => [entry.title, entry.pending])).toEqual([
+      ['Kept title', false],
+      [null, false],
+    ]);
+    expect(asked.issues).toBe(1);
+  });
+
+  test("a remote's credentials never reach the file, and a key an older server kept them in is cleaned", async () => {
+    const CREDENTIALED = 'https://user:tok@github.com/coleam00/archon-factory-console.git';
+    const answerFile = await fileWith({
+      version: 1,
+      issues: { [`${CREDENTIALED}#5`]: { value: issue5, at: NOW } },
+    });
+    const file = forgeAnswerFile(() => answerFile);
+    const asked: number[] = [];
+    const app = new OpenAPIHono();
+    registerForgeRoutes(app, {
+      remote: async () => CREDENTIALED,
+      deliveredRun: async () => null,
+      changeMergeState: async () => ({ url: PR, merged: false, mergedAt: null, number: 112 }),
+      viewWorkItem: async (number, remote) => {
+        asked.push(number);
+        // The forge is still asked through the remote as registered.
+        expect(remote).toBe(CREDENTIALED);
+        return { number, title: 'Learned', state: 'open', url: `${REMOTE}/issues/7` };
+      },
+      waitMs: 20,
+      now: () => NOW,
+      answerFile: file,
+    });
+    const res = await app.request('/api/forge/subjects?codebaseId=p&issue=5&issue=7');
+    const body = forgeSubjectsResponseSchema.parse(await res.json());
+    expect(body.issues.map(entry => entry.title)).toEqual(['Kept title', 'Learned']);
+    expect(asked).toEqual([7]);
+    await file.flush();
+    const written = await readFile(answerFile, 'utf8');
+    expect(written).not.toContain('tok');
+    expect(written).toContain('Kept title');
+  });
+
+  test('a file that does not parse is an empty cache', async () => {
+    const answerFile = await fileWith('{ not json');
+    const { read, asked } = appWith({ runs: {}, answerFile });
+    expect((await read('issue=5')).body.issues[0]?.title).toBe('Issue 5');
+    expect(asked.issues).toBe(1);
+  });
+
+  test('keys and entries this server does not know are ignored, the rest kept', async () => {
+    const answerFile = await fileWith({
+      version: 1,
+      written: 'by a newer server',
+      issues: {
+        [`${REMOTE}#5`]: { value: { ...issue5, labels: ['x'] }, at: NOW, source: 'gh' },
+        [`${REMOTE}#6`]: { value: { number: 6, shape: 'unknown' }, at: NOW },
+      },
+    });
+    const { read, asked } = appWith({ runs: {}, now: () => NOW, answerFile });
+    const { body } = await read('issue=5&issue=6');
+    expect(body.issues.map(entry => entry.title)).toEqual(['Kept title', 'Issue 6']);
+    expect(asked.issues).toBe(1);
+  });
+});
+
+describe('forgeAnswerFile', () => {
+  test('writes what it learned, failures with their time too, for the next server to load', async () => {
+    const dir = track(await mkdtemp(join(tmpdir(), 'forge-answers-')));
+    const path = join(dir, 'cache', 'forge-subjects.json');
+    const first = forgeAnswerFile(() => path);
+    await first.load();
+    first.issues.set('r#1', {
+      value: { number: 1, title: 'One', state: 'open', url: 'u1' },
+      at: 7,
+    });
+    first.issues.set('r#2', { value: { number: 2, unknown: 'not found' }, at: 7 });
+    first.changes.set(PR, {
+      value: { url: PR, merged: false, mergedAt: null, number: 112 },
+      at: 8,
+    });
+    first.changes.set('run:x', {
+      value: { url: null, merged: 'unknown', mergedAt: null, number: null, reason: 'down' },
+      at: 8,
+    });
+    first.changed();
+    await first.flush();
+
+    const next = forgeAnswerFile(() => path);
+    await next.load();
+    expect([...next.issues]).toEqual([
+      ['r#1', { value: { number: 1, title: 'One', state: 'open', url: 'u1' }, at: 7 }],
+      ['r#2', { value: { number: 2, unknown: 'not found' }, at: 7 }],
+    ]);
+    expect([...next.changes]).toEqual([
+      [PR, { value: { url: PR, merged: false, mergedAt: null, number: 112 }, at: 8 }],
+      [
+        'run:x',
+        {
+          value: { url: null, merged: 'unknown', mergedAt: null, number: null, reason: 'down' },
+          at: 8,
+        },
+      ],
+    ]);
+  });
+});
+
+describe('keepBounded', () => {
+  test('drops the oldest answer past the bound, and an answer kept again counts as new', () => {
+    const kept = new Map<string, Kept<string>>();
+    keepBounded(kept, 'a', { value: 'a', at: 1 }, 2);
+    keepBounded(kept, 'b', { value: 'b', at: 2 }, 2);
+    keepBounded(kept, 'a', { value: 'a2', at: 3 }, 2);
+    keepBounded(kept, 'c', { value: 'c', at: 4 }, 2);
+    expect([...kept.keys()]).toEqual(['a', 'c']);
   });
 });

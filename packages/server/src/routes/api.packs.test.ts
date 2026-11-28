@@ -32,20 +32,21 @@ async function graphApp(
   for (const [name, body] of Object.entries(triggers))
     await writeFile(join(triggersDirectory, name), body);
   const app = new OpenAPIHono();
+  const deps = {
+    loadConfig: async () => ({
+      assistant: undefined,
+      commands: {},
+      assistants: { claude: {}, codex: {} },
+    }),
+    providers: providerRegistry,
+    triggersDirectory: () => triggersDirectory,
+    projectKeyOf: async () => null,
+    projectOf: async () => null,
+  };
+  const codebaseCwd = async (id: string) => (id === 'cb-1' ? project : null);
   registerPackGraphRoute(app, {
-    codebaseCwd: async id => (id === 'cb-1' ? project : null),
-    readPackGraph: (cwd, pack) =>
-      readPackGraph(cwd, pack, {
-        loadConfig: async () => ({
-          assistant: undefined,
-          commands: {},
-          assistants: { claude: {}, codex: {} },
-        }),
-        providers: providerRegistry,
-        triggersDirectory: () => triggersDirectory,
-        projectKeyOf: async () => null,
-        projectOf: async () => null,
-      }),
+    codebaseCwd,
+    readPackGraph: (cwd, pack) => readPackGraph(cwd, pack, deps),
   });
   return app;
 }
@@ -55,6 +56,23 @@ describe('GET /api/packs/{pack}/graph', () => {
     const response = await (await graphApp()).request('/api/packs/chain/graph?codebaseId=cb-1');
     expect(response.status).toBe(200);
     packGraphResponseSchema.parse(await response.json());
+  });
+
+  test("the pack's own overview cards are served, and a file that does not validate is a problem", async () => {
+    const cards = {
+      names: { 'x.done': 'done' },
+      cards: [{ shape: 'count', title: 'Done', metric: 'x.done' }],
+    };
+    const read = async (file: string): Promise<unknown> => {
+      const app = await graphApp({}, { '.shared/metric-views.json': file });
+      const response = await app.request('/api/packs/chain/graph?codebaseId=cb-1');
+      return packGraphResponseSchema.parse(await response.json()).metricViews;
+    };
+    expect(await read(JSON.stringify(cards))).toEqual({ ...cards, problem: null });
+    const broken = (await read('{"cards": []}')) as { cards: unknown[]; problem: string | null };
+    expect([broken.cards, broken.problem === null]).toEqual([[], false]);
+    const none = await (await graphApp()).request('/api/packs/chain/graph?codebaseId=cb-1');
+    expect(packGraphResponseSchema.parse(await none.json()).metricViews).toBeNull();
   });
 
   test('a declared stage that fails to load is served with its load error, not a 500', async () => {

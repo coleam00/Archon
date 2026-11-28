@@ -37,9 +37,17 @@ export const mockLogger = {
 
 // Captured before the module mock below replaces it.
 const realArchonPaths = await import('@archon/paths');
+// Bound now: the namespace's own `createLogger` becomes the mock below and would recurse.
+const realCreateLogger = realArchonPaths.createLogger;
+// Bun cannot undo `mock.module`, so this replacement outlives the importing file whenever
+// files share a process (any direct `bun test a b`). Only the `workflow.*` loggers the
+// loader suites read become `mockLogger`; every other module keeps a real logger, so a
+// later file that captures root-logger lines (file-store, resource-start) still sees them.
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
-  createLogger: mock(() => mockLogger),
+  createLogger: mock((module: string) =>
+    module.startsWith('workflow.') ? mockLogger : realCreateLogger(module)
+  ),
 }));
 
 // Provider ids are checked at parse time.

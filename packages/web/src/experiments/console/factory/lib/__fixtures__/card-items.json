@@ -1,0 +1,423 @@
+{
+  "items": [
+    {
+      "item": {
+        "id": "fb43bb97f586bd497f3707e14a6dbd31",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "111",
+        "title": null
+      },
+      "standing": {
+        "runId": "7465840d-7466-42b8-aa70-9f3e987ceb9f",
+        "state": "done"
+      },
+      "merged": {
+        "change": "https://github.com/coleam00/archon-factory-console/pull/112",
+        "commit": null,
+        "at": "2026-11-20T21:29:51.000Z",
+        "recordedAt": "2026-11-23T17:14:49.610Z",
+        "via": "cli",
+        "fromRun": null
+      },
+      "links": [],
+      "questions": [],
+      "runs": [
+        {
+          "id": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+          "workflow": "Wirasm/archon-software-factory:deliver",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-20T20:30:10.000Z",
+          "completedAt": "2026-11-20T21:26:18.000Z"
+        },
+        {
+          "id": "7465840d-7466-42b8-aa70-9f3e987ceb9f",
+          "workflow": "Wirasm/archon-software-factory:landgate",
+          "pack": null,
+          "status": "completed",
+          "outcome": null,
+          "startedAt": "2026-11-20T21:26:25.000Z",
+          "completedAt": "2026-11-20T21:27:39.000Z"
+        }
+      ]
+    },
+    {
+      "item": {
+        "id": "bff9c26bb8c6ab38e43d8fb5fd2ec4ec",
+        "projectKey": "coleam00/archon-factory-console",
+        "key": "125",
+        "title": null
+      },
+      "standing": {
+        "runId": "621679a2-a90a-4fae-91c0-9f9d8ef29812",
+        "state": "waiting"
+      },
+      "merged": {
+        "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+        "commit": "1ad8b4b5f98bf0d66b4d9fcb4363a2200114e776",
+        "at": "2026-11-22T07:58:04.000Z",
+        "recordedAt": "2026-11-22T07:59:34.819Z",
+        "via": "cli",
+        "fromRun": {
+          "runId": "00acfd73-2453-49ad-9fec-784ae29b4e6d",
+          "nodePath": "end"
+        }
+      },
+      "links": [],
+      "questions": [],
+      "runs": [
+        {
+          "id": "6766bfc4-ca1e-42f6-b28b-b81747822c43",
+          "workflow": "Wirasm/archon-software-factory:stage-build",
+          "pack": null,
+          "status": "completed",
+          "outcome": "built",
+          "startedAt": "2026-11-22T03:17:47.000Z",
+          "completedAt": "2026-11-22T04:51:46.000Z"
+        },
+        {
+          "id": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+          "workflow": "Wirasm/archon-software-factory:stage-check",
+          "pack": null,
+          "status": "completed",
+          "outcome": "return",
+          "startedAt": "2026-11-22T04:51:52.000Z",
+          "completedAt": "2026-11-22T05:22:39.000Z"
+        },
+        {
+          "id": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+          "workflow": "Wirasm/archon-software-factory:stage-check",
+          "pack": null,
+          "status": "completed",
+          "outcome": "return",
+          "startedAt": "2026-11-22T05:30:35.000Z",
+          "completedAt": "2026-11-22T06:19:34.000Z"
+        },
+        {
+          "id": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+          "workflow": "Wirasm/archon-software-factory:stage-check",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-22T06:34:52.000Z",
+          "completedAt": "2026-11-22T06:54:30.000Z"
+        },
+        {
+          "id": "02e5f706-fb01-4039-8867-940e65e59c09",
+          "workflow": "Wirasm/archon-software-factory:stage-check",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ask",
+          "startedAt": "2026-11-22T07:05:55.000Z",
+          "completedAt": "2026-11-22T07:19:27.000Z"
+        },
+        {
+          "id": "52f46ea3-f4d0-4455-85b5-f7c8e0e8b316",
+          "workflow": "Wirasm/archon-software-factory:stage-host",
+          "pack": null,
+          "status": "completed",
+          "outcome": "return",
+          "startedAt": "2026-11-22T07:23:29.000Z",
+          "completedAt": "2026-11-22T07:28:24.000Z"
+        },
+        {
+          "id": "d2faac1f-6d47-47f5-b30e-f441b6d83b52",
+          "workflow": "Wirasm/archon-software-factory:stage-host",
+          "pack": null,
+          "status": "completed",
+          "outcome": "ready",
+          "startedAt": "2026-11-22T07:42:59.000Z",
+          "completedAt": "2026-11-22T07:51:10.000Z"
+        },
+        {
+          "id": "621679a2-a90a-4fae-91c0-9f9d8ef29812",
+          "workflow": "Wirasm/archon-software-factory:landed",
+          "pack": null,
+          "status": "completed",
+          "outcome": "waiting",
+          "startedAt": "2026-11-22T07:59:55.000Z",
+          "completedAt": "2026-11-22T08:02:00.000Z"
+        }
+      ]
+    }
+  ],
+  "records": [
+    {
+      "id": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+      "status": "completed",
+      "completed_at": "2026-11-20T21:26:18.000Z",
+      "returns": {
+        "availability": "available",
+        "node_id": "result",
+        "value": {
+          "change": "https://github.com/coleam00/archon-factory-console/pull/112"
+        }
+      },
+      "node_outcomes": {
+        "run_id": "aba8f7aa-f3ae-47df-b495-88e04cda9bc1",
+        "first_failed_node": null,
+        "nodes": [
+          {
+            "node_id": "rounds.verdict__verdict",
+            "state": "completed",
+            "loop_group_path": [
+              {
+                "groupId": "rounds",
+                "iteration": 1
+              }
+            ],
+            "output": {
+              "outcome": "return",
+              "summary": "Return. The approach and the main behaviour hold: the offered block renders unclamped between the qu"
+            }
+          },
+          {
+            "node_id": "rounds.verdict__verdict",
+            "state": "completed",
+            "loop_group_path": [
+              {
+                "groupId": "rounds",
+                "iteration": 2
+              }
+            ],
+            "output": {
+              "outcome": "approve"
+            }
+          },
+          {
+            "node_id": "hostrounds.host__host",
+            "state": "completed",
+            "loop_group_path": [
+              {
+                "groupId": "hostrounds",
+                "iteration": 1
+              }
+            ],
+            "output": {
+              "outcome": "clear"
+            }
+          }
+        ]
+      },
+      "loop_iterations": [
+        {
+          "group": "rounds",
+          "iteration": 1,
+          "max": 3,
+          "completed": true
+        },
+        {
+          "group": "rounds",
+          "iteration": 2,
+          "max": 3,
+          "completed": true
+        },
+        {
+          "group": "hostrounds",
+          "iteration": 1,
+          "max": 3,
+          "completed": true
+        }
+      ],
+      "running": []
+    },
+    {
+      "id": "6766bfc4-ca1e-42f6-b28b-b81747822c43",
+      "status": "completed",
+      "completed_at": "2026-11-22T04:51:46.000Z",
+      "returns": {
+        "availability": "available",
+        "node_id": "end",
+        "value": {
+          "change": "https://github.com/coleam00/archon-factory-console/pull/128"
+        }
+      },
+      "node_outcomes": {
+        "run_id": "6766bfc4-ca1e-42f6-b28b-b81747822c43",
+        "first_failed_node": null,
+        "nodes": []
+      },
+      "loop_iterations": [],
+      "running": []
+    },
+    {
+      "id": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+      "status": "completed",
+      "completed_at": "2026-11-22T05:22:39.000Z",
+      "returns": {
+        "availability": "available",
+        "node_id": "end",
+        "value": {
+          "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+          "round": 1,
+          "allowance": 3
+        }
+      },
+      "node_outcomes": {
+        "run_id": "20e1db24-c3da-4525-b76f-f362dba2dd2e",
+        "first_failed_node": null,
+        "nodes": [
+          {
+            "node_id": "verdict__verdict",
+            "state": "completed",
+            "output": {
+              "outcome": "return",
+              "summary": "Return: two test-quality findings remain. The board test for a running stage-check run uses stage-bu"
+            }
+          }
+        ]
+      },
+      "loop_iterations": [],
+      "running": []
+    },
+    {
+      "id": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+      "status": "completed",
+      "completed_at": "2026-11-22T06:19:34.000Z",
+      "returns": {
+        "availability": "available",
+        "node_id": "end",
+        "value": {
+          "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+          "round": 2,
+          "allowance": 3
+        }
+      },
+      "node_outcomes": {
+        "run_id": "bb11ef33-963a-4a1a-8bf5-3f50e84a711e",
+        "first_failed_node": null,
+        "nodes": [
+          {
+            "node_id": "verdict__verdict",
+            "state": "completed",
+            "output": {
+              "outcome": "return",
+              "summary": "Return: one finding, a schema error message that does not name the entry or key, so a view-file auth"
+            }
+          }
+        ]
+      },
+      "loop_iterations": [],
+      "running": []
+    },
+    {
+      "id": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+      "status": "completed",
+      "completed_at": "2026-11-22T06:54:30.000Z",
+      "returns": {
+        "availability": "available",
+        "node_id": "end",
+        "value": {
+          "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+          "round": 3,
+          "allowance": 3
+        }
+      },
+      "node_outcomes": {
+        "run_id": "9ffaf8a1-da68-42ae-a43e-cbb167a7213c",
+        "first_failed_node": null,
+        "nodes": [
+          {
+            "node_id": "verdict__verdict",
+            "state": "completed",
+            "output": {
+              "outcome": "return",
+              "summary": "Return: two findings. The stage-check Checks card says the step counts the round, when it posts the "
+            }
+          }
+        ]
+      },
+      "loop_iterations": [],
+      "running": []
+    },
+    {
+      "id": "02e5f706-fb01-4039-8867-940e65e59c09",
+      "status": "completed",
+      "completed_at": "2026-11-22T07:19:27.000Z",
+      "returns": {
+        "availability": "available",
+        "node_id": "end",
+        "value": {
+          "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+          "round": 4,
+          "allowance": 4
+        }
+      },
+      "node_outcomes": {
+        "run_id": "02e5f706-fb01-4039-8867-940e65e59c09",
+        "first_failed_node": null,
+        "nodes": [
+          {
+            "node_id": "verdict__verdict",
+            "state": "completed",
+            "output": {
+              "outcome": "ask"
+            }
+          }
+        ]
+      },
+      "loop_iterations": [],
+      "running": []
+    },
+    {
+      "id": "52f46ea3-f4d0-4455-85b5-f7c8e0e8b316",
+      "status": "completed",
+      "completed_at": "2026-11-22T07:28:24.000Z",
+      "returns": {
+        "availability": "available",
+        "node_id": "end",
+        "value": {
+          "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+          "round": 1,
+          "allowance": 3
+        }
+      },
+      "node_outcomes": {
+        "run_id": "52f46ea3-f4d0-4455-85b5-f7c8e0e8b316",
+        "first_failed_node": null,
+        "nodes": [
+          {
+            "node_id": "rounds__host",
+            "state": "completed",
+            "output": {
+              "outcome": "return",
+              "summary": "PR #128 no longer merges with main (conflict, 1 commit behind). The host has no checks on it. Both o"
+            }
+          }
+        ]
+      },
+      "loop_iterations": [],
+      "running": []
+    },
+    {
+      "id": "d2faac1f-6d47-47f5-b30e-f441b6d83b52",
+      "status": "completed",
+      "completed_at": "2026-11-22T07:51:10.000Z",
+      "returns": {
+        "availability": "available",
+        "node_id": "end",
+        "value": {
+          "change": "https://github.com/coleam00/archon-factory-console/pull/128",
+          "round": 2,
+          "allowance": 3
+        }
+      },
+      "node_outcomes": {
+        "run_id": "d2faac1f-6d47-47f5-b30e-f441b6d83b52",
+        "first_failed_node": null,
+        "nodes": [
+          {
+            "node_id": "rounds__host",
+            "state": "completed",
+            "output": {
+              "outcome": "clear"
+            }
+          }
+        ]
+      },
+      "loop_iterations": [],
+      "running": []
+    }
+  ]
+}

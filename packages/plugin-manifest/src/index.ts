@@ -145,6 +145,15 @@ export const workflowPackManifestSchema = z.object({
       'each entrypoint must name a different workflow file'
     ),
   /**
+   * The pack's own document: one markdown file, relative to the plugin root, that explains
+   * the pack to an operator. Its frontmatter may declare `groups` of stages for display.
+   */
+  document: z
+    .string()
+    .regex(/^[A-Za-z0-9_][A-Za-z0-9._/-]*\.md$/, 'must be a .md file inside the pack')
+    .refine(path => !path.split('/').includes('..'), 'must stay inside the pack')
+    .optional(),
+  /**
    * The agent skill the pack ships for the operator's own agent: the folder at `path`
    * (a `SKILL.md` plus reference files), installed by `archon skill add --pack <id>`
    * under `.claude/skills/<name>` and `.agents/skills/<name>`. It changes nothing about

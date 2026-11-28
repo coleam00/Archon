@@ -63,20 +63,36 @@ export function PendingInputBanner({
         </span>
       </div>
       <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-6">
-        {ownerLost.map(holder => (
-          <OwnerLostCard key={holder.runId} holder={holder} showProject={showProject} />
-        ))}
-        {runs.map(run => (
-          <PendingInputCard
-            key={run.id}
-            run={run}
-            showProject={showProject}
-            onDismiss={onDismiss}
-          />
-        ))}
-        <ItemAsksSection {...itemAsks} showProject={showProject} />
+        <PendingInputList
+          runs={runs}
+          ownerLost={ownerLost}
+          showProject={showProject}
+          onDismiss={onDismiss}
+          itemAsks={itemAsks}
+        />
       </div>
     </div>
+  );
+}
+
+/** Everything that waits on the operator, one card each: the banner's list and the Needs you page. */
+export function PendingInputList({
+  runs,
+  ownerLost = [],
+  showProject,
+  onDismiss,
+  itemAsks,
+}: PendingInputBannerProps): ReactElement {
+  return (
+    <>
+      {ownerLost.map(holder => (
+        <OwnerLostCard key={holder.runId} holder={holder} showProject={showProject} />
+      ))}
+      {runs.map(run => (
+        <PendingInputCard key={run.id} run={run} showProject={showProject} onDismiss={onDismiss} />
+      ))}
+      <ItemAsksSection {...itemAsks} showProject={showProject} />
+    </>
   );
 }
 

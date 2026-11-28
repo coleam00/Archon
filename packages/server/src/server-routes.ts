@@ -5,7 +5,7 @@ import type { GitHubAdapter } from '@archon/adapters';
 import { getSourceWebDistDir } from '@archon/paths';
 import { serveWebUi } from './static-cache';
 import type { WebAdapter } from './adapters/web';
-import { registerApiRoutes } from './routes/api';
+import { type ApiRoutes, registerApiRoutes } from './routes/api';
 import type { AppCommit } from './routes/schemas/system.schemas';
 import type { AttentionRouter } from './services/attention-router';
 import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
@@ -39,7 +39,7 @@ export interface ServerRouteDeps {
 }
 
 /** Registers every HTTP route in precedence order; the SPA fallback comes last. */
-export function registerServerRoutes(app: OpenAPIHono, deps: ServerRouteDeps): void {
+export function registerServerRoutes(app: OpenAPIHono, deps: ServerRouteDeps): ApiRoutes {
   const { adapters } = deps;
 
   // Global error handler for unhandled exceptions
@@ -51,14 +51,15 @@ export function registerServerRoutes(app: OpenAPIHono, deps: ServerRouteDeps): v
   mountWebAuth(app);
 
   // Register Web UI API routes
-  registerApiRoutes(
+  const api = registerApiRoutes(
     app,
     deps.webAdapter,
     deps.lockManager,
     deps.activePlatforms,
     deps.attention,
     { githubAppAuth: adapters.githubAppAuthProvider ?? undefined },
-    deps.commit
+    deps.commit,
+    deps.webhookSources?.observing
   );
 
   // GitHub webhook endpoint
@@ -101,6 +102,7 @@ export function registerServerRoutes(app: OpenAPIHono, deps: ServerRouteDeps): v
 
     serveWebUi(app, webDistPath);
   }
+  return api;
 }
 
 /**

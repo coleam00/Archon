@@ -636,7 +636,7 @@ export async function listQueuedItemStarts(itemId: string): Promise<QueuedItemSt
     queue_rank: number | string;
     ahead: number | string;
   }>(queuedItemStartsSql, [itemId]);
-  const unreadable = await unreadableQueued();
+  const unreadable = result.rows.length === 0 ? [] : await unreadableQueued();
   return result.rows.map(row => ({
     requestId: row.id,
     workflow: storedWorkflowName(row.launch),

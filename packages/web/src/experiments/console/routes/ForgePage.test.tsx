@@ -21,6 +21,7 @@ const PROJECT: Project = {
   repositoryUrl: 'https://forge.example/acme/archon.git',
   lastSyncedAt: null,
   kind: 'repo',
+  itemPacks: [],
 };
 const WEB = 'https://forge.example/acme/archon';
 
@@ -171,8 +172,10 @@ describe('the forge tab', () => {
 
   test('a project with no forge has no tab, no repository link and no rail counts', () => {
     const tabs = render({ kind: 'none' }, <ProjectViewTabs projectId="p1" active="runs" />);
-    expect(tabs.match(/<a /g)).toHaveLength(3);
+    expect(tabs).toContain('href="/console/p/p1/chat"');
     expect(tabs).not.toContain('/forge');
+    // The repository link is the row's only link that leaves the console.
+    expect(tabs).not.toContain('target="_blank"');
     expect(render({ kind: 'none' }, <RailForgeCounts projectId="p1" />)).toBe('');
     // Following an old link to the tab leaves it rather than showing an error.
     expect(render({ kind: 'none' })).toBe('');

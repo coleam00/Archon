@@ -2464,6 +2464,12 @@ declare module 'archon:script' {
       readonly id: string;
       readonly projectKey: string;
       readonly key: string;
+      readonly title?: string | null;
+    };
+    readonly standing: {
+      readonly runId: string | null;
+      readonly state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'done' | 'resting';
+      readonly pack: string | null;
     };
     readonly runs: ReadonlyArray<{
       readonly id: string;
@@ -2625,6 +2631,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2686,6 +2693,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2722,6 +2730,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2758,6 +2767,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2793,6 +2803,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2831,6 +2842,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2857,6 +2869,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2905,6 +2918,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2943,6 +2957,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -2968,6 +2983,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly priority: boolean;
       readonly revision: number;
@@ -3092,6 +3108,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly at: string;
       readonly via: string;
@@ -3139,6 +3156,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
       };
     } | null;
@@ -3148,6 +3166,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       }>;
     } | null;
     readonly ended: {
@@ -3173,6 +3192,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
       }>;
@@ -3182,6 +3202,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
     }>;
@@ -3216,6 +3237,7 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
       };
       readonly report: {
         readonly type: 'degraded';
@@ -3230,6 +3252,12 @@ declare module 'archon:script' {
         readonly reason: 'link_unreadable';
         readonly linkId: string;
       };
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'held_start_unplaced';
+      readonly receiptId: string;
+      readonly workflow: string | null;
+      readonly message: string;
     }>;
   };
 
@@ -3244,6 +3272,12 @@ declare module 'archon:script' {
         readonly id: string;
         readonly projectKey: string;
         readonly key: string;
+        readonly title?: string | null;
+      };
+      readonly standing: {
+        readonly runId: string | null;
+        readonly state: 'running' | 'waiting' | 'queued' | 'failed' | 'stopped' | 'done' | 'resting';
+        readonly pack: string | null;
       };
       readonly runs: ReadonlyArray<{
         readonly id: string;
@@ -3405,6 +3439,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3466,6 +3501,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3502,6 +3538,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3538,6 +3575,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3573,6 +3611,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3611,6 +3650,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3637,6 +3677,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3685,6 +3726,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3723,6 +3765,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3748,6 +3791,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly priority: boolean;
         readonly revision: number;
@@ -3872,6 +3916,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly at: string;
         readonly via: string;
@@ -3919,6 +3964,7 @@ declare module 'archon:script' {
             readonly id: string;
             readonly projectKey: string;
             readonly key: string;
+            readonly title?: string | null;
           };
         };
       } | null;
@@ -3928,6 +3974,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         }>;
       } | null;
       readonly ended: {
@@ -3953,6 +4000,7 @@ declare module 'archon:script' {
             readonly id: string;
             readonly projectKey: string;
             readonly key: string;
+            readonly title?: string | null;
           };
           readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
         }>;
@@ -3962,6 +4010,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly state: 'open' | 'merged' | 'ended' | 'done' | 'unknown';
       }>;
@@ -3996,6 +4045,7 @@ declare module 'archon:script' {
           readonly id: string;
           readonly projectKey: string;
           readonly key: string;
+          readonly title?: string | null;
         };
         readonly report: {
           readonly type: 'degraded';
@@ -4010,9 +4060,24 @@ declare module 'archon:script' {
           readonly reason: 'link_unreadable';
           readonly linkId: string;
         };
+      } | {
+        readonly type: 'degraded';
+        readonly reason: 'held_start_unplaced';
+        readonly receiptId: string;
+        readonly workflow: string | null;
+        readonly message: string;
       }>;
     }>;
     readonly next: string | null;
+    readonly totals: {
+      readonly running: number;
+      readonly waiting: number;
+      readonly queued: number;
+      readonly failed: number;
+      readonly stopped: number;
+      readonly done: number;
+      readonly resting: number;
+    } | null;
   };
 
   /** A link between two items, as the engine records it; `ended` is null while it is active. */
@@ -4023,11 +4088,13 @@ declare module 'archon:script' {
       readonly id: string;
       readonly projectKey: string;
       readonly key: string;
+      readonly title?: string | null;
     };
     readonly to: {
       readonly id: string;
       readonly projectKey: string;
       readonly key: string;
+      readonly title?: string | null;
     };
     readonly at: string;
     readonly via: string;
@@ -4283,6 +4350,15 @@ declare module 'archon:script' {
    * time; recording the same branch afterwards changes nothing.
    */
   export function recordLanding(branch: string): ItemLanding;
+  /**
+   * Set what this run's own item is called (`archon workflow title`); setting it again
+   * replaces it. Every read of the item returns it beside the key. Throws
+   * {@link ItemWriteError} on a refusal (`no_item` when the run is on no item, or a title that
+   * is empty or too long), and {@link HostCommandError} when the host gives no answer, in
+   * which case the title may or may not have been set.
+   * A container run cannot call it, as it has no host CLI.
+   */
+  export function recordTitle(title: string): ItemRead['item'];
   /**
    * A page of this project's items with a run started in a window (`archon workflow
    * items`), each read as `item()` reads one, with all its runs. `since` and `until` take

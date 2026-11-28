@@ -18,6 +18,7 @@ import {
 import { assertAbsoluteDefaultCwd } from '@archon/core/db/codebase-path';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as envVarDb from '@archon/core/db/env-vars';
+import { listItemPacks } from '@archon/core/db/items';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import { remoteIdentity } from '@archon/core/services/project-registration-identity';
 import { detectProjectKind, ProjectKindDetectionError } from '@archon/core/services/project-kind';
@@ -29,6 +30,7 @@ import {
   toWorktreePath,
 } from '@archon/git';
 import { canonicalizeProjectPath, isInsideArchonWorkspaces } from '@archon/paths';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
   apiError,
   getLog,
@@ -298,7 +300,24 @@ export function registerCodebaseRoutes(
       deduped.push(...seen.values());
       deduped.sort((a, b) => a.name.localeCompare(b.name));
 
-      return c.json(deduped.map(toApiCodebase));
+      // The pack scan reads every item run; when it fails the list still serves, with the
+      // one field it feeds unknown (null), not a 500 for every project.
+      let itemPacks: ReadonlyMap<string, string[]> | null;
+      try {
+        itemPacks = await listItemPacks();
+      } catch (error) {
+        getLog().warn({ err: error }, 'list_codebases_item_packs_failed');
+        itemPacks = null;
+      }
+      return c.json(
+        deduped.map(cb => ({
+          ...toApiCodebase(cb),
+          item_packs:
+            itemPacks === null
+              ? null
+              : (itemPacks.get(projectKeyForCodebase(cb, cb.default_cwd)) ?? []),
+        }))
+      );
     } catch (error) {
       getLog().error({ err: error }, 'list_codebases_failed');
       return apiError(c, 500, 'Failed to list codebases');

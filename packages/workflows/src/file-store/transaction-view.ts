@@ -95,6 +95,7 @@ export type TransactionView = Omit<
   | 'recordItemMerge'
   | 'getItemLanding'
   | 'recordItemLanding'
+  | 'recordItemTitle'
   | 'getItemPriority'
   | 'setItemPriority'
   | 'clearItemPriority'

@@ -21,7 +21,15 @@ export type RunPack = z.infer<typeof runPackSchema>;
  * a run that recorded no pack, or recorded one without the name (older builds).
  */
 export function runPack(run: Pick<WorkflowRun, 'metadata'>): RunPack | null {
-  const dispatch = readRunDispatchMetadata(run.metadata);
-  if (dispatch?.pack === undefined || dispatch.pack_workflow === undefined) return null;
-  return { key: dispatch.pack, workflow: dispatch.pack_workflow };
+  const key = runPackKey(run);
+  const workflow = readRunDispatchMetadata(run.metadata)?.pack_workflow;
+  return key === null || workflow === undefined ? null : { key, workflow };
+}
+
+/**
+ * The pack key alone, read as `runPack` reads it. Older builds recorded the key without the
+ * workflow's name, so this is non-null on runs `runPack` reads as null.
+ */
+export function runPackKey(run: Pick<WorkflowRun, 'metadata'>): string | null {
+  return readRunDispatchMetadata(run.metadata)?.pack ?? null;
 }
