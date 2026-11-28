@@ -317,6 +317,27 @@ function sumContributions(
   return values.length === 0 ? undefined : values.reduce((sum, value) => sum + value, 0);
 }
 
+function attributeAiContribution(
+  runId: string,
+  contribution: UsageContribution,
+  evidence: DagUsageObservation,
+  metric: UsageMetric,
+  limitations: UsageLimitation[]
+): UsageNodeIdentity[] {
+  const amount = contributionAmount(contribution, metric);
+  const typed = measurementValue(evidence, metric);
+  if (amount !== undefined && !validUsageAmount(metric, amount)) {
+    limitations.push({ runId, path: contribution.stepName, reason: 'record_unreadable' });
+    return [];
+  }
+  if (!validUsageAmount(metric, amount) || !validUsageAmount(metric, typed)) return [];
+  // The row's usage figure and its typed spend record one measurement twice. When they
+  // disagree the row does not say which figure is right, so neither is certified.
+  if (usageAmountsAgree(metric, amount, typed)) return [identity(runId, evidence)];
+  limitations.push({ runId, path: contribution.stepName, reason: 'record_unreadable' });
+  return [];
+}
+
 function attributedContributors(
   runId: string,
   contributions: readonly UsageContribution[],
@@ -348,20 +369,8 @@ function attributedContributors(
         reconciled
       );
     }
-    if (evidence !== undefined && aiObservation(evidence, history)) {
-      const amount = contributionAmount(contribution, metric);
-      const typed = measurementValue(evidence, metric);
-      if (amount !== undefined && !validUsageAmount(metric, amount)) {
-        limitations.push({ runId, path: contribution.stepName, reason: 'record_unreadable' });
-        return [];
-      }
-      if (!validUsageAmount(metric, amount) || !validUsageAmount(metric, typed)) return [];
-      // The row's usage figure and its typed spend record one measurement twice. When they
-      // disagree the row does not say which figure is right, so neither is certified.
-      if (usageAmountsAgree(metric, amount, typed)) return [identity(runId, evidence)];
-      limitations.push({ runId, path: contribution.stepName, reason: 'record_unreadable' });
-      return [];
-    }
+    if (evidence !== undefined && aiObservation(evidence, history))
+      return attributeAiContribution(runId, contribution, evidence, metric, limitations);
     if (evidence?.nodeKind !== 'workflow' && contributionAmount(contribution, metric) !== undefined)
       limitations.push({ runId, path: contribution.stepName, reason: 'scope_unattributed' });
     return [];
