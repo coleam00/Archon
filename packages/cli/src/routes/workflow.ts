@@ -150,7 +150,7 @@ export async function runWorkflowStatus(route: WorkflowRoute): Promise<number> {
   if (positionals[2] !== undefined) {
     return await fail(
       json,
-      'Usage: archon workflow status [--all] [--json] [--verbose] [--events]\n' +
+      'Usage: archon workflow status [--all] [--lost] [--json] [--verbose] [--events]\n' +
         'To show a single run, use: archon workflow get <run-id>'
     );
   }
@@ -159,6 +159,7 @@ export async function runWorkflowStatus(route: WorkflowRoute): Promise<number> {
     verbose: values.verbose as boolean | undefined,
     rawEvents: values.events as boolean | undefined,
     all: values.all as boolean | undefined,
+    lost: values.lost as boolean | undefined,
   });
   return 0;
 }

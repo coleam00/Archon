@@ -34,6 +34,7 @@
     "./attention-watch": "./src/attention-watch.ts",
     "./attention-needs": "./src/attention-needs.ts",
     "./item-read": "./src/item-read.ts",
+    "./owner-observation": "./src/owner-observation.ts",
     "./item-window": "./src/item-window.ts",
     "./item-standing": "./src/item-standing.ts",
     "./item-end": "./src/item-end.ts",

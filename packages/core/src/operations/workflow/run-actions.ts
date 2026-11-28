@@ -101,16 +101,39 @@ export async function deleteWorkflowRun(
   return report;
 }
 
-/** List running and paused workflow runs, optionally scoped to one codebase. */
+/** How many active runs one listing page holds; the dashboard shows one page. */
+const ACTIVE_RUNS_PAGE = 50;
+
+/**
+ * List running and paused workflow runs, optionally scoped to one codebase: one page, or with
+ * `every`, every page, for a read whose answer must be complete.
+ */
 export async function getWorkflowStatus(
   ctx: OperationContext,
-  options?: { codebaseId?: string }
+  options?: { codebaseId?: string; every?: boolean }
 ): Promise<WorkflowStatusData> {
-  const { runs } = await ctx.store.listWorkflowRuns({
-    status: ['running', 'paused'],
-    limit: 50,
-    ...(options?.codebaseId ? { codebaseId: options.codebaseId } : {}),
-  });
+  const scope = options?.codebaseId ? { codebaseId: options.codebaseId } : {};
+  if (!options?.every) {
+    const { runs } = await ctx.store.listWorkflowRuns({
+      status: ['running', 'paused'],
+      limit: ACTIVE_RUNS_PAGE,
+      ...scope,
+    });
+    return { runs };
+  }
+  // The store caps a page whether or not a limit is passed, and its `total` counts every
+  // status, so the read walks pages until one comes back short.
+  const runs: WorkflowStatusData['runs'] = [];
+  for (let offset = 0; ; offset += ACTIVE_RUNS_PAGE) {
+    const page = await ctx.store.listWorkflowRuns({
+      status: ['running', 'paused'],
+      limit: ACTIVE_RUNS_PAGE,
+      offset,
+      ...scope,
+    });
+    runs.push(...page.runs);
+    if (page.runs.length < ACTIVE_RUNS_PAGE) break;
+  }
   return { runs };
 }
 

@@ -33,11 +33,14 @@ export interface LostOwner {
 export const OWNER_OBSERVATION_DEADLINE_MS = 5_000;
 export const OWNER_OBSERVATION_CONCURRENCY = 8;
 
-/** `observation`, or null once `OWNER_OBSERVATION_DEADLINE_MS` passes first. */
-async function withinDeadline<T>(observation: Promise<T>): Promise<T | null> {
+/** What a settled `withinDeadline` returns when the deadline passed first. */
+const EXPIRED = Symbol('expired');
+
+/** `observation`, or `EXPIRED` once `OWNER_OBSERVATION_DEADLINE_MS` passes first. */
+async function withinDeadline<T>(observation: Promise<T>): Promise<T | typeof EXPIRED> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<null>(resolve => {
-    timer = setTimeout(() => resolve(null), OWNER_OBSERVATION_DEADLINE_MS);
+  const deadline = new Promise<typeof EXPIRED>(resolve => {
+    timer = setTimeout(() => resolve(EXPIRED), OWNER_OBSERVATION_DEADLINE_MS);
   });
   try {
     return await Promise.race([observation, deadline]);
@@ -52,30 +55,53 @@ async function withinDeadline<T>(observation: Promise<T>): Promise<T | null> {
  */
 async function lostOwner(observer: OwnerObserver, run: WorkflowRun): Promise<LostOwner | null> {
   if (run.status === 'pending') {
-    const awaiting = await withinDeadline(
-      observer.awaitingExecution?.(run) ?? Promise.resolve(null)
-    );
+    const before = await withinDeadline(observer.awaitingExecution?.(run) ?? Promise.resolve(null));
+    const awaiting = before === EXPIRED ? null : before;
     return awaiting?.state === 'unowned'
       ? { start: { requestId: awaiting.requestId, hostId: awaiting.hostId } }
       : null;
   }
-  return (await withinDeadline(observer.observe(run))) === 'unreachable' ? {} : null;
+  const observed = await withinDeadline(observer.observe(run));
+  return observed === 'unreachable' ? {} : null;
 }
 
 /**
- * The lost owner of each of `runs`, in their order, observed `OWNER_OBSERVATION_CONCURRENCY`
- * at a time; null where nothing proves the owner gone.
+ * What this process observes about the owner of each of `runs`, in their order, by the one
+ * rule attention, `workflow wait` and `workflow resume` share: `reachable`, `unreachable` or
+ * `unknown`; null only where the run needs no owner now. An observation that ran past its
+ * deadline reads `unknown`, like one that could not be made.
+ */
+export function observeRunOwners(
+  observer: OwnerObserver,
+  runs: readonly WorkflowRun[]
+): Promise<(RunOwnerObservation | null)[]> {
+  return observeEach(runs, async run => {
+    const observed = await withinDeadline(observer.observe(run));
+    return observed === EXPIRED ? 'unknown' : observed;
+  });
+}
+
+/**
+ * The lost owner of each of `runs`, in their order; null where nothing proves the owner gone.
  */
 export async function observeLostOwners(
   observer: OwnerObserver,
   runs: readonly WorkflowRun[]
 ): Promise<(LostOwner | null)[]> {
-  const found: (LostOwner | null)[] = runs.map(() => null);
+  return observeEach(runs, run => lostOwner(observer, run));
+}
+
+/** `observeOne` over `runs`, in their order, `OWNER_OBSERVATION_CONCURRENCY` at a time. */
+async function observeEach<T>(
+  runs: readonly WorkflowRun[],
+  observeOne: (run: WorkflowRun) => Promise<T>
+): Promise<T[]> {
+  const found: T[] = new Array<T>(runs.length);
   let next = 0;
   const worker = async (): Promise<void> => {
     for (let index = next++; index < runs.length; index = next++) {
       const run = runs[index];
-      if (run !== undefined) found[index] = await lostOwner(observer, run);
+      if (run !== undefined) found[index] = await observeOne(run);
     }
   };
   await Promise.all(

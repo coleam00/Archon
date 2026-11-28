@@ -684,6 +684,7 @@ Show active runs (running and paused) for the current project, resolved from `cw
 archon workflow status
 archon workflow status --json
 archon workflow status --all       # active runs across all projects
+archon workflow status --all --lost # only active runs reported unreachable, install-wide
 archon workflow status --verbose   # add a per-node summary for each run
 archon workflow status --json --verbose
 ```
@@ -699,6 +700,19 @@ history. In JSON, `active_nodes` is the ordered list of unresolved node starts: 
 an identifier and `node_suspended` keeps it active, while `node_completed`, `node_failed`, `node_skipped`, and
 `node_skipped_prior_success` remove it. Retries re-add the node in their new start position. This
 is node lifecycle state, not evidence that a process owner is alive.
+
+Each `running` run also carries what this process observes about its owner, by the rule
+`workflow wait` and `workflow resume` use: an `Owner:` line in text and `owner` in JSON,
+`reachable`, `unreachable` or `unknown`. An owner on another host or user is `unknown`, never
+`unreachable`; a run that needs no owner carries null. For an `unreachable` run the text names
+the two commands that move it, `archon workflow resume <id>` and `archon workflow abandon <id>`.
+Reading changes nothing. `--lost` keeps only the `unreachable` runs in the selected scope, like
+the rest of `status`; `archon workflow status --all --lost` is the install-wide recovery read
+after a crash or a kill, since it checks every active run rather than the bounded listing. A run
+whose owner reads `unknown` is never listed. JSON carries `ownerFilter: "unreachable"` with
+`--lost` (`null` otherwise). `unreachable` means the recorded owner on this host did not answer
+on two reads; a live process whose endpoint is unresponsive reads the same way, so check before
+`abandon`.
 
 Tool-call advisories appear in nonverbose text and in the JSON `attention` field. The run remains `running`; every overdue tool shows its node, provider, sanitized command/title, and elapsed/no-progress duration. The default is 30 minutes without reported progress; see [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
 

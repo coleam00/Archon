@@ -3,7 +3,10 @@ import { printRunThroughput } from './workflow-throughput';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
+import type {
+  DashboardWorkflowRun,
+  RunOwnerObservation,
+} from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { join } from 'node:path';
 import type {
@@ -77,13 +80,20 @@ export async function printStatusRun(
   host: WorkflowHost,
   run: DashboardWorkflowRun,
   verbose: boolean | undefined,
-  notice?: LatestWorkflowNotice
+  notice?: LatestWorkflowNotice,
+  owner?: RunOwnerObservation | null
 ): Promise<void> {
   const age = formatAge(run.started_at);
   console.log(`  ID:     ${run.id}`);
   console.log(`  Name:   ${run.workflow_name}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
   console.log(`  Status: ${run.status}`);
+  // Only a run reported unreachable has a move to name; `unknown` has none.
+  const ownerLine =
+    owner === 'unreachable'
+      ? `unreachable — resume: archon workflow resume ${run.id}   abandon: archon workflow abandon ${run.id}`
+      : (owner ?? null);
+  if (ownerLine !== null) console.log(`  Owner:  ${ownerLine}`);
   const pauseLine = operatorPauseLine(run);
   if (pauseLine !== undefined) console.log(pauseLine);
   await printRunAttention(host, run);

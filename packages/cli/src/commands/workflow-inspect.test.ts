@@ -13,7 +13,7 @@ import { serializeRunUsage } from '@archon/workflows/schemas/run-usage';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -22,6 +22,23 @@ import { workflowGetCommand, workflowStatusCommand } from './workflow-query';
 import { buildNodeSummaries, formatFanOutOutcome } from './workflow-node-summaries';
 import type { TerminalRecord } from '@archon/workflows/schemas/terminal-record';
 import { fanOutOutcome, type FanOutSlot } from '@archon/workflows/schemas/fan-out-outcome';
+import { EXECUTION_OWNER_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
+import { mockWorkflowRun } from '@archon/core/test/mocks/workflow-run';
+
+/** A running row whose stored execution owner is `owner`; the uid is this user's when known. */
+function recordedOwnerRun(id: string, owner: { host: string; pid: number }) {
+  const uid = process.getuid?.();
+  return {
+    id,
+    workflow_name: 'owned',
+    status: 'running' as const,
+    started_at: new Date(),
+    active_nodes: [],
+    metadata: {
+      [EXECUTION_OWNER_METADATA_KEY]: { ...owner, ...(uid === undefined ? {} : { uid }) },
+    },
+  };
+}
 
 const VERBOSE_EVENTS_FIXTURE: WorkflowEventRow[] = [
   {
@@ -509,12 +526,82 @@ describe('workflowStatusCommand', () => {
           '  Name:   implement\n' +
           '  Path:   /path/to/worktree\n' +
           '  Status: running\n' +
+          '  Owner:  unknown\n' +
           '  Age:    5m\n' +
           '  Active nodes: parallel-a, parallel-b\n\n'
       );
     } finally {
       now.mockRestore();
     }
+  });
+
+  it('carries what this process sees of each owner, and never lists unknown as lost', async () => {
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        // A run with no recorded owner: unknown, which is not "gone".
+        { id: 'run-no-owner', workflow_name: 'a', status: 'running', started_at: new Date() },
+        // Recorded on another host: unknown there too, never unreachable here.
+        recordedOwnerRun('run-other-host', { host: 'not-this-host', pid: 424242 }),
+      ])
+    );
+
+    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', {
+      all: true,
+      json: true,
+    });
+    const listed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      runs: { id: string; owner: string | null }[];
+      ownerFilter: string | null;
+    };
+    expect(listed.runs.map(run => [run.id, run.owner])).toEqual([
+      ['run-no-owner', 'unknown'],
+      ['run-other-host', 'unknown'],
+    ]);
+    expect(listed.ownerFilter).toBeNull();
+
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        { id: 'run-no-owner', workflow_name: 'a', status: 'running', started_at: new Date() },
+      ])
+    );
+    await workflowStatusCommand(createTestWorkflowHost(), '/test/path', {
+      all: true,
+      lost: true,
+    });
+    const printed = consoleSpy.mock.calls.flat().join(' ');
+    expect(printed).toContain('No active run has an unreachable owner.');
+  });
+
+  it('--lost keeps only runs reported unreachable, and names the moves', async () => {
+    // The owner check re-reads the row once an attach fails, so the store must know the run.
+    const orphan = recordedOwnerRun('run-orphan', { host: hostname(), pid: 424242 });
+    const live = {
+      id: 'run-live',
+      workflow_name: 'b',
+      status: 'running',
+      started_at: new Date(),
+      active_nodes: [],
+    };
+    const host = createTestWorkflowHost();
+    host.deps.store.getWorkflowRun = async id =>
+      id === orphan.id ? { ...mockWorkflowRun, ...orphan } : null;
+    mockListDashboardRuns.mockResolvedValueOnce(statusRuns([orphan, live]));
+
+    await workflowStatusCommand(host, '/test/path', { all: true, lost: true });
+    const printed = consoleSpy.mock.calls.flat().join('\n');
+    // A recovery read is only honest if it checks every active run: it pages from offset 0.
+    expect(mockListDashboardRuns).toHaveBeenNthCalledWith(1, {
+      status: ['running', 'paused'],
+      limit: 50,
+      offset: 0,
+    });
+    expect(printed).toContain('run-orphan');
+    expect(printed).toContain('Owner:  unreachable');
+    expect(printed).toContain('resume: archon workflow resume run-orphan');
+    expect(printed).toContain('abandon: archon workflow abandon run-orphan');
+    expect(printed).not.toContain('run-live');
+    // The read moved nothing: the row is exactly as the store gave it.
+    expect((await host.deps.store.getWorkflowRun('run-orphan'))?.status).toBe('running');
   });
 
   it('shows no outcome for an active run, even one an older binary wrote early', async () => {

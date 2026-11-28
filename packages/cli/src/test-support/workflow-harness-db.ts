@@ -98,7 +98,12 @@ export function statusRuns(runs: unknown[]): {
   total: number;
   counts: typeof EMPTY_STATUS_COUNTS;
 } {
-  return { runs, total: runs.length, counts: EMPTY_STATUS_COUNTS };
+  // A stored row always carries `metadata`; hand-written fixture rows may leave it out, and
+  // the owner observation reads it.
+  const full = runs.map(run =>
+    typeof run === 'object' && run !== null && !('metadata' in run) ? { metadata: {}, ...run } : run
+  );
+  return { runs: full, total: full.length, counts: EMPTY_STATUS_COUNTS };
 }
 
 export const mockLookupWorkflowRun = mock<

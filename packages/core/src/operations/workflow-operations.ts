@@ -113,7 +113,11 @@ export interface WorkflowOperations {
   ) => Promise<{ signaled: boolean }>;
   /** Deletes the row, then removes the run's files; the report names any it left. */
   deleteWorkflowRun: (runId: string, actor: RunActor) => Promise<RunFilesReport>;
-  getWorkflowStatus: (options?: { codebaseId?: string }) => Promise<WorkflowStatusData>;
+  /** Active runs; `every` drops the dashboard bound for a read whose answer must be complete. */
+  getWorkflowStatus: (options?: {
+    codebaseId?: string;
+    every?: boolean;
+  }) => Promise<WorkflowStatusData>;
   resumeWorkflow: (runId: string, actor: RunActor) => Promise<WorkflowRun>;
   abandonWorkflow: (
     runId: string,
