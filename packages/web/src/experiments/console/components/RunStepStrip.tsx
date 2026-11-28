@@ -38,14 +38,18 @@ export function RunStepStrip({
   steps,
   named,
   live,
+  paused,
 }: {
   steps: readonly RunStep[];
   named: boolean;
   /** Whether the run is presented as live progress; a running segment pulses only then. */
   live: boolean;
+  /** A paused run is not working its current step: it waits there, and is drawn so. */
+  paused: boolean;
 }): ReactElement | null {
   if (steps.length === 0) return null;
   const done = steps.filter(step => step.state === 'completed').length;
+  const waiting = (step: RunStep): boolean => paused && step.state === 'running';
   return (
     <div className="mt-2">
       <ol
@@ -55,9 +59,9 @@ export function RunStepStrip({
         {steps.map(step => (
           <li
             key={step.node_id}
-            title={`${step.node_id} · ${step.state}`}
+            title={`${step.node_id} · ${waiting(step) ? 'waiting' : step.state}`}
             className={`h-1 min-w-0 flex-1 rounded-sm ${live && step.state === 'running' ? 'animate-pulse' : ''}`}
-            style={{ background: STEP_COLOR[step.state] }}
+            style={{ background: waiting(step) ? 'var(--warning)' : STEP_COLOR[step.state] }}
           />
         ))}
       </ol>
@@ -66,7 +70,12 @@ export function RunStepStrip({
           {steps.map(step => {
             const duration = stepDuration(step);
             return (
-              <li key={step.node_id} className={STEP_TEXT_CLASS[step.state]}>
+              <li
+                key={step.node_id}
+                className={
+                  waiting(step) ? 'font-semibold text-warning' : STEP_TEXT_CLASS[step.state]
+                }
+              >
                 {step.node_id}
                 {duration !== null ? (
                   <span className="ml-1 tabular-nums text-text-tertiary">{duration}</span>

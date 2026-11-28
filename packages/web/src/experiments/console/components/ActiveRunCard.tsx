@@ -139,7 +139,10 @@ function OpenInIdeButton({
 function ItemSlot({ run }: { run: Run }): ReactElement | null {
   if (hasValue(run.itemKey)) {
     return (
-      <span className="min-w-0 truncate font-mono text-sm font-semibold text-text-primary">
+      <span
+        className="min-w-0 truncate font-mono text-sm font-semibold text-text-primary"
+        title={run.itemKey}
+      >
         {run.itemKey}
       </span>
     );
@@ -252,7 +255,12 @@ function RunCardSummary({
         <RunClock run={run} now={now} quietMs={quietMs} />
       </div>
       {run.progress != null ? (
-        <RunStepStrip steps={run.progress.steps} named={expanded} live={isLive} />
+        <RunStepStrip
+          steps={run.progress.steps}
+          named={expanded}
+          live={isLive}
+          paused={run.status === 'paused'}
+        />
       ) : null}
     </>
   );
@@ -380,7 +388,13 @@ function RunInternals({ run, isLive }: { run: Run; isLive: boolean }): ReactElem
         <span title={run.id}>{shortRunId(run.id)}</span> · {run.workflow}
       </Fact>
       {run.activeNodes.length > 0 ? (
-        <Fact label={`Active ${activeNodesLabel(run.activeNodes.length, isLive)}`}>
+        <Fact
+          label={
+            isLive
+              ? `Active ${activeNodesLabel(run.activeNodes.length, true)}`
+              : activeNodesLabel(run.activeNodes.length, false)
+          }
+        >
           {run.activeNodes.join(', ')}
         </Fact>
       ) : null}
@@ -458,6 +472,7 @@ function RunCardDetails({
         ) : null}
         <span className="flex items-center gap-1.5">
           {run.origin !== 'unknown' ? <OriginBadge origin={run.origin} /> : null}
+          <span className="text-text-tertiary">started</span>
           <RelativeRunTime
             className="whitespace-nowrap text-text-tertiary"
             at={run.startedAt}

@@ -11,7 +11,7 @@ import {
   type AnsweredAsk,
   type ItemAsks,
 } from '../components/ItemAsksSection';
-import { useEntity } from '../store/cache';
+import { invalidate, useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
@@ -237,6 +237,10 @@ export function RunsPage(): ReactElement {
 
   const realRuns = data?.runs ?? [];
   const realCounts = data?.counts ?? EMPTY_COUNTS;
+  useRunsRefresh(
+    scope,
+    realRuns.some(run => run.status === 'running')
+  );
 
   const demoRuns = useMemo(
     () => (demoMode ? buildDemoRuns(scope, project?.name ?? null) : []),
@@ -279,8 +283,11 @@ export function RunsPage(): ReactElement {
 
       {/* Status sub-tabs — their own strip; the active underline overlaps the
           hairline below (design: .subtabs). */}
-      <div className="flex shrink-0 items-center gap-4 overflow-x-auto border-b border-border px-6">
-        <FilterChips value={filter} onChange={setFilter} counts={counts} />
+      <div className="flex shrink-0 items-center gap-4 border-b border-border px-6">
+        {/* Only the tabs scroll on a narrow page, so the switch stays in view. */}
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <FilterChips value={filter} onChange={setFilter} counts={counts} />
+        </div>
         <DetailsSwitch on={showDetails} onChange={setShowDetails} />
       </div>
 
@@ -330,6 +337,26 @@ export function RunsPage(): ReactElement {
   );
 }
 
+const RUNS_REFRESH_MS = 30_000;
+
+/**
+ * Refetches the feed while it lists a running run. A run working inside one node sends
+ * no frame the feed refetches on (see `useDashboardSSE`), and each card judges "active Nm
+ * ago" and "quiet" against the feed's `last_observed_at`, so without this a healthy run
+ * would turn quiet on a stale snapshot.
+ */
+export function useRunsRefresh(scope: Scope, hasRunning: boolean): void {
+  useEffect(() => {
+    if (!hasRunning) return;
+    const timer = setInterval(() => {
+      invalidate(K.runs(scope));
+    }, RUNS_REFRESH_MS);
+    return (): void => {
+      clearInterval(timer);
+    };
+  }, [scope, hasRunning]);
+}
+
 /** The one switch that expands every active card; there is none per card. */
 function DetailsSwitch({
   on,
@@ -346,7 +373,7 @@ function DetailsSwitch({
       onClick={() => {
         onChange(!on);
       }}
-      className={`ml-auto inline-flex shrink-0 items-center gap-2 rounded-lg border bg-surface-inset px-2.5 py-1 text-console-11 transition-colors hover:bg-surface-hover hover:text-text-primary ${
+      className={`inline-flex shrink-0 items-center gap-2 rounded-lg border bg-surface-inset px-2.5 py-1 text-console-11 transition-colors hover:bg-surface-hover hover:text-text-primary ${
         on ? 'text-text-primary' : 'text-text-secondary'
       }`}
       // Inline because the console scope's wildcard border-color rule repaints Tailwind

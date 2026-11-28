@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import type { Run } from '../primitives/run';
@@ -33,10 +34,11 @@ const minutesAgo = (minutes: number): string =>
 function progressOf(overrides: Partial<Progress> = {}): Progress {
   return {
     steps: [
-      { node_id: 'plan', state: 'completed', kind: 'agent', duration_ms: 83_000 },
-      { node_id: 'parallel-a', state: 'running', kind: 'agent', model: 'opus-test' },
+      { node_id: 'plan', state: 'completed', duration_ms: 83_000 },
+      { node_id: 'parallel-a', state: 'running', model: 'opus-test' },
       { node_id: 'report', state: 'pending' },
     ],
+    silent_by_design: false,
     last_observed_at: minutesAgo(4),
     last_message: {
       node_id: 'plan',
@@ -189,6 +191,90 @@ describe('ActiveRunCard', () => {
   test('a run that has reported no cost shows none', () => {
     expect(render({ ...itemRun, costUsd: null }, true)).not.toContain('Reported cost');
   });
+});
+
+type Click = (event: { stopPropagation: () => void }) => void;
+
+/** The click handler of the button labelled `label`, rendering function components on the way. */
+function buttonClick(node: ReactNode, label: string): Click | undefined {
+  let click: Click | undefined;
+  Children.forEach(node, child => {
+    if (!isValidElement<{ children?: ReactNode; onClick?: Click }>(child)) return;
+    if (child.type === 'button' && child.props.children === label) click = child.props.onClick;
+    else if (typeof child.type === 'function')
+      click ??= buttonClick((child.type as (props: unknown) => ReactNode)(child.props), label);
+    else click ??= buttonClick(child.props.children, label);
+  });
+  return click;
+}
+
+test("a card's Cancel asks first, and sends one cancel request only once confirmed", async () => {
+  let click: Click | undefined;
+  function Probe(): ReactElement {
+    const card = ActiveRunCard({ run: itemRun, expanded: true });
+    click = buttonClick(card, 'Cancel');
+    return card;
+  }
+  renderToStaticMarkup(
+    <MemoryRouter>
+      <Probe />
+    </MemoryRouter>
+  );
+  const original = { fetch: globalThis.fetch, confirm: globalThis.confirm };
+  const requests: { path: string; method: string | undefined }[] = [];
+  const questions: string[] = [];
+  let answer = false;
+  globalThis.confirm = (question?: string): boolean => {
+    questions.push(question ?? '');
+    return answer;
+  };
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        path:
+          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url,
+        method: init?.method,
+      });
+      return Response.json({ success: true });
+    },
+    { preconnect: original.fetch.preconnect }
+  );
+  const press = async (): Promise<void> => {
+    click?.({ stopPropagation: () => undefined });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  try {
+    expect(click).toBeDefined();
+    await press();
+    expect(questions).toHaveLength(1);
+    expect(requests).toEqual([]);
+
+    answer = true;
+    await press();
+    expect(questions).toHaveLength(2);
+    expect(requests).toEqual([{ path: '/api/workflows/runs/0f3a9c1e-run/cancel', method: 'POST' }]);
+  } finally {
+    globalThis.fetch = original.fetch;
+    globalThis.confirm = original.confirm;
+  }
+});
+
+test('a paused run draws the step it waits at as waiting, with the time it has been there', () => {
+  const html = render(
+    {
+      ...itemRun,
+      status: 'paused',
+      progress: progressOf({
+        steps: [{ node_id: 'approve', state: 'running', started_at: minutesAgo(5) }],
+      }),
+    },
+    true
+  );
+
+  expect(html).toContain('title="approve · waiting"');
+  expect(html).toMatch(/approve<span[^>]*>05:0\d</);
+  expect(html).toContain('>last recorded nodes<');
+  expect(html).not.toContain('Active last recorded');
 });
 
 test('a running card displays overdue tools without offering resume', () => {
