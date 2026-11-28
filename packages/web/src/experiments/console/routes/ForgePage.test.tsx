@@ -240,6 +240,7 @@ describe('the forge tab', () => {
     expect(html).toContain('GitHub could not be read (no_credential)');
     expect(html).toContain('No credential for github.com.');
     expect(html).toContain('Set GH_TOKEN.');
+    expect(html).toContain('Try again');
     expect(html).not.toContain('Open on GitHub');
     expect(html).not.toContain('Issues');
     // The tab stays, without a count; the header names the repository without a link.
@@ -251,5 +252,6 @@ describe('the forge tab', () => {
       error: { kind: 'process_failed', message: 'The forge plugin could not be run.' },
     });
     expect(unresolved).toContain('could not tell which forge serves this project (process_failed)');
+    expect(unresolved).toContain('Try again');
   });
 });

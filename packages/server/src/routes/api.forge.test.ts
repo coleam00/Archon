@@ -277,6 +277,8 @@ describe('GET /api/codebases/{id}/forge', () => {
       overview: { status: 'failed', error: { kind: 'no_credential' } },
     });
     expect(JSON.stringify(body)).not.toContain('acme-secret-org');
+    // The plugin's remedy is about its own token, which would not repair Archon's credential.
+    expect(body.kind === 'forge' && 'remedy' in body.overview).toBe(false);
     expect(world.overviews()).toHaveLength(0);
   });
 

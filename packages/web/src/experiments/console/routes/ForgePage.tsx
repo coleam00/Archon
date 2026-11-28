@@ -48,6 +48,12 @@ export function ForgePage(): ReactElement {
     skill.getProject(projectId)
   );
   const forge = useProjectForge(projectId);
+  // Read beside the forge, not after it: a row whose action has not loaded yet looks like
+  // a row that has none.
+  const { data: listed } = useEntity(
+    project === undefined ? 'noop:forge-workflows' : K.workflows(project.path),
+    () => (project === undefined ? Promise.resolve(undefined) : skill.listWorkflows(project.path))
+  );
   if (forge.data?.kind === 'none') return <Navigate to={`/console/p/${projectId}`} replace />;
   return (
     <section className="flex h-full flex-col">
@@ -58,7 +64,13 @@ export function ForgePage(): ReactElement {
         <ProjectViewTabs projectId={projectId} active="forge" />
       </header>
       <div className="flex-1 overflow-y-auto px-4 pb-7.5 pt-5.5 md:px-7.5">
-        <ForgeBody projectId={projectId} project={project} forge={forge.data} error={forge.error} />
+        <ForgeBody
+          projectId={projectId}
+          workflows={listed?.workflows ?? []}
+          forge={forge.data}
+          error={forge.error}
+          retry={forge.refetch}
+        />
       </div>
     </section>
   );
@@ -66,26 +78,44 @@ export function ForgePage(): ReactElement {
 
 function ForgeBody({
   projectId,
-  project,
+  workflows,
   forge,
   error,
+  retry,
 }: {
   projectId: string;
-  project: Project | undefined;
+  workflows: readonly Workflow[];
   forge: Exclude<ProjectForge, { kind: 'none' }> | undefined;
   error: Error | undefined;
+  retry: () => void;
 }): ReactElement {
+  // The server does not keep a failed read, so reading again is the repair for a failure
+  // that has passed.
+  const tryAgain = (
+    <button
+      type="button"
+      onClick={retry}
+      className="rounded border border-border px-2.5 py-1 text-console-12 text-text-primary hover:bg-surface-hover"
+    >
+      Try again
+    </button>
+  );
   if (forge === undefined)
     return error === undefined ? (
       <EmptyState title="Loading the repository…" />
     ) : (
-      <EmptyState title="The repository could not be loaded" hint={error.message} />
+      <EmptyState
+        title="The repository could not be loaded"
+        hint={error.message}
+        action={tryAgain}
+      />
     );
   if (forge.kind === 'unresolved')
     return (
       <EmptyState
         title={`Archon could not tell which forge serves this project (${forge.error.kind})`}
         hint={forge.error.message}
+        action={tryAgain}
       />
     );
   if (forge.overview.status === 'failed') {
@@ -95,7 +125,10 @@ function ForgeBody({
         title={`${forge.forge.name} could not be read (${failure.kind})`}
         hint={failure.message}
         action={
-          remedy === undefined ? undefined : <p className="text-xs text-text-secondary">{remedy}</p>
+          <div className="flex flex-col items-center gap-3">
+            {remedy === undefined ? null : <p className="text-xs text-text-secondary">{remedy}</p>}
+            {tryAgain}
+          </div>
         }
       />
     );
@@ -103,7 +136,7 @@ function ForgeBody({
   return (
     <ForgeOverviewView
       projectId={projectId}
-      project={project}
+      workflows={workflows}
       forge={forge}
       overview={forge.overview.value}
       syncedAt={forge.overview.syncedAt}
@@ -113,13 +146,13 @@ function ForgeBody({
 
 function ForgeOverviewView({
   projectId,
-  project,
+  workflows,
   forge,
   overview,
   syncedAt,
 }: {
   projectId: string;
-  project: Project | undefined;
+  workflows: readonly Workflow[];
   forge: ForgeProject;
   overview: ForgeOverview;
   syncedAt: string;
@@ -127,11 +160,6 @@ function ForgeOverviewView({
   const { stats, actor } = overview;
   const you = actor === undefined ? 'you' : `@${actor.login}`;
   const days = Math.round((Date.parse(syncedAt) - Date.parse(overview.since)) / 86_400_000);
-  const { data: listed } = useEntity(
-    project === undefined ? 'noop:forge-workflows' : K.workflows(project.path),
-    () => (project === undefined ? Promise.resolve(undefined) : skill.listWorkflows(project.path))
-  );
-  const workflows = listed?.workflows ?? [];
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6">
       <RepoCard forge={forge} overview={overview} syncedAt={syncedAt} />
@@ -277,7 +305,7 @@ function TileGroup({
               href={stat.url}
               {...external}
               title={`${label}: open this list`}
-              className="font-mono text-console-18 font-medium text-text-primary underline decoration-border underline-offset-4 hover:text-accent-bright"
+              className="font-mono text-console-18 font-medium text-text-primary underline decoration-text-tertiary underline-offset-4 hover:text-accent-bright"
             >
               {stat.count.toLocaleString('en-US')}
             </a>
