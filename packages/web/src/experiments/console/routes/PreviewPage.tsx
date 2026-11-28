@@ -38,7 +38,6 @@ const SAMPLE_RUNS: Run[] = [
     workflow: 'plan',
     status: 'running',
     activeNodes: ['plan/draft'],
-    lastTool: 'read_file',
   },
   {
     ...baseRun,

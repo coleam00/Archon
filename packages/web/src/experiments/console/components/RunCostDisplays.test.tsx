@@ -18,7 +18,7 @@ const displays = [
   },
   {
     name: 'active card',
-    render: (run: Run) => <ActiveRunCard run={{ ...run, status: 'running' }} />,
+    render: (run: Run) => <ActiveRunCard expanded run={{ ...run, status: 'running' }} />,
   },
   { name: 'recent row', render: (run: Run) => <RecentRunRow run={run} /> },
   {

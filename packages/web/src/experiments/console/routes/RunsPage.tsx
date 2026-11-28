@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement, type RefObject } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { EmptyState } from '../components/EmptyState';
-import { ActiveRunCard } from '../components/ActiveRunCard';
-import { RecentRunRow } from '../components/RecentRunRow';
 import { FilterChips, FILTER_ORDER, type Filter } from '../components/FilterChips';
+import { RunsFeed, type RunsFeedProps } from '../components/RunsFeed';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
-import { DraftRunCard } from '../components/DraftRunCard';
 import { PendingInputBanner } from '../components/PendingInputBanner';
 import { usePendingInput } from '../lib/pending-input';
-import { useEntity } from '../store/cache';
+import { invalidate, useEntity } from '../store/cache';
 import { K, type Scope } from '../store/keys';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
@@ -67,7 +65,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'running',
       startedAt: iso(4 * 60 + 12),
       activeNodes: ['plan/draft'],
-      lastTool: 'read_file',
     },
     {
       ...base,
@@ -77,7 +74,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'running',
       startedAt: iso(9 * 60 + 38),
       activeNodes: ['implement/loop'],
-      lastTool: 'edit_file',
     },
     {
       ...base,
@@ -93,7 +89,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       origin: 'web',
       status: 'paused',
       startedAt: iso(14 * 60 + 22),
-      lastTool: null,
       approval: {
         nodeId: 'foundation-gate',
         message:
@@ -118,7 +113,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'paused',
       outcome: 'succeeded',
       startedAt: iso(4 * 60 + 2),
-      lastTool: null,
       approval: {
         nodeId: 'review/approve',
         message: 'Approve changes before opening PR?',
@@ -135,7 +129,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'failed',
       startedAt: iso(2 * 60 + 41),
       finishedAt: iso(0),
-      lastTool: null,
     },
     {
       ...base,
@@ -146,7 +139,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       outcome: 'failed',
       startedAt: iso(8 * 60 + 14),
       finishedAt: iso(0),
-      lastTool: null,
     },
   ] satisfies Run[];
 }
@@ -206,110 +198,6 @@ export function filterRuns(
   });
 }
 
-interface SectionHeaderProps {
-  label: string;
-  count: number | null;
-}
-
-function SectionHeader({ label, count }: SectionHeaderProps): ReactElement {
-  return (
-    <div className="mb-3 flex items-center gap-2.5 px-0.5">
-      <span className="font-mono text-console-11 font-bold uppercase tracking-console-label text-text-tertiary">
-        {label}
-      </span>
-      {count !== null ? (
-        <span
-          className="rounded-full border bg-surface-elevated px-2 py-px font-mono text-console-11 tabular-nums text-text-secondary"
-          style={{ borderColor: 'var(--border)' }}
-        >
-          {count}
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-interface RunsFeedProps {
-  runs: Run[];
-  showProject: boolean;
-  draftProject: { id: string; path: string } | null;
-  selectedRunId: string | null;
-  /** Run ids whose actions are currently shown in the pending-input banner. */
-  promotedRunIds: ReadonlySet<string>;
-  /** Heading of the finished runs: on the Running tab they are the ones that just ended. */
-  recentLabel: string;
-  /** Shown in place of the runs while none are known (loading, or the load failed). */
-  notice: ReactElement | null;
-}
-
-/**
- * Feed split into Active (running + paused) and Recent (completed / failed /
- * cancelled). Active cards get real estate; Recent collapses to compact rows.
- * Matches the attention model: completed runs rarely get checked unless
- * something went wrong — so failed stays eye-catching, completed is muted.
- *
- * When a project is scoped, a DraftRunCard sits at the top of Active — same
- * card shape as a paused-approval card, just waiting for YOU instead of
- * the agent. Starting a new run is "another card in the list."
- */
-function RunsFeed({
-  runs,
-  showProject,
-  draftProject,
-  selectedRunId,
-  promotedRunIds,
-  recentLabel,
-  notice,
-}: RunsFeedProps): ReactElement {
-  const active = runs.filter(r => r.status === 'running' || r.status === 'paused');
-  const recent = runs.filter(
-    r => r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled'
-  );
-
-  const showActiveSection = active.length > 0 || draftProject !== null;
-
-  return (
-    <div className="flex flex-col gap-6.5">
-      {showActiveSection ? (
-        <section>
-          <SectionHeader label="Active" count={notice !== null ? null : active.length} />
-          <div className="flex flex-col gap-2">
-            {draftProject !== null ? (
-              <DraftRunCard projectId={draftProject.id} projectCwd={draftProject.path} />
-            ) : null}
-            {active.map(run => (
-              <ActiveRunCard
-                key={run.id}
-                run={run}
-                showProject={showProject}
-                selected={run.id === selectedRunId}
-                inputPromoted={promotedRunIds.has(run.id)}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      {notice}
-      {recent.length > 0 ? (
-        <section>
-          <SectionHeader label={recentLabel} count={recent.length} />
-          <div className="flex flex-col overflow-hidden rounded-console-12 border border-border bg-surface">
-            {recent.map(run => (
-              <RecentRunRow
-                key={run.id}
-                run={run}
-                showProject={showProject}
-                selected={run.id === selectedRunId}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
 export function RunsPage(): ReactElement {
   const { projectId } = useParams<{ projectId?: string }>();
   const scope: Scope = projectId ?? 'all';
@@ -320,6 +208,8 @@ export function RunsPage(): ReactElement {
   // retrospective view, not the first thing to see.
   const [filter, setFilter] = useState<Filter>('running');
   const [query, setQuery] = useState('');
+  // Not persisted: a reload returns to the compact list.
+  const [showDetails, setShowDetails] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   const { data, loading, error } = useEntity<FeedData>(K.runs(scope), () =>
@@ -337,6 +227,10 @@ export function RunsPage(): ReactElement {
 
   const realRuns = data?.runs ?? [];
   const realCounts = data?.counts ?? EMPTY_COUNTS;
+  useRunsRefresh(
+    scope,
+    realRuns.some(run => run.status === 'running')
+  );
 
   const demoRuns = useMemo(
     () => (demoMode ? buildDemoRuns(scope, project?.name ?? null) : []),
@@ -379,8 +273,14 @@ export function RunsPage(): ReactElement {
 
       {/* Status sub-tabs — their own strip; the active underline overlaps the
           hairline below (design: .subtabs). */}
-      <div className="shrink-0 overflow-x-auto border-b border-border px-6">
-        <FilterChips value={filter} onChange={setFilter} counts={counts} />
+      <div className="flex shrink-0 items-center gap-4 border-b border-border px-6">
+        {/* Only the tabs scroll on a narrow page, so the switch stays in view.
+            A box that scrolls sideways clips downward too, so it reaches one
+            pixel over the hairline to hold the underline that overlaps it. */}
+        <div className="-mb-px min-w-0 flex-1 overflow-x-auto pb-px">
+          <FilterChips value={filter} onChange={setFilter} counts={counts} />
+        </div>
+        <DetailsSwitch on={showDetails} onChange={setShowDetails} />
       </div>
 
       {pending.error !== undefined ? (
@@ -425,9 +325,70 @@ export function RunsPage(): ReactElement {
           draftProject={draftProject}
           selectedRunId={selectedRunId}
           promotedRunIds={pending.promotedRunIds}
+          expanded={showDetails}
         />
       </div>
     </section>
+  );
+}
+
+const RUNS_REFRESH_MS = 30_000;
+
+/**
+ * Refetches the feed while it lists a running run. A run working inside one node sends
+ * no frame the feed refetches on (see `useDashboardSSE`), and each card judges "active Nm
+ * ago" and "quiet" against the feed's `last_observed_at`, so without this a healthy run
+ * would turn quiet on a stale snapshot.
+ */
+export function useRunsRefresh(scope: Scope, hasRunning: boolean): void {
+  useEffect(() => {
+    if (!hasRunning) return;
+    const timer = setInterval(() => {
+      invalidate(K.runs(scope));
+    }, RUNS_REFRESH_MS);
+    return (): void => {
+      clearInterval(timer);
+    };
+  }, [scope, hasRunning]);
+}
+
+/** The one switch that expands every active card; there is none per card. */
+function DetailsSwitch({
+  on,
+  onChange,
+}: {
+  on: boolean;
+  onChange: (on: boolean) => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={() => {
+        onChange(!on);
+      }}
+      className={`inline-flex shrink-0 items-center gap-2 rounded-lg border bg-surface-inset px-2.5 py-1 text-console-11 transition-colors hover:bg-surface-hover hover:text-text-primary ${
+        on ? 'text-text-primary' : 'text-text-secondary'
+      }`}
+      // Inline because the console scope's wildcard border-color rule repaints Tailwind
+      // border utilities (see theme.css).
+      style={{ borderColor: 'var(--border)' }}
+    >
+      <span
+        aria-hidden
+        className={`relative h-3.5 w-6 rounded-full transition-colors ${
+          on ? 'bg-accent-bright' : 'bg-surface-elevated'
+        }`}
+      >
+        <span
+          className={`absolute left-0.5 top-0.5 h-2.5 w-2.5 rounded-full transition-transform ${
+            on ? 'translate-x-2.5 bg-white' : 'bg-text-secondary'
+          }`}
+        />
+      </span>
+      Show details
+    </button>
   );
 }
 
@@ -657,6 +618,7 @@ function RunsFeedBody({
   draftProject,
   selectedRunId,
   promotedRunIds,
+  expanded,
 }: RunsFeedBodyProps): ReactElement {
   const notice =
     feedError !== undefined ? (
@@ -682,7 +644,8 @@ function RunsFeedBody({
       draftProject={draftProject}
       selectedRunId={selectedRunId}
       promotedRunIds={promotedRunIds}
-      recentLabel={filter === 'running' ? 'Just finished' : 'Recent'}
+      recentLabel={filter === 'running' ? 'Finished recently' : 'Recent'}
+      expanded={expanded}
       notice={notice}
     />
   );

@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
+import { RunsFeed } from '../components/RunsFeed';
 import { RunsPage, filterRuns } from './RunsPage';
 import { invalidate, set, subscribeKey } from '../store/cache';
 import { K } from '../store/keys';
-import { toRun } from '../primitives/run';
+import { toRun, type Run } from '../primitives/run';
 import { listRunsNeedingAttention } from '../skills/runs';
 
 afterEach(() => {
@@ -207,4 +208,87 @@ test('the Running tab keeps a run that finished while the page was open, and onl
   const opened = Date.parse('2026-10-12T00:01:00.000Z');
   expect(filterRuns(runs, 'running', '', opened).map(run => run.id)).toEqual(['after-open']);
   expect(filterRuns(runs, 'paused', '', opened)).toEqual([]);
+});
+
+function renderFeed(runs: Run[], expanded: boolean): string {
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <RunsFeed
+        runs={runs}
+        showProject={false}
+        draftProject={null}
+        selectedRunId={null}
+        promotedRunIds={new Set()}
+        recentLabel="Finished recently"
+        expanded={expanded}
+        notice={null}
+      />
+    </MemoryRouter>
+  );
+}
+
+test('the page-level details setting expands every active card, and compact shows none', () => {
+  const running = ['first-run', 'second-run'].map(id =>
+    toRun({
+      id,
+      workflow_name: 'implement',
+      codebase_id: null,
+      status: 'running',
+      started_at: '2026-10-12T00:00:00.000Z',
+    })
+  );
+  expect(renderFeed(running, false)).not.toContain('>Cancel<');
+  const expanded = renderFeed(running, true);
+  expect(expanded.match(/>Cancel</g)).toHaveLength(2);
+  expect(expanded).toContain('title="first-run"');
+  expect(expanded).toContain('title="second-run"');
+});
+
+test('the runs page starts compact and offers one details switch', () => {
+  set(K.runs('all'), {
+    runs: [
+      toRun({
+        id: 'only-run',
+        workflow_name: 'implement',
+        codebase_id: null,
+        status: 'running',
+        started_at: '2026-10-12T00:00:00.000Z',
+      }),
+    ],
+    total: 1,
+    counts: { all: 1, running: 1, paused: 0, failed: 0, cancelled: 0, completed: 0, pending: 0 },
+  });
+  set(K.runsAttention, { runs: [], degraded: [] });
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <RunsPage />
+    </MemoryRouter>
+  );
+  expect(html.match(/role="switch"/g)).toHaveLength(1);
+  expect(html).toContain('aria-checked="false"');
+  expect(html).toContain('Show details');
+  expect(html).toContain('data-run-id="only-run"');
+  expect(html).not.toContain('>Cancel<');
+});
+
+test('finished runs list under their heading with workflow, outcome, duration and end time', () => {
+  const html = renderFeed(
+    [
+      toRun({
+        id: 'done-run',
+        workflow_name: 'review',
+        codebase_id: null,
+        status: 'completed',
+        completed_outcome: 'succeeded',
+        started_at: '2026-10-12T00:00:00.000Z',
+        completed_at: '2026-10-12T00:04:12.000Z',
+      }),
+    ],
+    false
+  );
+  expect(html).toContain('Finished recently');
+  expect(html).toContain('review');
+  expect(html).toContain('succeeded');
+  expect(html).toContain('04:12');
+  expect(html).toContain('title="Ended ');
 });

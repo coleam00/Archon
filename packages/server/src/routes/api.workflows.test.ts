@@ -139,7 +139,10 @@ mock.module('@archon/core/db/workflows', () => ({
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
 }));
-mock.module('@archon/core/db/workflow-events', () => ({}));
+mock.module('@archon/core/db/workflow-events', () => ({
+  listLatestEventTimes: mock(async () => new Map()),
+  listLatestAgentMessages: mock(async () => new Map()),
+}));
 mock.module('@archon/core/db/messages', () => ({}));
 
 const mockListCodebases = mock(async () => [{ default_cwd: '/tmp/project' }]);

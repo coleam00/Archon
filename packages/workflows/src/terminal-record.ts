@@ -37,6 +37,7 @@ import {
 } from './schemas/node-outcomes';
 import {
   nodeFailureKindSchema,
+  type NodeDescriptor,
   type NodeExecutionMetadata,
   type NodeFailureKind,
   type NodeInvocation,
@@ -44,6 +45,7 @@ import {
 import type { FanOutOutcome } from './schemas/fan-out-outcome';
 import type { SerializedNodeData } from './node-record-serialization';
 import type { LoopRound, LoopRoundNode } from './schemas/loop-rounds';
+import type { RunProgress, RunStep } from './schemas/run-progress';
 
 export interface TerminalRecordEvent {
   event_type: string;
@@ -69,15 +71,19 @@ interface NodeEventFold {
   failureOrder: Map<string, number>;
   /** Each key's invocation timing, folded from its attempts; a cache record carries none. */
   timings: Map<string, InvocationTiming>;
+  /** What each key's latest execution record says ran it. */
+  executions: Map<string, { kind: NodeDescriptor['kind']; model?: string }>;
 }
 
 /**
- * An invocation's timing across its attempts: when its first attempt started, and each
- * attempt's latest recorded duration by attempt id (undefined while that attempt runs).
- * An attempt's start and its end are two records of one attempt, so keying by attempt id
- * counts each attempt once.
+ * The timing of a key's latest invocation across its attempts: when its first attempt
+ * started, and each attempt's latest recorded duration by attempt id (undefined while
+ * that attempt runs). An attempt's start and its end are two records of one attempt, so
+ * keying by attempt id counts each attempt once. A node a resume runs again is a new
+ * invocation, and is timed from its own start.
  */
 interface InvocationTiming {
+  invocationId: string;
   startedAt: string;
   attempts: Map<string, number | undefined>;
 }
@@ -99,7 +105,8 @@ function foldNodeEvents(
   const failureOrder = new Map<string, number>();
   const failedOutputs: NodeEventFold['failedOutputs'] = new Map();
   const timings = new Map<string, InvocationTiming>();
-  const folded = { graph, nodes, outputs, failedOutputs, failureOrder, timings };
+  const executions: NodeEventFold['executions'] = new Map();
+  const folded = { graph, nodes, outputs, failedOutputs, failureOrder, timings, executions };
   if (graph)
     for (const nodeId of graph.node_ids)
       nodes.set(keyOf(nodeId, []), { node_id: nodeId, state: 'pending' });
@@ -130,9 +137,24 @@ function foldTiming(
   key: string,
   { invocation, attempt, timing }: NodeExecutionMetadata
 ): void {
-  const folded = timings.get(key) ?? { startedAt: invocation.startedAt, attempts: new Map() };
+  const current = timings.get(key);
+  const folded =
+    current?.invocationId === invocation.id
+      ? current
+      : { invocationId: invocation.id, startedAt: invocation.startedAt, attempts: new Map() };
   folded.attempts.set(attempt.id, timing.durationMs);
   timings.set(key, folded);
+}
+
+/** Every attempt's duration, summed once all have ended: a running retry has none yet. */
+function invocationDurationMs(timing: InvocationTiming | undefined): number | undefined {
+  if (!timing || timing.attempts.size === 0) return undefined;
+  let total = 0;
+  for (const ms of timing.attempts.values()) {
+    if (ms === undefined) return undefined;
+    total += ms;
+  }
+  return total;
 }
 
 /** Exec writers record a failed command's stdout; only a loop round reads it. */
@@ -150,7 +172,14 @@ function keepFailedExecOutput(
 }
 
 function foldNodeRecord(
-  { nodes, outputs, failedOutputs, failureOrder, timings }: Omit<NodeEventFold, 'graph'>,
+  {
+    nodes,
+    outputs,
+    failedOutputs,
+    failureOrder,
+    timings,
+    executions,
+  }: Omit<NodeEventFold, 'graph'>,
   record: ReadNodeRecordEvent,
   key: string,
   index: number
@@ -158,7 +187,13 @@ function foldNodeRecord(
   const nodeId = record.path;
   // Cache records (replay, reset, invalidation) carry no invocation or timing, and fold
   // under the top-level key, which no loop round reads.
-  if (record.metadata) foldTiming(timings, key, record.metadata);
+  if (record.metadata) {
+    foldTiming(timings, key, record.metadata);
+    executions.set(key, {
+      kind: record.metadata.node.kind,
+      ...(record.data.model !== undefined ? { model: record.data.model } : {}),
+    });
+  }
   failedOutputs.delete(key);
   switch (record.eventType) {
     case 'node_started':
@@ -241,6 +276,66 @@ export function buildRunNodeStates(
 }
 
 /**
+ * Whether a node of each kind records anything while it runs. An agent turn stores its
+ * provider events and a heartbeat. A command, a wait on a child run, a gate, a timer and
+ * a halt store nothing between their start and their end, and a container's nested nodes
+ * record for themselves.
+ */
+const RECORDS_WHILE_RUNNING: Record<NodeDescriptor['kind'], boolean> = {
+  agent: true,
+  loop: true,
+  exec: false,
+  workflow: false,
+  gate: false,
+  wait: false,
+  halt: false,
+  loop_group: false,
+  compose_fan_out: false,
+  compose_fan_out_instance: false,
+};
+
+/**
+ * A run's progress as a run list shows it. `steps` holds one step per node of the
+ * recorded graph, in authored order, so a loop body or other nested path is not a step of
+ * its own. A run recorded before the graph was lists every node its events name, in
+ * first-appearance order. A pending node, whether not reached or reset for a re-run,
+ * carries no timing: what an earlier invocation took is not this step's progress.
+ *
+ * `silent_by_design` reads every running node, nested ones included. A running node whose
+ * record names no kind counts as one that records, so an old record never hides a stall.
+ */
+export function buildRunSteps(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): Pick<RunProgress, 'steps' | 'silent_by_design'> {
+  const { graph, nodes, timings, executions } = foldNodeEvents(run, events);
+  const states = graph ? graph.node_ids.flatMap(id => nodes.get(id) ?? []) : [...nodes.values()];
+  const steps = states.map(({ node_id, state }): RunStep => {
+    if (state === 'pending') return { node_id, state };
+    const timing = timings.get(node_id);
+    const durationMs = state === 'running' ? undefined : invocationDurationMs(timing);
+    const model = executions.get(node_id)?.model;
+    return {
+      node_id,
+      state,
+      ...(model !== undefined ? { model } : {}),
+      ...(timing ? { started_at: timing.startedAt } : {}),
+      ...(durationMs !== undefined ? { duration_ms: durationMs } : {}),
+    };
+  });
+  const running = [...nodes].filter(([, node]) => node.state === 'running').map(([key]) => key);
+  return {
+    steps,
+    silent_by_design:
+      running.length > 0 &&
+      running.every(key => {
+        const kind = executions.get(key)?.kind;
+        return kind !== undefined && !RECORDS_WHILE_RUNNING[kind];
+      }),
+  };
+}
+
+/**
  * What a running node observes as `$NODE_OUTCOMES_FILE`: every node invocation the run
  * has recorded, in the order each first appeared, with a completed node's structured
  * output. Graph nodes that have recorded nothing yet are `pending`.
@@ -305,10 +400,8 @@ function loopRoundNode(
 ): LoopRoundNode {
   const entry: LoopRoundNode = { ...state };
   if (timing) entry.started_at = timing.startedAt;
-  const durations = timing ? [...timing.attempts.values()] : [];
-  // Only once every attempt has ended: a running retry has no duration yet.
-  if (durations.length > 0 && durations.every(ms => ms !== undefined))
-    entry.duration_ms = durations.reduce((total, ms) => total + ms, 0);
+  const durationMs = invocationDurationMs(timing);
+  if (durationMs !== undefined) entry.duration_ms = durationMs;
   if (!data) return entry;
   if (typeof data.node_output === 'string') entry.output = data.node_output;
   if (data.node_output_truncated === true) entry.output_truncated = true;

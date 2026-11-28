@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { rerunPath } from '../lib/rerun';
 import { OriginBadge } from './OriginBadge';
-import { RelativeRunStart } from './RelativeRunStart';
+import { RelativeRunTime } from './RelativeRunTime';
 import { runDetailPath, runPhaseStart, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
@@ -116,9 +116,10 @@ export function RecentRunRow({
       </span>
       <span className="whitespace-nowrap text-right font-mono text-console-12 tabular-nums text-text-secondary">
         {elapsed}
-        <RelativeRunStart
+        <RelativeRunTime
           className="ml-2 whitespace-nowrap text-text-tertiary"
-          startedAt={run.startedAt}
+          at={run.finishedAt ?? run.startedAt}
+          verb={run.finishedAt === null ? 'Started' : 'Ended'}
         />
       </span>
       <span
@@ -162,7 +163,7 @@ export function RecentRunRow({
       {/* trailing: origin + hover actions + CLI */}
       <span className="ml-auto flex items-center justify-end gap-1.5">
         {/* Origin + quick actions reveal on hover; the resting row matches the
-            design (status · body · id · duration + start · cost · CLI). */}
+            design (status · body · id · duration + end · cost · CLI). */}
         <span className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
           <OriginBadge origin={run.origin} />
           {canRerun ? (

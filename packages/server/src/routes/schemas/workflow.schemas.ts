@@ -16,6 +16,7 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  */
 import { z } from '@hono/zod-openapi';
 import { loopRoundSchema } from '@archon/workflows/schemas/loop-rounds';
+import { runProgressSchema as engineRunProgressSchema } from '@archon/workflows/schemas/run-progress';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
@@ -435,6 +436,11 @@ export const resetWorkflowNodeSessionsResponseSchema = z
   })
   .openapi('ResetWorkflowNodeSessionsResponse');
 
+export const runProgressSchema = engineRunProgressSchema.openapi('RunProgress', {
+  description:
+    'What an active run is doing: its steps, when it last recorded anything (the later of its heartbeat and its newest event), its last agent message and its branch.',
+});
+
 /** Dashboard enriched workflow run (wire shape with ISO string dates). */
 export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
   .extend({
@@ -443,6 +449,11 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
     attention: nullableRunAttentionSchema,
     operator_pause: operatorPauseFieldSchema,
     owner_observation: ownerObservationSchema,
+    /**
+     * Null for a run that is not running or paused, on the attention list, and for a run
+     * whose node records could not be read.
+     */
+    progress: runProgressSchema.nullable(),
     started_at: z.string(),
     active_phase_started_at: z.string().nullable(),
     completed_at: z.string().nullable(),

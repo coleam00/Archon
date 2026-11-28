@@ -183,6 +183,7 @@ export function makeDashboardRun(
   return {
     ...makeWorkflowRun(),
     codebase_name: 'Archon',
+    item_key: null,
     platform_type: 'cli',
     worker_platform_id: null,
     parent_platform_id: null,
@@ -355,6 +356,8 @@ mock.module('../../db/workflows', () => ({
 }));
 
 mock.module('../../db/workflow-events', () => ({
+  listLatestEventTimes: mock(async () => new Map()),
+  listLatestAgentMessages: mock(async () => new Map()),
   listWorkflowEvents: mock<typeof WorkflowEventDb.listWorkflowEvents>(async () => []),
   createWorkflowEvent: mockCreateWorkflowEvent,
 }));

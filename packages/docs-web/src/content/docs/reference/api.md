@@ -569,6 +569,25 @@ nodes remain separate entries. The compatibility fields `current_step_name` and
 or multiple active nodes. `total_steps` is `null`; observed lifecycle events do not define the
 workflow's total node count. This state describes node lifecycle, not process-owner liveness.
 
+Each run also includes `item_key`, the key of the item the run is on exactly as recorded, or
+`null` for a run on none. The key is opaque: nothing derives a title or a link from it.
+
+A running or paused run carries `progress`; it is `null` for any other run, for the `runs` of
+`GET /api/runs/attention`, and for a run whose node records could not be read. `progress.steps`
+lists one entry per top-level node of the run's recorded graph, in authored order, with its
+state, and once it has started its start time and requested model, and its duration once it
+has ended. `progress.last_observed_at` is the later of the run's heartbeat
+(`last_activity_at`) and the time of its newest event. Some work records neither while it
+runs: a `bash:` or `script:` node, and a `workflow:` node waiting on its child run.
+`progress.silent_by_design` is `true` while the run has running nodes and all of them, nested
+ones included, are of that kind, so a reader does not take an old `last_observed_at` for a
+stall. `progress.last_message` is the agent message chunk the run stored last, with its node
+and time; it is usually a whole reply block, and the tail of one when the provider flushed the
+block early. Its text is cut to 500 characters and marked `truncated` when longer.
+`progress.branch` is the branch of the run's worktree or container environment and
+`progress.base_branch` the base branch the run was dispatched with; each is `null` when the
+run recorded none.
+
 Process-owner liveness is `owner_observation`, which dashboard runs and the run in
 `GET /api/workflows/runs/{runId}` carry. The server observes it per request, by the rule
 `archon workflow wait` uses for `owner_lost`: `reachable` when an owner answers,

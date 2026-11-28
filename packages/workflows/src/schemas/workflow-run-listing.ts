@@ -18,6 +18,13 @@ export type RunOwnerObservation = z.infer<typeof runOwnerObservationSchema>;
 
 export const dashboardWorkflowRunSchema = workflowRunSchema.extend({
   codebase_name: z.string().nullable(),
+  /**
+   * The item this run is on, as its key reads in that item's project (`owner/repo#123`
+   * for a forge item; the engine never parses it). Null for a run on none. Joined from
+   * the item the run's stored `item_id` names, so a `workflow:` sub-run, which carries
+   * no `item_id` of its own, reads as none here too.
+   */
+  item_key: z.string().nullable(),
   platform_type: z.string().nullable(),
   worker_platform_id: z.string().nullable(),
   parent_platform_id: z.string().nullable(),

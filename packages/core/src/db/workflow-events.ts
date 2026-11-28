@@ -334,6 +334,71 @@ export async function listEventsForRuns(
   }
 }
 
+/**
+ * When each run's newest event of any type was stored; null for a run with none. One
+ * aggregate, so a run list learns how recently a run recorded anything without reading
+ * its events.
+ */
+export async function listLatestEventTimes(
+  workflowRunIds: readonly string[]
+): Promise<Map<string, Date | null>> {
+  const latest = new Map<string, Date | null>(workflowRunIds.map(id => [id, null]));
+  if (workflowRunIds.length === 0) return latest;
+  const result = await pool.query<{ workflow_run_id: string; latest: Date | string }>(
+    `SELECT workflow_run_id, MAX(created_at) AS latest FROM remote_agent_workflow_events
+     WHERE workflow_run_id IN (${workflowRunIds.map((_, i) => `$${String(i + 1)}`).join(', ')})
+     GROUP BY workflow_run_id`,
+    [...workflowRunIds]
+  );
+  for (const row of result.rows) latest.set(row.workflow_run_id, toHydratedTimestamp(row.latest));
+  return latest;
+}
+
+export interface LatestAgentMessage {
+  stepName: string;
+  observedAt: string;
+  text: string;
+}
+
+/**
+ * The agent message chunk each run stored last; null for a run that has stored none. The
+ * database picks the row by store order, one query per run, so a list never loads a run's
+ * provider events to show its last message. It is one chunk as stored: a provider that
+ * flushes a reply block early continues it in later chunks, and this returns only the
+ * last of them.
+ */
+export async function listLatestAgentMessages(
+  workflowRunIds: readonly string[]
+): Promise<Map<string, LatestAgentMessage | null>> {
+  const eventType = getDialect().jsonText('data', 'event.type');
+  const entries = await Promise.all(
+    workflowRunIds.map(async (runId): Promise<[string, LatestAgentMessage | null]> => {
+      const result = await pool.query<WorkflowEventRow>(
+        `SELECT * FROM remote_agent_workflow_events
+         WHERE workflow_run_id = $1 AND event_type = 'provider_event'
+           AND ${eventType} = 'agent_message_chunk'
+         ORDER BY COALESCE(event_order, 0) DESC, created_at DESC, id DESC
+         LIMIT 1`,
+        [runId]
+      );
+      const [record] = readProviderEventRows(
+        runId,
+        result.rows.map(row => ({
+          ...parseEventRow(row),
+          created_at: toHydratedTimestamp(row.created_at).toISOString(),
+        }))
+      );
+      return [
+        runId,
+        record?.event.type === 'agent_message_chunk'
+          ? { stepName: record.stepName, observedAt: record.observedAt, text: record.event.text }
+          : null,
+      ];
+    })
+  );
+  return new Map(entries);
+}
+
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
   const result = await pool.query<{
     step_name: string | null;

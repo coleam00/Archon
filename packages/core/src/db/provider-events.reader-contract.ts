@@ -214,6 +214,53 @@ export function providerEventReaderContract(
     ).toEqual([]);
   });
 
+  test("reads each run's last stored agent message, and none for a run without one", async () => {
+    const db = getDb();
+    const { createWorkflowEvent, listLatestAgentMessages } = getModule();
+    const write = (runId: string, stepName: string, event: ProviderEvent, seq: number) =>
+      createWorkflowEvent({
+        workflow_run_id: runId,
+        event_type: 'provider_event',
+        step_name: stepName,
+        data: { ...envelope('a', seq, event), observedAt: `2026-10-02T10:00:0${String(seq)}.000Z` },
+      });
+    const talking = await seedRun(db);
+    const toolsOnly = await seedRun(db);
+    const silent = await seedRun(db);
+    await write(talking, 'plan', { type: 'agent_message_chunk', text: 'first' }, 0);
+    await write(talking, 'build', { type: 'agent_message_chunk', text: 'second' }, 1);
+    await write(talking, 'build', { type: 'agent_thought_chunk', text: 'thinking' }, 2);
+    await write(talking, 'build', { type: 'tool_call', toolCallId: 'c', name: 'Bash' }, 3);
+    await write(toolsOnly, 'build', { type: 'tool_call', toolCallId: 'c', name: 'Bash' }, 0);
+
+    expect(await listLatestAgentMessages([talking, toolsOnly, silent])).toEqual(
+      new Map([
+        [talking, { stepName: 'build', observedAt: '2026-10-02T10:00:01.000Z', text: 'second' }],
+        [toolsOnly, null],
+        [silent, null],
+      ])
+    );
+  });
+
+  test("reads when each run's newest event was stored, and none for a run without events", async () => {
+    const db = getDb();
+    const { listLatestEventTimes } = getModule();
+    const busy = await seedRun(db);
+    const empty = await seedRun(db);
+    for (const at of ['2026-10-02T10:07:00Z', '2026-10-02T10:00:00Z']) {
+      await db.query(
+        `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, step_name, data, created_at)
+         VALUES ($1, $2, 'node_started', 'build', '{}', $3)`,
+        [crypto.randomUUID(), busy, at]
+      );
+    }
+
+    const times = await listLatestEventTimes([busy, empty]);
+    expect(times.get(busy)?.toISOString()).toBe('2026-10-02T10:07:00.000Z');
+    expect(times.get(empty)).toBeNull();
+    expect(await listLatestEventTimes([])).toEqual(new Map());
+  });
+
   test('envelope rows leave the resume snapshot unchanged', async () => {
     const db = getDb();
     const { createWorkflowEvent, getDagResumeSnapshot } = getModule();

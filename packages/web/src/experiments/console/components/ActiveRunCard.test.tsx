@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import type { Run } from '../primitives/run';
@@ -23,20 +24,257 @@ const parallelRun: Run = {
   workingPath: null,
   userMessage: 'Implement the change',
   activeNodes: ['parallel-a', 'parallel-b'],
-  lastTool: null,
 };
+
+type Progress = NonNullable<Run['progress']>;
+
+const minutesAgo = (minutes: number): string =>
+  new Date(Date.now() - minutes * 60_000).toISOString();
+
+function progressOf(overrides: Partial<Progress> = {}): Progress {
+  return {
+    steps: [
+      { node_id: 'plan', state: 'completed', duration_ms: 83_000 },
+      { node_id: 'parallel-a', state: 'running', model: 'opus-test' },
+      { node_id: 'report', state: 'pending' },
+    ],
+    silent_by_design: false,
+    last_observed_at: minutesAgo(4),
+    last_message: {
+      node_id: 'plan',
+      at: minutesAgo(4),
+      text: ['Reading the failing test.', 'Then the parser.'].join('\n'),
+    },
+    branch: 'archon/task-42',
+    base_branch: 'dev',
+    ...overrides,
+  };
+}
+
+const itemRun: Run = {
+  ...parallelRun,
+  id: '0f3a9c1e-run',
+  itemKey: 'issue-42',
+  workingPath: '/work/trees/task-42',
+  costUsd: 1.5,
+  progress: progressOf(),
+};
+
+function render(run: Run, expanded = false): string {
+  return renderToStaticMarkup(
+    <MemoryRouter>
+      <ActiveRunCard run={run} expanded={expanded} />
+    </MemoryRouter>
+  );
+}
 
 describe('ActiveRunCard', () => {
   test('renders every active node for a parallel run', () => {
-    const html = renderToStaticMarkup(
-      <MemoryRouter>
-        <ActiveRunCard run={parallelRun} />
-      </MemoryRouter>
-    );
+    const html = render(parallelRun);
 
     expect(html).toContain('nodes');
     expect(html).toContain('parallel-a, parallel-b');
   });
+
+  test('a compact card shows the item, workflow, phase, strip and times, and no details', () => {
+    const html = render(itemRun);
+
+    expect(html).toContain('issue-42');
+    expect(html).toContain('implement');
+    expect(html).toContain('parallel-a, parallel-b');
+    expect(html).toContain('Reading the failing test.');
+    expect(html).not.toContain('Then the parser.');
+    expect(html).toContain('aria-label="1 of 3 steps done"');
+    expect(html.match(/title="[^"]+ · (completed|running|pending)"/g)).toHaveLength(3);
+    expect(html).toContain('active 4m ago');
+
+    for (const detail of [
+      'Cancel',
+      'Log',
+      'opus-test',
+      'archon/task-42',
+      'Reported cost',
+      '/work/trees/task-42',
+      'title="0f3a9c1e-run"',
+      'last message',
+      '01:23',
+    ]) {
+      expect(html).not.toContain(detail);
+    }
+  });
+
+  test('an expanded card adds step times, the last message, facts, actions and internals', () => {
+    const html = render(
+      { ...itemRun, parentRunId: 'parent-run-id', adoptedFromRunId: 'earlier-run-id' },
+      true
+    );
+
+    expect(html).toContain('01:23');
+    expect(html).toContain('Then the parser.');
+    expect(html).toContain('last message · plan');
+    expect(html).toContain('archon/task-42');
+    expect(html).toContain('opus-test');
+    expect(html).toContain('Reported cost $1.50 (may be partial)');
+    expect(html).toContain('Origin: CLI');
+    expect(html).toContain('Cancel');
+    expect(html).toContain('href="/console/r/0f3a9c1e-run"');
+    expect(html).toContain('title="0f3a9c1e-run"');
+    expect(html).toContain('/work/trees/task-42');
+    expect(html).toContain('Base branch');
+    expect(html).toContain('child of parentru');
+    expect(html).toContain('continues earlierr');
+    expect(html).toContain('Implement the change');
+    expect(html).not.toContain('Issue');
+  });
+
+  test('a run with no branch of its own names the base it works from', () => {
+    const html = render({ ...itemRun, progress: progressOf({ branch: null }) }, true);
+
+    expect(html).toContain('from dev');
+  });
+
+  test('a paused card offers the log but no cancel', () => {
+    const html = render({ ...itemRun, status: 'paused' }, true);
+
+    expect(html).toContain('href="/console/r/0f3a9c1e-run"');
+    expect(html).not.toContain('Cancel');
+  });
+
+  test('a run goes quiet once it has recorded nothing for ten minutes', () => {
+    const observed = (minutes: number): Run => ({
+      ...itemRun,
+      progress: progressOf({ last_observed_at: minutesAgo(minutes) }),
+    });
+
+    const active = render(observed(9), true);
+    expect(active).toContain('active 9m ago');
+    expect(active).not.toContain('quiet');
+    expect(active).not.toContain('No activity for');
+
+    const quiet = render(observed(11));
+    expect(quiet).toContain('quiet 11m');
+    expect(quiet).not.toContain('active 11m ago');
+    expect(quiet).not.toContain('No activity for');
+
+    expect(render(observed(11), true)).toContain('No activity for 11m. Check the');
+  });
+
+  test('a run on no item shows its input in the item slot, and nothing when it has neither', () => {
+    const noItem = render({ ...itemRun, itemKey: null }, true);
+    expect(noItem).toContain('Implement the change');
+    expect(noItem).not.toContain('issue-42');
+    expect(noItem).not.toContain('>input<');
+
+    const neither = render({ ...itemRun, itemKey: null, userMessage: '' });
+    expect(neither).toContain('implement');
+    expect(neither).not.toContain('issue-42');
+    expect(neither).not.toContain('title=""');
+  });
+
+  test('a run with no agent message yet says so, and one without progress says nothing', () => {
+    const noMessage = render({ ...itemRun, progress: progressOf({ last_message: null }) }, true);
+    expect(noMessage).toContain('no message yet');
+    expect(noMessage).not.toContain('last message');
+
+    const noProgress = render({ ...itemRun, progress: null }, true);
+    expect(noProgress).not.toContain('no message yet');
+    expect(noProgress).not.toContain('last message');
+    expect(noProgress).not.toContain('steps done');
+    expect(noProgress).not.toContain('active ');
+    expect(noProgress).toContain('Cancel');
+  });
+
+  test('a run whose origin is not known shows no origin badge', () => {
+    expect(render({ ...itemRun, origin: 'unknown' }, true)).not.toContain('Origin:');
+  });
+
+  test('a run that has reported no cost shows none', () => {
+    expect(render({ ...itemRun, costUsd: null }, true)).not.toContain('Reported cost');
+  });
+});
+
+type Click = (event: { stopPropagation: () => void }) => void;
+
+/** The click handler of the button labelled `label`, rendering function components on the way. */
+function buttonClick(node: ReactNode, label: string): Click | undefined {
+  let click: Click | undefined;
+  Children.forEach(node, child => {
+    if (!isValidElement<{ children?: ReactNode; onClick?: Click }>(child)) return;
+    if (child.type === 'button' && child.props.children === label) click = child.props.onClick;
+    else if (typeof child.type === 'function')
+      click ??= buttonClick((child.type as (props: unknown) => ReactNode)(child.props), label);
+    else click ??= buttonClick(child.props.children, label);
+  });
+  return click;
+}
+
+test("a card's Cancel asks first, and sends one cancel request only once confirmed", async () => {
+  let click: Click | undefined;
+  function Probe(): ReactElement {
+    const card = ActiveRunCard({ run: itemRun, expanded: true });
+    click = buttonClick(card, 'Cancel');
+    return card;
+  }
+  renderToStaticMarkup(
+    <MemoryRouter>
+      <Probe />
+    </MemoryRouter>
+  );
+  const original = { fetch: globalThis.fetch, confirm: globalThis.confirm };
+  const requests: { path: string; method: string | undefined }[] = [];
+  const questions: string[] = [];
+  let answer = false;
+  globalThis.confirm = (question?: string): boolean => {
+    questions.push(question ?? '');
+    return answer;
+  };
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      requests.push({
+        path:
+          typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url,
+        method: init?.method,
+      });
+      return Response.json({ success: true });
+    },
+    { preconnect: original.fetch.preconnect }
+  );
+  const press = async (): Promise<void> => {
+    click?.({ stopPropagation: () => undefined });
+    await new Promise(resolve => setTimeout(resolve, 0));
+  };
+  try {
+    expect(click).toBeDefined();
+    await press();
+    expect(questions).toHaveLength(1);
+    expect(requests).toEqual([]);
+
+    answer = true;
+    await press();
+    expect(questions).toHaveLength(2);
+    expect(requests).toEqual([{ path: '/api/workflows/runs/0f3a9c1e-run/cancel', method: 'POST' }]);
+  } finally {
+    globalThis.fetch = original.fetch;
+    globalThis.confirm = original.confirm;
+  }
+});
+
+test('a paused run draws the step it waits at as waiting, with the time it has been there', () => {
+  const html = render(
+    {
+      ...itemRun,
+      status: 'paused',
+      progress: progressOf({
+        steps: [{ node_id: 'approve', state: 'running', started_at: minutesAgo(5) }],
+      }),
+    },
+    true
+  );
+
+  expect(html).toContain('title="approve · waiting"');
+  expect(html).toMatch(/approve<span[^>]*>05:0\d</);
+  expect(html).toContain('>last recorded nodes<');
+  expect(html).not.toContain('Active last recorded');
 });
 
 test('a running card displays overdue tools without offering resume', () => {
@@ -110,7 +348,7 @@ test.each(['unreachable', 'unknown'] as const)(
   observation => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
-        <ActiveRunCard run={{ ...parallelRun, ownerObservation: observation, lastTool: 'bash' }} />
+        <ActiveRunCard run={{ ...parallelRun, ownerObservation: observation }} />
       </MemoryRouter>
     );
 

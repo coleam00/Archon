@@ -56,11 +56,21 @@ describe('run responses', () => {
   test('listRuns retains dashboard enrichment without a terminal record', async () => {
     const { terminal_record, ...dashboardRun } = detailFixture.run;
     void terminal_record;
+    const progress: components['schemas']['RunProgress'] = {
+      steps: [{ node_id: 'a', state: 'running' }],
+      silent_by_design: false,
+      last_observed_at: '2026-11-27T10:00:00.000Z',
+      last_message: null,
+      branch: 'archon/task-1',
+      base_branch: 'dev',
+    };
     const response: components['schemas']['DashboardRunsResponse'] = {
       runs: [
         {
           ...dashboardRun,
           codebase_name: 'Archon',
+          progress,
+          item_key: 'crusader/crusader-engine#138',
           platform_type: 'cli',
           worker_platform_id: null,
           parent_platform_id: null,
@@ -80,6 +90,8 @@ describe('run responses', () => {
     const result = await listRuns();
     expect(result.runs[0]).toMatchObject({
       projectName: 'Archon',
+      itemKey: 'crusader/crusader-engine#138',
+      progress,
       origin: 'cli',
       activeNodes: ['a', 'b'],
       workerPlatformId: null,

@@ -87,6 +87,8 @@ const mockGetDagResumeSnapshot = mock<(_id: string) => Promise<DagResumeSnapshot
 const mockListWorkflowEvents = mock<IWorkflowStore['listWorkflowEvents']>(async () => []);
 const mockListEventsForRuns = mock<IWorkflowStore['listEventsForRuns']>(async () => new Map());
 mock.module('../db/workflow-events', () => ({
+  listLatestEventTimes: mock(async () => new Map()),
+  listLatestAgentMessages: mock(async () => new Map()),
   insertWorkflowEvent: mock(() => Promise.resolve()),
   listWorkflowEvents: mockListWorkflowEvents,
   listEventsForRuns: mockListEventsForRuns,

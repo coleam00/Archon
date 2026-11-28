@@ -14,6 +14,7 @@ import { resolveAuthContext } from './api-request-auth';
 import { registerRunRecordsRoute } from './api.run-records';
 import { apiError, getLog, jsonError, openApiRouteRegistrar } from './api-route-kit';
 import { toApiDashboardWorkflowRun, toApiWorkflowRun } from './api-serializers';
+import { readDashboardRunProgress } from './dashboard-run-progress';
 import {
   dashboardRunsQuerySchema,
   dashboardRunsResponseSchema,
@@ -140,11 +141,16 @@ export function registerDashboardRunsRoute(app: OpenAPIHono): void {
         offset,
       });
       const store = createWorkflowStore();
+      const progress = await readDashboardRunProgress(result.runs);
       return c.json({
         ...result,
         runs: await Promise.all(
           result.runs.map(async run =>
-            toApiDashboardWorkflowRun(run, await observeRunOwner(store, run))
+            toApiDashboardWorkflowRun(
+              run,
+              await observeRunOwner(store, run),
+              progress.get(run.id) ?? null
+            )
           )
         ),
       });

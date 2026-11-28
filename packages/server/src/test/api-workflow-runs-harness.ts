@@ -372,7 +372,11 @@ mock.module('@archon/core/db/codebases', () => ({
 export const mockFindLatestEnvironment = mock(
   async (): Promise<{ branch_name: string } | null> => null
 );
+export const mockGetIsolationEnvironment = mock(
+  async (_id: string): Promise<{ branch_name: string } | null> => null
+);
 mock.module('@archon/core/db/isolation-environments', () => ({
+  getById: mockGetIsolationEnvironment,
   listByCodebase: mock(async () => []),
   updateStatus: mock(async () => {}),
   findLatestByCodebaseAndWorkingPath: mockFindLatestEnvironment,
@@ -431,6 +435,15 @@ export const mockCreateWorkflowEvent = mock(async (_event: unknown) => {});
 export const mockListEventsForRuns = mock(
   async (runIds: readonly string[], _types: readonly string[]) =>
     new Map<string, MockWorkflowEvent[]>(runIds.map(id => [id, []]))
+);
+export const mockListLatestEventTimes = mock(
+  async (runIds: readonly string[]) => new Map<string, Date | null>(runIds.map(id => [id, null]))
+);
+export const mockListLatestAgentMessages = mock(
+  async (runIds: readonly string[]) =>
+    new Map<string, { stepName: string; observedAt: string; text: string } | null>(
+      runIds.map(id => [id, null])
+    )
 );
 const unexpected = (name: string) => async (): Promise<never> => {
   throw new Error(`Unexpected ${name}`);
@@ -548,6 +561,8 @@ mock.module('@archon/core/db/item-asks', () => ({
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mockListWorkflowEvents,
   listEventsForRuns: mockListEventsForRuns,
+  listLatestEventTimes: mockListLatestEventTimes,
+  listLatestAgentMessages: mockListLatestAgentMessages,
   createWorkflowEvent: mockCreateWorkflowEvent,
   listProviderEvents: mockListProviderEvents,
   PROVIDER_EVENT_ROW_TYPES,
@@ -686,6 +701,7 @@ export function makeDashboardWorkflowRun(run: WorkflowRun): DashboardWorkflowRun
   return {
     ...run,
     codebase_name: null,
+    item_key: null,
     platform_type: null,
     worker_platform_id: null,
     parent_platform_id: null,

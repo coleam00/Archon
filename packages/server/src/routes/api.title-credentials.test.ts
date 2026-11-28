@@ -102,7 +102,10 @@ mock.module('@archon/core/db/workflows', () => ({
   getWorkflowRunsByIds: mock(async () => []),
   getWorkflowRunForAttention: mock(async () => null),
 }));
-mock.module('@archon/core/db/workflow-events', () => ({}));
+mock.module('@archon/core/db/workflow-events', () => ({
+  listLatestEventTimes: mock(async () => new Map()),
+  listLatestAgentMessages: mock(async () => new Map()),
+}));
 const mockAddMessage = mock(async (_convId: string, _role: string, _content: string) => ({
   id: 'msg-uuid-1',
 }));
