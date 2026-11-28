@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { RunsFeed, RunsPage, filterRuns } from './RunsPage';
+import { RunsFeed } from '../components/RunsFeed';
+import { RunsPage, filterRuns } from './RunsPage';
 import { invalidate, set, subscribeKey } from '../store/cache';
 import { K } from '../store/keys';
 import { toRun, type Run } from '../primitives/run';
