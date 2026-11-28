@@ -149,8 +149,10 @@ describe('PiProvider contract', () => {
       },
       failureCases: [
         {
+          // The status is the one structured signal Pi's message carries, so the class comes
+          // from it; the vendor's words ride along as evidence.
           name: 'errored turn',
-          expected: 'unknown',
+          expected: 'rate_limited',
           evidence: '429 Too Many Requests',
           run: () => {
             resetScript(erroredAgentEnd());

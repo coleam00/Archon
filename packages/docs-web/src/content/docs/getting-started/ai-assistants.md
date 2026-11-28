@@ -241,6 +241,18 @@ Every session starts from `~/.pi/agent/settings.json`, with `<repo>/.pi/settings
 
 Pi keeps its native context-file discovery: `~/.pi/agent/AGENTS.md`, plus `AGENTS.md` or `CLAUDE.md` in the project and its parent directories. `AGENTS.override.md` replaces the ordinary file in the same directory.
 
+### Retries
+
+Pi retries a failed model request inside its own agent loop, so a request refused once does not fail the node. The defaults are three retries with exponential backoff from a 2-second base (2 s, 4 s, 8 s; each wait capped at 60 s), covering what a new attempt can clear: connection failures and their errno codes, timeouts, and 429 or 5xx responses. A quota, billing or auth rejection is not retried.
+
+Every attempt reaches the run as a warning, `pi.auto_retry` with `retry <n>/<max>: <provider text>`, so a turn that needed retries is visible in the run log instead of looking like a slow node. Tune it in Pi's settings — Archon adds no switch of its own:
+
+```json
+{ "retry": { "enabled": true, "maxRetries": 3, "baseDelayMs": 2000, "maxAgentDelayMs": 60000 } }
+```
+
+A local model server that reloads its weights after a restart can take longer than the default budget; raise `maxRetries` or `baseDelayMs` for it. Keep the node's `idle_timeout` above the retry waits — the default is 30 minutes, and a retry's own wait emits one chunk before it sleeps. A turn that still fails reports the class its last response justifies (see [Error classification](/reference/workflow-language/#error-classification)), which decides the node's own `retry:`. That includes a quota rejection Pi itself refused to retry: it arrives as a 429, so the node's rate-limit budget applies first. When that budget is spent, the run waits out a jittered backoff and continues by itself, unless `workflows.autoResumeOnQuotaReset: false` or the run executes in a container — neither can continue a paused run, so it fails there and you resume it once the limit reopens.
+
 ### Extensions
 
 Pi extensions are packages installed with `pi install npm:<package>`, or your own local files, that hook into the agent's lifecycle. They can add tools, intercept tool calls or block for human review. Archon loads them by default.

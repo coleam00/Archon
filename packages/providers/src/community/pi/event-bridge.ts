@@ -9,8 +9,9 @@ import {
 } from '@archon/provider-contract';
 
 import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
-import { unknownFailureResult } from '../../shared/failure';
+import { failureResult, unknownFailureResult } from '../../shared/failure';
 import type { PiExtensionTurn } from './extension-error-broker';
+import { failureClassFromMessage } from './failure-class';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -275,10 +276,9 @@ export function buildResultChunk(
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
   // Built by assignment on a typed value so a misspelled key fails to compile.
-  // Unclassified: Pi folds a setup `ModelsError` into this message's text, so its
-  // `code` never reaches Archon.
+  // The subtype stays Pi's stop reason; the class is the typed channel.
   const chunk: ResultChunk = isError
-    ? unknownFailureResult(last.stopReason, last.errorMessage)
+    ? failureResult(failureClassFromMessage(last.errorMessage), last.stopReason, last.errorMessage)
     : { type: 'result' };
   if (tokens) chunk.tokens = tokens;
   if (tokens?.cost !== undefined) chunk.cost = tokens.cost;
