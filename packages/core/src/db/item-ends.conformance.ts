@@ -8,6 +8,7 @@
 import { observesItemMetadata } from '@archon/workflows/schemas/item-role';
 import { expect, test } from 'bun:test';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import { rootLogger, setLogSink } from '@archon/paths';
 import { listAttentionQueue } from '@archon/workflows/attention-queue';
 import { readHoldingItemEnd } from '@archon/workflows/item-end';
 import { ItemEndRefusedError } from '@archon/workflows/schemas/item-end';
@@ -18,6 +19,8 @@ import {
   resourceStartFixtures,
 } from '@archon/workflows/store-conformance';
 import { recordItemEnd } from '../operations/item-ends';
+import { readOpenWorkRuns } from '../operations/open-work';
+import { getLog as workflowRunLog } from './workflow-run-shared';
 import {
   ask,
   completeWithAsks,
@@ -86,6 +89,14 @@ async function stoppedRefs(harness: Harness): Promise<string[]> {
   );
 }
 
+async function openWorkIds(harness: Harness, limit = 50): Promise<string[]> {
+  const runs = await readOpenWorkRuns(harness.store, {
+    codebaseId: CONFORMANCE_CODEBASE_ID,
+    limit,
+  });
+  return runs.map(run => run.id);
+}
+
 /** The end that holds on `pr-7`, read as every surface reads it: runs and starts together. */
 async function holding(harness: Harness) {
   const found = await harness.store.getItemRuns(projectKey, 'pr-7');
@@ -103,6 +114,208 @@ async function refusal(promise: Promise<unknown>): Promise<ItemEndRefusedError> 
 }
 
 export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness>): void {
+  test.each(['self', 'two-run'] as const)(
+    'open work contains a persisted %s ancestry cycle and preserves independent work',
+    async mode => {
+      const harness = await makeHarness();
+      const logs: string[] = [];
+      const previousLevel = rootLogger.level;
+      rootLogger.level = 'error';
+      try {
+        const cyclic = await harness.store.createWorkflowRun({
+          workflow_name: 'cyclic',
+          user_message: 'private-cycle-sentinel',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+        });
+        const other =
+          mode === 'two-run'
+            ? await harness.store.createWorkflowRun({
+                workflow_name: 'other',
+                user_message: '',
+                codebase_id: CONFORMANCE_CODEBASE_ID,
+                parent_run_id: cyclic.id,
+              })
+            : null;
+        const healthy = await harness.store.createWorkflowRun({
+          workflow_name: 'healthy',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+        });
+        if (other !== null) {
+          await harness.store.claimPendingWorkflowRun(other.id);
+          await harness.store.completeWorkflowRun(other.id, { duration_ms: 1 });
+        }
+        await harness.store.failWorkflowRun(cyclic.id, 'failed');
+        await harness.store.failWorkflowRun(healthy.id, 'failed');
+        await backdate(harness, healthy.id, 1);
+        await harness.db.query(
+          'UPDATE remote_agent_workflow_runs SET parent_run_id = $1 WHERE id = $2',
+          [other?.id ?? cyclic.id, cyclic.id]
+        );
+        setLogSink(line => logs.push(line));
+        expect(await openWorkIds(harness, 1)).toEqual([healthy.id]);
+        expect(logs.map(line => JSON.parse(line))).toContainEqual(
+          expect.objectContaining({
+            msg: 'open_work_ancestry_cycle',
+            workflowRunId: cyclic.id,
+            ancestorRunId: cyclic.id,
+          })
+        );
+        expect(logs.join('')).not.toContain('private-cycle-sentinel');
+        expect((await harness.store.getWorkflowRun(cyclic.id))?.parent_run_id).toBe(
+          other?.id ?? cyclic.id
+        );
+      } finally {
+        setLogSink(undefined);
+        rootLogger.level = previousLevel;
+        await harness.close();
+      }
+    }
+  );
+
+  test('open work contains an older unreadable candidate before applying a small limit', async () => {
+    const harness = await makeHarness();
+    try {
+      const older = await harness.store.createWorkflowRun({
+        workflow_name: 'older',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+      });
+      const healthy = await harness.store.createWorkflowRun({
+        workflow_name: 'healthy',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+      });
+      for (const id of [older.id, healthy.id]) await harness.store.failWorkflowRun(id, 'failed');
+      await backdate(harness, older.id, 1);
+      await harness.db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+        JSON.stringify({ conversationId: 7 }),
+        older.id,
+      ]);
+      expect(await openWorkIds(harness, 1)).toEqual([healthy.id]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test.each(['origin', 'status'] as const)(
+    'open work contains an unreadable ancestor %s and names its affected runs',
+    async field => {
+      const harness = await makeHarness();
+      const logs: string[] = [];
+      const previousLevel = rootLogger.level;
+      const previousSqlLevel = workflowRunLog().level;
+      rootLogger.level = 'error';
+      workflowRunLog().level = 'error';
+      try {
+        const parent = await startOnItem(harness);
+        const child = await createOnItem(harness, parent);
+        const grandchild = await createOnItem(harness, child);
+        const healthy = await harness.store.createWorkflowRun({
+          workflow_name: 'healthy',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+        });
+        await harness.store.completeWorkflowRun(parent, { duration_ms: 1 });
+        for (const id of [child, grandchild, healthy.id])
+          await harness.store.failWorkflowRun(id, 'failed');
+        await backdate(harness, healthy.id, 1);
+        expect((await openWorkIds(harness)).sort()).toEqual([child, grandchild, healthy.id].sort());
+        await harness.db.query(
+          `UPDATE remote_agent_workflow_runs SET ${field} = $1 WHERE id = $2`,
+          [
+            field === 'origin'
+              ? '{"conversationId":{"private":"private-sentinel"}}'
+              : 'private-sentinel',
+            parent,
+          ]
+        );
+        setLogSink(line => logs.push(line));
+        expect(await harness.store.getWorkflowRunForAttention(parent)).toEqual({
+          type: 'degraded',
+          reason: 'run_unreadable',
+          runId: parent,
+        });
+        expect(logs.map(line => JSON.parse(line))).toContainEqual(
+          expect.objectContaining({
+            msg: 'attention_run_normalization_failed',
+            workflowRunId: parent,
+          })
+        );
+        expect((await openWorkIds(harness)).sort()).toEqual([child, grandchild, healthy.id].sort());
+        const named = logs.flatMap(line => {
+          const record: unknown = JSON.parse(line);
+          return typeof record === 'object' &&
+            record !== null &&
+            'workflowRunId' in record &&
+            'ancestorRunId' in record &&
+            record.ancestorRunId === parent
+            ? [record.workflowRunId]
+            : [];
+        });
+        expect(named.sort()).toEqual([child, grandchild].sort());
+        expect(logs.join('')).not.toContain('private-sentinel');
+      } finally {
+        setLogSink(undefined);
+        rootLogger.level = previousLevel;
+        workflowRunLog().level = previousSqlLevel;
+        await harness.close();
+      }
+    }
+  );
+
+  test('an unreadable end keeps failed roots and descendants in open work', async () => {
+    const harness = await makeHarness();
+    try {
+      const parent = await startOnItem(harness);
+      const child = await startOnItem(harness, parent);
+      await harness.store.failWorkflowRun(child, 'child failed');
+      await harness.store.failWorkflowRun(parent, 'parent failed');
+      const recorded = await recordItemEnd(harness.store, end, operator, 'cli');
+      expect(await openWorkIds(harness)).toEqual([]);
+
+      await harness.db.query('UPDATE remote_agent_item_ends SET reason = $1 WHERE id = $2', [
+        '',
+        recorded.id,
+      ]);
+      expect(await holding(harness)).toEqual({
+        type: 'degraded',
+        reason: 'end_unreadable',
+        endId: recorded.id,
+      });
+      expect((await openWorkIds(harness)).sort()).toEqual([parent, child].sort());
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('open work excludes a holding end before its limit and returns when a new run opens the item', async () => {
+    const harness = await makeHarness();
+    try {
+      const withoutItem = await harness.store.createWorkflowRun({
+        workflow_name: 'deliver',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+      });
+      await harness.store.claimPendingWorkflowRun(withoutItem.id);
+      await harness.store.failWorkflowRun(withoutItem.id, 'unrelated failure');
+      await backdate(harness, withoutItem.id, 1);
+      const ended = await startOnItem(harness);
+      await harness.store.failWorkflowRun(ended, 'boom');
+      expect(await openWorkIds(harness, 1)).toEqual([ended]);
+
+      await recordItemEnd(harness.store, end, operator, 'cli');
+      // The ended run is newer: filtering after the store's limit would return no run here.
+      expect(await openWorkIds(harness, 1)).toEqual([withoutItem.id]);
+
+      const reopened = await startOnItem(harness);
+      await harness.store.failWorkflowRun(reopened, 'boom again');
+      expect((await openWorkIds(harness)).sort()).toEqual([reopened, ended, withoutItem.id].sort());
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('an end takes an old stop out of attention and outlasts deleting runs', async () => {
     const harness = await makeHarness();
     try {
@@ -367,8 +580,10 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
   test('a start queued on an ended item opens it before its run exists', async () => {
     const harness = await makeHarness();
     try {
-      await stopOnItem(harness);
+      const failed = await startOnItem(harness);
+      await harness.store.failWorkflowRun(failed, 'boom');
       await recordItemEnd(harness.store, end, operator, 'cli');
+      expect(await openWorkIds(harness)).toEqual([]);
       // A start on another item holds the resource, so the start on this item queues.
       const { start } = starts(harness);
       const holder = (await start('other', {})).result;
@@ -376,6 +591,7 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       if (holder?.status !== 'admitted' || queued?.status !== 'queued')
         throw new Error('Expected one admitted start and one queued');
       expect(await holding(harness)).toBeNull();
+      expect(await openWorkIds(harness)).toEqual([failed]);
     } finally {
       await harness.close();
     }
@@ -389,10 +605,12 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
       await recordItemEnd(harness.store, end, operator, 'cli');
       expect(await holding(harness)).not.toBeNull();
       expect(await harness.store.getWorkflowRunStatus(failed)).toBe('failed');
+      expect(await openWorkIds(harness)).toEqual([]);
       await harness.store.resumeWorkflowRun(failed);
       expect(await holding(harness)).toBeNull();
       await harness.store.failWorkflowRun(failed, 'boom again');
       expect(await holding(harness)).toBeNull();
+      expect(await openWorkIds(harness)).toEqual([failed]);
     } finally {
       await harness.close();
     }
@@ -450,19 +668,36 @@ export function describeSqlItemEndConformance(makeHarness: () => Promise<Harness
     }
   });
 
-  test("resuming a failed run below the item's runs opens the item", async () => {
+  test('open work excludes ended descendants, keeps itemless descendants, and returns after a descendant resumes', async () => {
     const harness = await makeHarness();
     try {
+      const itemless = await harness.store.createWorkflowRun({
+        workflow_name: 'deliver',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+      });
+      const itemlessChild = await startOnItem(harness, itemless.id);
+      await harness.store.failWorkflowRun(itemlessChild, 'itemless child failed');
+      await harness.store.failWorkflowRun(itemless.id, 'itemless root failed');
+      await backdate(harness, itemless.id, 1);
+      await backdate(harness, itemlessChild, 1);
       const parent = await startOnItem(harness);
       const child = await startOnItem(harness, parent);
+      const grandchild = await startOnItem(harness, child);
+      await harness.store.failWorkflowRun(grandchild, 'grandchild failed');
       await harness.store.failWorkflowRun(child, 'child failed');
       await harness.store.failWorkflowRun(parent, 'parent failed');
       await recordItemEnd(harness.store, end, operator, 'cli');
       expect(await holding(harness)).not.toBeNull();
-      await harness.store.resumeWorkflowRun(child);
+      expect((await openWorkIds(harness)).sort()).toEqual([itemless.id, itemlessChild].sort());
+      expect(await openWorkIds(harness, 1)).toHaveLength(1);
+      await harness.store.resumeWorkflowRun(grandchild);
       expect(await holding(harness)).toBeNull();
-      await harness.store.failWorkflowRun(child, 'child failed again');
+      await harness.store.failWorkflowRun(grandchild, 'grandchild failed again');
       expect(await holding(harness)).toBeNull();
+      expect((await openWorkIds(harness)).sort()).toEqual(
+        [parent, child, grandchild, itemless.id, itemlessChild].sort()
+      );
     } finally {
       await harness.close();
     }

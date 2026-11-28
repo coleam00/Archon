@@ -1,5 +1,5 @@
 // @archon-test-isolated
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { WorkflowStatusReadError } from './workflow-run-status';
 import { mockWorkflowRun } from '../test/mocks/workflow-run';
@@ -21,6 +21,7 @@ import {
   findOpenWorkRuns,
   findAdoptingRuns,
 } from './workflow-run-lists';
+import { getLog } from './workflow-run-shared';
 
 describe('workflow run lists', () => {
   beforeEach(() => {
@@ -339,9 +340,59 @@ describe('workflow run lists', () => {
     });
   });
 
-  // Open-work inbox (#2747): the query IS the semantics — terminal failed runs
-  // with no adopting successor — so assert the statement's shape.
   describe('open-work inbox', () => {
+    test.each([new Date(NaN), 'not-a-date'])(
+      'excludes an unreadable required start time without hiding healthy runs',
+      async started_at => {
+        const healthy = { ...mockWorkflowRun, id: 'healthy', status: 'failed' as const };
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([{ ...healthy, id: 'bad-time', started_at }, healthy])
+        );
+        const log = spyOn(getLog(), 'error').mockImplementation(() => {});
+        try {
+          expect(await findOpenWorkRuns({ limit: null })).toEqual([healthy]);
+          expect(log.mock.calls).toEqual([
+            [{ workflowRunId: 'bad-time' }, 'open_work_run_normalization_failed'],
+          ]);
+        } finally {
+          log.mockRestore();
+        }
+      }
+    );
+
+    test.each([
+      '{"private-origin-sentinel":',
+      JSON.stringify({ conversationId: 7, private: 'private-origin-sentinel' }),
+    ])('excludes an unreadable candidate while preserving healthy runs', async origin => {
+      const healthyRoot = { ...mockWorkflowRun, id: 'healthy-root', status: 'failed' as const };
+      const healthyChild = {
+        ...healthyRoot,
+        id: 'healthy-child',
+        parent_run_id: healthyRoot.id,
+      };
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          healthyRoot,
+          { ...healthyRoot, id: 'unreadable-run', origin },
+          healthyChild,
+        ])
+      );
+      const log = spyOn(getLog(), 'error').mockImplementation(() => {});
+      try {
+        expect(await findOpenWorkRuns({ limit: null })).toEqual([healthyRoot, healthyChild]);
+        expect(log.mock.calls).toEqual([
+          [{ workflowRunId: 'unreadable-run' }, 'open_work_run_normalization_failed'],
+        ]);
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    test('findOpenWorkRuns still rejects a query failure', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('offline'));
+      await expect(findOpenWorkRuns({ limit: null })).rejects.toThrow('offline');
+    });
+
     test('findOpenWorkRuns filters to failed runs with no adopter', async () => {
       let capturedSql = '';
       mockQuery.mockImplementationOnce((...args: unknown[]) => {

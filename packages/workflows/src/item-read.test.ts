@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import { readRunItemId, WorkflowRunAncestryCycleError } from './item-of-run';
 import { heldRunOf } from './attention-queue';
 import type { ResourceStartRequestInspection } from './resource-start-store';
 import type { ItemMerge } from './schemas/item-merge';
@@ -41,6 +42,26 @@ function run(id: string, fields: Partial<WorkflowRun> = {}): WorkflowRun {
     ...fields,
   };
 }
+
+test('root item resolution rejects a distinct-run cycle before a repeated read', async () => {
+  const first = run('cycle-first', { parent_run_id: 'cycle-second', item_id: null });
+  const second = run('cycle-second', { parent_run_id: first.id, item_id: null });
+  const visited = new Set([first.id]);
+  const repeatedRead = new Error('Repeated ancestry read');
+  const result = readRunItemId(
+    {
+      getWorkflowRun: async id => {
+        if (visited.has(id)) throw repeatedRead;
+        visited.add(id);
+        return id === second.id ? second : first;
+      },
+    },
+    first
+  );
+  await expect(result).rejects.toBeInstanceOf(WorkflowRunAncestryCycleError);
+  await expect(result).rejects.toMatchObject({ ancestorRunId: first.id });
+  await expect(result).rejects.not.toBe(repeatedRead);
+});
 
 function asking(id: string, since: string, fields: Partial<WorkflowRun>): WorkflowRun {
   return run(id, {
@@ -817,6 +838,64 @@ describe('reading an item', () => {
     expect((await readItemOfRun(deeper, 'grandchild'))?.item).toEqual(item);
     expect(await readItemOfRun(source, 'unrelated')).toBeNull();
     expect(await readItemOfRun(source, 'missing')).toBeNull();
+    expect(
+      await readItemOfRun(
+        { ...source, store: { ...source.store, getItem: async () => null } },
+        'child'
+      )
+    ).toBeNull();
+    expect(
+      await readItemOfRun(
+        {
+          ...source,
+          store: {
+            ...source.store,
+            getWorkflowRun: async id => (id === 'child' ? child : null),
+          },
+        },
+        'child'
+      )
+    ).toBeNull();
+  });
+
+  test('an explicit item read rejects an unreadable ancestor', async () => {
+    const unreadable = new Error('Unreadable ancestor');
+    await expect(
+      readItemOfRun(
+        {
+          ...source,
+          store: {
+            ...source.store,
+            getWorkflowRun: async id => {
+              if (id === 'child') return child;
+              throw unreadable;
+            },
+          },
+        },
+        'child'
+      )
+    ).rejects.toBe(unreadable);
+  });
+
+  test('an explicit item read rejects cyclic ancestry before repeating a read', async () => {
+    const cyclic = run('cyclic', { parent_run_id: 'cyclic', item_id: null });
+    const repeatedRead = new Error('Repeated ancestry read');
+    let reads = 0;
+    const result = readItemOfRun(
+      {
+        ...source,
+        store: {
+          ...source.store,
+          getWorkflowRun: async () => {
+            if (++reads > 1) throw repeatedRead;
+            return cyclic;
+          },
+        },
+      },
+      cyclic.id
+    );
+    await expect(result).rejects.toBeInstanceOf(Error);
+    await expect(result).rejects.not.toBe(repeatedRead);
   });
 
   test('a run the store could not read is reported, and the rest of the item still reads', async () => {

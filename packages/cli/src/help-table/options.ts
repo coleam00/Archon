@@ -273,7 +273,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--open',
     description:
-      "For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded",
+      "For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded; items whose end holds are left out",
     owners: [{ command: 'workflow', subcommand: 'runs' }],
   },
   {

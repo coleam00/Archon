@@ -1,6 +1,8 @@
 import {
   mockGetWorkflowRun,
   mockListWorkflowRuns,
+  mockFindOpenWorkRuns,
+  mockGetHoldingItemEnd,
   mockListDashboardRuns,
   mockGetWorkflowRunByWorkerPlatformId,
   mockListWorkflowEvents,
@@ -278,6 +280,84 @@ describe('GET /api/workflows/runs', () => {
 
     const [callArgs] = mockListWorkflowRuns.mock.calls[0] ?? [];
     expect(callArgs?.limit).toBe(50);
+  });
+
+  test('open work excludes an ended item before applying the requested limit', async () => {
+    const ended = {
+      ...MOCK_FAILED_RUN,
+      id: 'run-ended',
+      item_id: 'item-ended',
+      last_activity_at: NOW_DATE,
+    };
+    const withoutItem = { ...ended, id: 'run-without-item', item_id: null };
+    mockFindOpenWorkRuns.mockResolvedValueOnce([ended, withoutItem]);
+    mockGetHoldingItemEnd.mockResolvedValueOnce({
+      kind: 'ended',
+      id: 'end-1',
+      reason: 'Done elsewhere.',
+      at: NOW_DATE.toISOString(),
+      via: 'api',
+      by: { declared: 'maintainer' },
+      fromRun: null,
+    });
+
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs?open=true&limit=1&codebaseId=cb-open');
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { runs: Array<{ id: string }> };
+    expect(body.runs.map(run => run.id)).toEqual(['run-without-item']);
+    expect(mockFindOpenWorkRuns).toHaveBeenCalledWith({ codebaseId: 'cb-open', limit: null });
+    expect(mockGetHoldingItemEnd).toHaveBeenCalledWith('item-ended');
+    expect(mockListWorkflowRuns).not.toHaveBeenCalled();
+  });
+
+  test('ordinary listing keeps invalid-limit fallback', async () => {
+    mockFindOpenWorkRuns.mockClear();
+    mockListWorkflowRuns.mockResolvedValueOnce([MOCK_FAILED_RUN]);
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs?limit=invalid');
+
+    expect(response.status).toBe(200);
+    const body = z.object({ runs: z.array(apiWorkflowRunSchema) }).parse(await response.json());
+    expect(body.runs.map(run => run.id)).toEqual([MOCK_FAILED_RUN.id]);
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith(expect.objectContaining({ limit: 50 }));
+    expect(mockFindOpenWorkRuns).not.toHaveBeenCalled();
+  });
+
+  test.each(['1.5', '0.5', '200.5', '0', '-1', 'Infinity', 'invalid', ''])(
+    'open work rejects invalid limit %s before reading candidates',
+    async limit => {
+      mockFindOpenWorkRuns.mockClear();
+      mockListWorkflowRuns.mockClear();
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs?open=true&limit=${limit}`);
+
+      expect(response.status).toBe(400);
+      expect(mockFindOpenWorkRuns).not.toHaveBeenCalled();
+      expect(mockListWorkflowRuns).not.toHaveBeenCalled();
+    }
+  );
+
+  test.each([
+    ['', 50],
+    ['&limit=2', 2],
+    ['&limit=9999', 200],
+  ] as const)('open work bounds eligible results for query %s', async (query, expected) => {
+    mockFindOpenWorkRuns.mockResolvedValueOnce(
+      Array.from({ length: 201 }, (_, index) => ({
+        ...MOCK_FAILED_RUN,
+        id: `run-${index}`,
+        item_id: null,
+        last_activity_at: NOW_DATE,
+      }))
+    );
+    const { app } = makeApp();
+    const response = await app.request(`/api/workflows/runs?open=true${query}`);
+
+    expect(response.status).toBe(200);
+    const body = z.object({ runs: z.array(apiWorkflowRunSchema) }).parse(await response.json());
+    expect(body.runs).toHaveLength(expected);
   });
 
   test('returns 500 when DB throws', async () => {

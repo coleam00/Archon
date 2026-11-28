@@ -278,17 +278,19 @@ export function createTransactionReads(
           .filter(isOutcomeUnknownRun)
           .sort((a, b) => a.started_at.getTime() - b.started_at.getTime())
       ),
-    findOpenWorkRuns: async options =>
-      structuredClone(
-        newestFirst(
-          [...runs.values()].filter(
-            run =>
-              (!options?.codebaseId || run.codebase_id === options.codebaseId) &&
-              run.status === 'failed' &&
-              ![...runs.values()].some(other => other.adopted_from_run_id === run.id)
-          )
-        ).slice(0, options?.limit ?? 50)
-      ),
+    findOpenWorkRuns: async options => {
+      const candidates = newestFirst(
+        [...runs.values()].filter(
+          run =>
+            (!options?.codebaseId || run.codebase_id === options.codebaseId) &&
+            run.status === 'failed' &&
+            ![...runs.values()].some(other => other.adopted_from_run_id === run.id)
+        )
+      );
+      return structuredClone(
+        options?.limit === null ? candidates : candidates.slice(0, options?.limit ?? 50)
+      );
+    },
     listWorkflowRuns: async (options): ReturnType<IWorkflowStore['listWorkflowRuns']> => {
       const parents =
         options?.parentRunIds === undefined ? undefined : new Set(options.parentRunIds);

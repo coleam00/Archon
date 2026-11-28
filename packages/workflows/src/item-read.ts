@@ -41,6 +41,7 @@ import { itemLandingUnresolvedSchema, resolvedItemLandingSchema } from './schema
 import { itemPrioritySchema } from './schemas/item-priority';
 import { itemEndDegradedSchema, itemEndSchema } from './schemas/item-end';
 import { readHoldingItemEnd } from './item-end';
+import { readRunItemId } from './item-of-run';
 import { ItemLandingUnresolvedError, resolveItemLanding } from './item-landing';
 import { itemDependencySchema, readDependsOn } from './item-depends-on';
 import { readWorkOrder } from './work-order';
@@ -848,9 +849,8 @@ export async function readItemOfRun(
   source: ItemReadSource,
   runId: string
 ): Promise<ItemRead | null> {
-  let run = await source.store.getWorkflowRun(runId);
-  while (run?.parent_run_id) run = await source.store.getWorkflowRun(run.parent_run_id);
-  if (!run?.item_id) return null;
-  const item = await source.store.getItem(run.item_id);
+  const itemId = await readRunItemId(source.store, runId);
+  if (itemId === null) return null;
+  const item = await source.store.getItem(itemId);
   return item === null ? null : readItem(source, item.projectKey, item.key);
 }

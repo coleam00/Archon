@@ -95,6 +95,9 @@ type ListWorkflowRunsOptions = Parameters<
 export const mockListWorkflowRuns = mock<
   (_options?: ListWorkflowRunsOptions) => Promise<MockWorkflowRun[]>
 >(async () => []);
+export const mockFindOpenWorkRuns = mock<
+  typeof import('@archon/core/db/workflows')['findOpenWorkRuns']
+>(async () => []);
 export const mockListAttentionQueueRows = mock(
   async (): Promise<AttentionRead<DashboardWorkflowRun>[]> => []
 );
@@ -410,6 +413,7 @@ mock.module('@archon/core/db/workflows', () => ({
   getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
   getWorkflowRunsByIds: mock(async () => []),
   listWorkflowRuns: mockListWorkflowRuns,
+  findOpenWorkRuns: mockFindOpenWorkRuns,
   listDashboardRuns: mockListDashboardRuns,
   listAttentionQueueRows: mockListAttentionQueueRows,
   getWorkflowRun: mockGetWorkflowRun,
@@ -516,9 +520,10 @@ mock.module('@archon/core/db/item-landings', () => ({
 }));
 type ItemEndsDb = typeof import('@archon/core/db/item-ends');
 export const mockRecordItemEnd = mock<ItemEndsDb['recordItemEnd']>(unexpected('recordItemEnd'));
+export const mockGetHoldingItemEnd = mock<ItemEndsDb['getHoldingItemEnd']>(async () => null);
 mock.module('@archon/core/db/item-ends', () => ({
   ...unusedItemEnds,
-  getHoldingItemEnd: mock(async () => null),
+  getHoldingItemEnd: mockGetHoldingItemEnd,
   recordItemEnd: mockRecordItemEnd,
 }));
 

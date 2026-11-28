@@ -63,6 +63,8 @@ describe('workflowRunsCommand', () => {
         started_at: new Date(),
         completed_at: new Date(),
         active_nodes: [],
+        item_id: null,
+        parent_run_id: null,
       }));
       const list = (
         open ? workflowDb.findOpenWorkRuns : workflowDb.listDashboardRuns
@@ -87,7 +89,10 @@ describe('workflowRunsCommand', () => {
         })
       ).toBe(0);
       expect(list).toHaveBeenCalledWith(
-        expect.objectContaining({ codebaseId: 'cb-throughput', limit: 2 })
+        expect.objectContaining({
+          codebaseId: 'cb-throughput',
+          limit: open ? null : 2,
+        })
       );
       expect(read).toHaveBeenCalledTimes(1);
       expect(read).toHaveBeenCalledWith(
@@ -146,6 +151,62 @@ describe('workflowRunsCommand', () => {
       }
     }
   );
+
+  it('omits an ended item from --open before applying the limit', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const host = createTestWorkflowHost();
+    const ended = {
+      id: 'run-ended',
+      workflow_name: 'work',
+      status: 'failed',
+      metadata: {},
+      started_at: new Date(),
+      completed_at: new Date(),
+      item_id: 'item-ended',
+      parent_run_id: null,
+    };
+    const withoutItem = { ...ended, id: 'run-without-item', item_id: null };
+    (workflowDb.findOpenWorkRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
+      ended,
+      withoutItem,
+      { ...withoutItem, id: 'second-eligible' },
+    ]);
+    const endRead = spyOn(host.deps.store, 'getHoldingItemEnd').mockResolvedValue({
+      kind: 'ended',
+      id: 'end-1',
+      reason: 'Done elsewhere.',
+      at: new Date().toISOString(),
+      via: 'cli',
+      by: { declared: 'maintainer' },
+      fromRun: null,
+    });
+    const starts = spyOn(host.deps.store, 'listItemStarts').mockResolvedValue([]);
+
+    try {
+      expect(
+        await workflowRunsCommand(host, '/test/path', {
+          all: true,
+          json: true,
+          open: true,
+          limit: 1,
+        })
+      ).toBe(0);
+      const result = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+        runs: Array<{ id: string }>;
+        total: number;
+      };
+      expect(result.runs.map(run => run.id)).toEqual(['run-without-item']);
+      expect(result.total).toBe(1);
+      expect(workflowDb.findOpenWorkRuns).toHaveBeenCalledWith({
+        codebaseId: undefined,
+        limit: null,
+      });
+      expect(endRead).toHaveBeenCalledWith('item-ended');
+    } finally {
+      endRead.mockRestore();
+      starts.mockRestore();
+    }
+  });
 
   it('reads a large requested page in bounded batches and reuses them for verbose detail', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
@@ -652,7 +713,14 @@ describe('workflowRunsCommand', () => {
       const workflowDb = await import('@archon/core/db/workflows');
       const eventsDb = await import('@archon/core/db/workflow-events');
       (workflowDb.findOpenWorkRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
-        { id: 'run-open', status: 'failed', metadata: {}, completed_at: null },
+        {
+          id: 'run-open',
+          status: 'failed',
+          metadata: {},
+          completed_at: null,
+          item_id: null,
+          parent_run_id: null,
+        },
       ]);
       (eventsDb.listEventsForRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
         new Error('database is locked')

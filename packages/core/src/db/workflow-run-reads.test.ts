@@ -17,6 +17,7 @@ mock.module('./connection', () => ({
 
 import {
   getWorkflowRun,
+  getWorkflowRunForAttention,
   getWorkflowRunStatus,
   getRunByIsolationEnvId,
   getRunIdsByIsolationEnvId,
@@ -55,6 +56,12 @@ describe('workflow run reads', () => {
 
       expect(result).toBeNull();
     });
+  });
+
+  test('attention point reads preserve query failures', async () => {
+    const failure = new Error('offline');
+    mockQuery.mockRejectedValueOnce(failure);
+    await expect(getWorkflowRunForAttention('run')).rejects.toBe(failure);
   });
 
   test.each([

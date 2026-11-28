@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { IWorkflowStore } from '../store';
 import type { WorkflowRun } from '../schemas/workflow-run';
+import { readRunItemId } from '../item-of-run';
 import { workflowNodeSessionSchema } from '../schemas/workflow-node-session';
 import { workflowRunNodeSessionSchema } from '../schemas/workflow-run-node-session';
 import type { WorkflowStoreHarness } from '../store-conformance';
@@ -302,6 +303,9 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       expect(
         (await store.findOpenWorkRuns({ codebaseId: CONFORMANCE_CODEBASE_ID })).map(run => run.id)
       ).toEqual([failed.id]);
+      expect((await store.findOpenWorkRuns({ limit: null })).map(run => run.id)).toEqual([
+        failed.id,
+      ]);
       const first = await create(store, { adopted_from_run_id: failed.id });
       await harness.backdate(first.id, { started_at: old });
       const second = await create(store, { adopted_from_run_id: failed.id });
@@ -310,6 +314,7 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
         first.id,
       ]);
       expect(await store.findOpenWorkRuns()).toEqual([]);
+      expect(await store.findOpenWorkRuns({ limit: null })).toEqual([]);
       const scope = { workflow_name: 'conformance', scope_key: 'cleanup' };
       await store.upsertWorkflowNodeSession({
         ...scope,
@@ -344,6 +349,51 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       });
       expect(await rejection(store.deleteOldWorkflowRuns(-1))).toBeInstanceOf(Error);
     });
+    test('open work with a null limit returns every candidate beyond the numeric default', async () => {
+      const expected: string[] = [];
+      for (let index = 0; index < 51; index++) {
+        const run = await create(store, { codebase_id: CONFORMANCE_CODEBASE_ID });
+        await store.failWorkflowRun(run.id, 'failed');
+        expected.push(run.id);
+      }
+      const runs = await store.findOpenWorkRuns({
+        codebaseId: CONFORMANCE_CODEBASE_ID,
+        limit: null,
+      });
+      expect(runs.map(run => run.id).sort()).toEqual(expected.sort());
+      expect(await store.findOpenWorkRuns({ codebaseId: CONFORMANCE_CODEBASE_ID })).toHaveLength(
+        50
+      );
+      expect(
+        await store.findOpenWorkRuns({ codebaseId: CONFORMANCE_CODEBASE_ID, limit: 3 })
+      ).toHaveLength(3);
+    });
+    test.each(['run', 'id'] as const)(
+      'root item resolution rejects cyclic ancestry from a persisted %s',
+      async entry => {
+        const id = crypto.randomUUID();
+        const cycle = await create(store, { id, parent_run_id: id });
+        const child = await create(store, { parent_run_id: cycle.id });
+        await store.failWorkflowRun(cycle.id, 'failed');
+        await store.failWorkflowRun(child.id, 'failed');
+        const candidates = await store.findOpenWorkRuns({ limit: null });
+        expect(candidates.map(run => run.id).sort()).toEqual([cycle.id, child.id].sort());
+        for (const run of candidates) {
+          let reads = 0;
+          const stop = new Error('repeated ancestry reads');
+          const observed = {
+            getWorkflowRun: async (runId: string) => {
+              if (++reads > 3) throw stop;
+              return store.getWorkflowRun(runId);
+            },
+          };
+          const error = await rejection(readRunItemId(observed, entry === 'id' ? run.id : run));
+          expect(error).toBeInstanceOf(Error);
+          expect(error).not.toBe(stop);
+          expect(reads).toBeLessThanOrEqual(entry === 'id' ? 2 : 1);
+        }
+      }
+    );
     test('cleanup keeps an old tree while a run in it is live and removes it once it ends', async () => {
       const old = new Date(Date.now() - 10 * 86_400_000);
       const finish = (id: string) => store.completeWorkflowRun(id, { duration_ms: 1 });

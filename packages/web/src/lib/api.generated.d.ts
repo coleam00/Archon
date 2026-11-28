@@ -3750,6 +3750,15 @@ export interface paths {
             'application/json': components['schemas']['WorkflowRunListResponse'];
           };
         };
+        /** @description Invalid limit */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {

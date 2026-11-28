@@ -2,6 +2,7 @@ import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
+import { readOpenWorkRuns } from '@archon/core/operations/open-work';
 import { observeRunOwner } from '@archon/core/services/run-attention-watch';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';
@@ -68,6 +69,7 @@ const listWorkflowRunsRoute = createRoute({
       content: { 'application/json': { schema: workflowRunListResponseSchema } },
       description: 'OK',
     },
+    400: jsonError('Invalid limit'),
     500: jsonError('Server error'),
   },
 });
@@ -177,11 +179,13 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
       const mine = c.req.query('mine') === 'true';
       const userId = mine ? (await resolveAuthContext(c))?.userId : undefined;
 
-      // Open-work inbox (#2747): a status-derived query, not a stored flag —
-      // terminal failed runs with no adopter/successor. Mutually exclusive with
-      // the other filters by contract; the inbox wins when combined.
+      // Open-work inbox (#2747): failed runs with no adopter/successor or holding item end.
+      // Mutually exclusive with the other filters by contract; the inbox wins when combined.
       if (c.req.query('open') === 'true') {
-        const openRuns = await workflowDb.findOpenWorkRuns({ codebaseId, limit });
+        if (c.req.query('limit') !== undefined && (!Number.isInteger(limitRaw) || limitRaw < 1)) {
+          return apiError(c, 400, 'Limit must be a positive integer');
+        }
+        const openRuns = await readOpenWorkRuns(createWorkflowStore(), { codebaseId, limit });
         return c.json({ runs: openRuns.map(toApiWorkflowRun) });
       }
 
