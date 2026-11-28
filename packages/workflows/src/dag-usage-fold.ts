@@ -227,12 +227,17 @@ function isReportedTokens(
   );
 }
 
+/** What kind of thing a value that failed its shape check is, for a warning that must not repeat it. */
+function typeOf(value: unknown): string {
+  return value === null ? 'null' : typeof value;
+}
+
 function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsage | undefined {
   if (!isReportedTokens(tokens)) {
     // The value failed its shape check, so it may be any text a provider or an older binary
     // wrote. Log what kind of thing it is, not the thing.
     getLog().warn(
-      { runId, stepName, tokenType: tokens === null ? 'null' : typeof tokens },
+      { runId, stepName, tokenType: typeOf(tokens) },
       'db.workflow_dag_node_tokens_invalid_ignored'
     );
     return undefined;
@@ -245,7 +250,7 @@ function readTokens(runId: string, stepName: string, tokens: unknown): TokenUsag
       normalized[axis] = value;
     } else {
       getLog().warn(
-        { runId, stepName, axis, valueType: value === null ? 'null' : typeof value },
+        { runId, stepName, axis, valueType: typeOf(value) },
         'db.workflow_dag_node_optional_tokens_invalid_ignored'
       );
     }
@@ -267,7 +272,7 @@ function readCost(runId: string, stepName: string, costUsd: unknown): number | u
   // cost from the persisted metadata with no trace).
   if (typeof costUsd === 'number' && Number.isFinite(costUsd)) return costUsd;
   getLog().warn(
-    { runId, stepName, costType: costUsd === null ? 'null' : typeof costUsd },
+    { runId, stepName, costType: typeOf(costUsd) },
     'db.workflow_dag_node_cost_invalid_ignored'
   );
   return undefined;
