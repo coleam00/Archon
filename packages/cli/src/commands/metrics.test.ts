@@ -156,6 +156,21 @@ test('--subject reports only that subject', async () => {
   expect([instrument?.n, instrument?.latest.subject]).toEqual([1, 'pr-1']);
 });
 
+test('shows the score median beside the mean for an uneven window', async () => {
+  const { invoke, stdout } = await fixture(
+    [60, 120, 1380].map(value => ({
+      kind: 'score',
+      unit: 'minutes',
+      value,
+      subject: String(value),
+    }))
+  );
+  expect(await invoke({})).toBe(0);
+  const text = stdout.join('');
+  expect(text).toContain('mean 520  n 3');
+  expect(text).toContain('median 120');
+});
+
 test('--compare splits by run start, prints both cohorts and labels the comparison observational', async () => {
   const score = { kind: 'score', unit: 'ratio' };
   const { invoke, stdout } = await fixture([
@@ -164,7 +179,7 @@ test('--compare splits by run start, prints both cohorts and labels the comparis
   ]);
   expect(await invoke({ compare: '2026-01-01' })).toBe(0);
   const text = stdout.join('');
-  expect(text).toContain('factory.prs_merged  score/ratio  value 0.5  n 2  95% [');
+  expect(text).toContain('factory.prs_merged  score/ratio  mean 0.5  n 2  95% [');
   expect(text).toContain('cost no cost recorded, no tokens recorded over 2 runs found');
   expect(text).toContain(
     'compare at 2026-01-01T00:00:00.000Z: before none (n 0), after 0.5 (n 2  95% ['
@@ -287,10 +302,10 @@ test('the headline is the newest judge model, and each instrument line names its
   expect(await invoke({})).toBe(0);
   const lines = stdout.join('').split('\n');
   expect(lines[1]).toBe(
-    'factory.prs_merged  score/ratio  value 0.8  n 1  latest 0.8 at 2026-10-29T00:00:00.000Z (pr-1)  [judge-v1 on codex/gpt-6.1-sol]'
+    'factory.prs_merged  score/ratio  mean 0.8  n 1  median 0.8  latest 0.8 at 2026-10-29T00:00:00.000Z (pr-1)  [judge-v1 on codex/gpt-6.1-sol]'
   );
   expect(lines).toContain(
-    '  judge-v1 on claude/claude-opus-5-5: value 0.2  n 1  latest 0.2 at 2026-10-28T00:00:00.000Z (pr-1)'
+    '  judge-v1 on claude/claude-opus-5-5: mean 0.2  n 1  median 0.2  latest 0.2 at 2026-10-28T00:00:00.000Z (pr-1)'
   );
 });
 
@@ -320,7 +335,7 @@ test('a headline judge label containing a comma is not two labels', async () => 
   }
   expect(await invoke({})).toBe(0);
   const lines = stdout.join('').split('\n');
-  expect(lines[1]).toContain('value 0.8');
+  expect(lines[1]).toContain('mean 0.8');
   expect(lines[1]).toContain('[judge-v1 on codex/a,codex/b]');
 });
 

@@ -164,7 +164,13 @@ interface CostCoverage {
   runsWithCost: number;
 }
 
-export type CardModel = CountCard | RatioCard | CostPerCard;
+export type ScoreCard = { shape: 'score'; title: string } & (
+  | { state: 'not_recorded' }
+  | { state: 'unavailable'; reason: string }
+  | { state: 'value'; figure: string; statistic: ViewOf<'score'>['statistic']; n: number }
+);
+
+export type CardModel = CountCard | RatioCard | CostPerCard | ScoreCard;
 
 export function buildCard(
   view: MetricView,
@@ -173,7 +179,40 @@ export function buildCard(
 ): CardModel {
   if (view.shape === 'count') return countCard(view, report);
   if (view.shape === 'ratio') return ratioCard(view, report, calibrations);
+  if (view.shape === 'score') return scoreCard(view, report);
   return costPerCard(view, report);
+}
+
+function scoreCard(view: ViewOf<'score'>, report: MetricsReport): ScoreCard {
+  const base = { shape: 'score', title: view.title } as const;
+  const metric = find(report, view.metric);
+  if (metric === undefined) return { ...base, state: 'not_recorded' };
+  if (metric.kind !== 'score' || metric.unit !== view.unit) {
+    return { ...base, state: 'unavailable', reason: `expected a score in ${view.unit}` };
+  }
+  const main = headlineOf(metric);
+  if (main === undefined || main.n === 0) return { ...base, state: 'not_recorded' };
+  const value = view.statistic === 'mean' ? main.value : main.median;
+  if (value === undefined) return { ...base, state: 'unavailable', reason: 'median unavailable' };
+  return {
+    ...base,
+    state: 'value',
+    figure: formatScore(value, view.unit),
+    statistic: view.statistic,
+    n: main.n,
+  };
+}
+
+function formatScore(value: number, unit: string): string {
+  if (unit !== 'minutes' && unit !== 'min') return formatValue(value, unit);
+  // Round before splitting so a mean of 119.999 minutes reads 2 h, never 1 h 60 min.
+  const roundedMinutes = Number(value.toFixed(2));
+  const hours = Math.trunc(roundedMinutes / 60);
+  if (hours === 0) return `${formatNumber(value)} min`;
+  const minutes = Math.abs(roundedMinutes % 60);
+  return minutes === 0
+    ? `${formatNumber(hours)} h`
+    : `${formatNumber(hours)} h ${formatNumber(minutes)} min`;
 }
 
 export function countCard(view: ViewOf<'count'>, report: MetricsReport): CountCard {
@@ -313,7 +352,9 @@ export function declaredMetrics(views: MetricViews): string[] {
         return [view.metric, ...(view.breakdown ?? []).map(({ metric }) => metric)];
       }
       if (view.shape === 'ratio') return [view.numerator, view.denominator];
-      return view.cost_of === undefined ? [view.metric] : [view.metric, view.cost_of];
+      if (view.shape === 'cost_per' && view.cost_of !== undefined)
+        return [view.metric, view.cost_of];
+      return [view.metric];
     })
   );
   return [...new Set(names)];

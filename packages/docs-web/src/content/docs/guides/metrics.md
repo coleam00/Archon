@@ -440,7 +440,7 @@ archon metrics --project acme/widgets
 curl 'http://localhost:3090/api/metrics?name=repo.commits&since=7d'
 ```
 
-Each metric reports its `value` (the sum or the mean), `n` (the records counted), its
+Each metric reports its `value` (the sum or the mean), `median` for scores, `n` (the records counted), its
 `interval`, the `cost` of its producing runs, its latest record and a daily `series`, per
 instrument and `measured_by`, a `compare` block when a cut is given without a dimension
 key, a `by_model` block when a node is, and a `by_dimension` block when a dimension key
@@ -496,6 +496,13 @@ declared without knowing any pack's metric names.
       }
     },
     {
+      "shape": "score",
+      "title": "Time to land",
+      "metric": "factory.time_to_land",
+      "statistic": "median",
+      "unit": "minutes"
+    },
+    {
       "shape": "cost_per",
       "title": "Cost per PR",
       "metric": "factory.prs_merged",
@@ -506,19 +513,20 @@ declared without knowing any pack's metric names.
 ```
 
 `names` gives the Details screen plain names for metric ids. `cards` holds one to six cards,
-each one of three shapes:
+each with one of the following shapes:
 
 | Shape | Shows |
 |-------|-------|
 | `count` | The metric's value, and up to four `breakdown` counts as "12 opened". |
 | `ratio` | `numerator` as a share of `denominator`, with a bar and "3 of 12 new tests". With a `calibration`, adds "judge catches 9 of 10", and a "rough" pill while the calibration's mean is below `rough_below`. |
+| `score` | The `median` or `mean` selected by `statistic`, using the newest instrument for the metric. Set `unit` to the unit on the records. For example, `"unit": "minutes"` displays 120 as “2 h”. An empty window shows “no records in this window”. |
 | `cost_per` | The known cost of the metric's producing runs per counted item. With `cost_of`, the cost is that metric's producing runs instead, so cost per merged PR can carry the cost of PRs that never merged. |
 
 Every figure on a card comes from one instrument identity: the card's metric's newest
 instrument and its `measured_by`. A breakdown count or a denominator recorded only by another
-instrument shows "not recorded", never 0, and so does a `cost_of` metric. Every metric a card
-counts (`metric`, `breakdown`, `numerator`, `denominator`, `cost_of`) must be a `count`; a
-`score` there shows "not recorded" too. A calibration is a score metric that `calibrates`
+instrument shows "not recorded", never 0, and so does a `cost_of` metric. On `count`, `ratio` and `cost_per` cards, the
+counted fields (`metric`, `breakdown`, `numerator`, `denominator`, `cost_of`) each require
+a count instrument. A score in one of those fields shows "not recorded". A calibration is a score metric that `calibrates`
 the numerator with one record per labelled case, 1 when caught and 0 when missed; it counts
 only at exactly the numerator's identity and with a mean between 0 and 1, otherwise the card
 says "not calibrated". The calibration is read from the last 365 days of records, which load

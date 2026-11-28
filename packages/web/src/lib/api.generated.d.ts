@@ -12822,6 +12822,7 @@ export interface components {
           instrument: string | null;
           measured_by: string[];
           value: number;
+          median?: number;
           n: number;
           interval: {
             low: number;
@@ -13150,6 +13151,15 @@ export interface components {
               title: string;
               metric: string;
               cost_of?: string;
+            }
+          | {
+              /** @enum {string} */
+              shape: 'score';
+              title: string;
+              metric: string;
+              /** @enum {string} */
+              statistic: 'mean' | 'median';
+              unit: string;
             }
         )[];
       }[];

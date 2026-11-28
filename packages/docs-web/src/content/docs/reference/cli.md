@@ -3111,7 +3111,7 @@ in its output's `metric_dimensions`; with `--compare`, each value is compared on
 `--by-dimension` cannot be combined.
 
 Text output prints one line per metric for its newest instrument: name, kind and unit,
-`value` (the sum for a `count`, the mean for a `score`), `n`, the 95% interval for a score
+`value` (the sum for a `count`, the mean for a `score`), `median` for scores, `n`, the 95% interval for a score
 of at least two records, the latest record, and the instrument with the models that ran its
 `instrument_node`, such as `[judge-v1 on claude/claude-opus-5-5@high]`. An indented line
 gives the cost and tokens of the producing runs, with how many runs recorded no cost, no

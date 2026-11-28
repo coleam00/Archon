@@ -1,6 +1,6 @@
 /**
- * Two-sided 95% intervals for metric aggregates and for the difference between two
- * groups. Pure functions; callers decide when a sample is too small to report one.
+ * Summary statistics and two-sided 95% intervals for metric aggregates and differences
+ * between groups. Pure functions; callers decide when a sample is too small to report one.
  */
 
 export interface Interval {
@@ -25,6 +25,13 @@ export function wilsonInterval(successes: number, n: number): Interval {
   const center = (p + z2 / (2 * n)) / denominator;
   const half = (Z / denominator) * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
   return { low: Math.max(0, center - half), high: Math.min(1, center + half) };
+}
+
+/** Median of a non-empty sample, averaging the two middle values for an even sample. */
+export function median(values: readonly number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
 /** mean ± t(0.975, n−1) · s / √n; `values` needs at least two entries. */

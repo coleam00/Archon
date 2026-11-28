@@ -60,6 +60,23 @@ test('a project pack replaces a same-named bundled pack and sits beside other sc
   expect(listing.packs[1]?.names).toEqual({ 'factory.items': 'Items' });
 });
 
+test('a pack declares a score card with a statistic and a metric unit', async () => {
+  const declared = {
+    shape: 'score',
+    title: 'Time per item',
+    metric: 'factory.minutes',
+    statistic: 'median',
+    unit: 'minutes',
+  } as const;
+  await write(declaration(join(roots.globalWorkflows, 'scores')), { cards: [declared] });
+  await write(declaration(join(roots.globalWorkflows, 'invalid')), {
+    cards: [{ ...declared, statistic: 'total' }],
+  });
+  const listing = await discoverMetricViews(roots);
+  expect(listing.packs[0]?.cards).toEqual([declared]);
+  expect(listing.errors[0]?.error).toContain('cards.0.statistic');
+});
+
 test('the bundled scope follows the roots config', async () => {
   await write(declaration(join(roots.bundledWorkflows, 'factory')), { cards: [card('Bundled')] });
   expect((await discoverMetricViews(roots)).packs.map(p => p.source)).toEqual(['bundled']);

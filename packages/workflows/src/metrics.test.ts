@@ -258,9 +258,9 @@ describe('queryMetrics', () => {
     );
     const [metric] = report.metrics;
     expect(metric?.headline_instrument).toBe('judge-v2');
-    expect(metric?.instruments.map(i => [i.instrument, i.value, i.n])).toEqual([
-      ['judge-v1', 0.4, 1],
-      ['judge-v2', 0.9, 1],
+    expect(metric?.instruments.map(i => [i.instrument, i.value, i.median, i.n])).toEqual([
+      ['judge-v1', 0.4, 0.4, 1],
+      ['judge-v2', 0.9, 0.9, 1],
     ]);
   });
 
@@ -317,6 +317,38 @@ describe('queryMetrics', () => {
         ],
       ],
     ]);
+  });
+
+  test('the score median uses individual records in the window, including both middle values for an even sample', async () => {
+    const duration = (value: number) => ({
+      name: 'delivery.duration',
+      kind: 'score',
+      unit: 'minutes',
+      value,
+      subject: null,
+    });
+    const rows = [
+      completion([duration(1380), count(1)]),
+      completion([duration(60)]),
+      completion([duration(120)], { at: '2026-10-03T00:00:00Z' }),
+      completion([duration(30)], { at: window.until.toISOString() }),
+    ];
+
+    const report = await queryMetrics(store(rows), window);
+    expect(report.metrics.find(m => m.kind === 'score')?.instruments[0]).toMatchObject({
+      median: 120,
+      value: 520,
+      n: 3,
+    });
+    expect(report.metrics.find(m => m.kind === 'count')?.instruments[0]).not.toHaveProperty(
+      'median'
+    );
+
+    const wider = await queryMetrics(store(rows), { ...window, until: new Date('2026-10-09') });
+    expect(wider.metrics.find(m => m.kind === 'score')?.instruments[0]).toMatchObject({
+      median: 90,
+      n: 4,
+    });
   });
 
   test('an invalid stored record is refused, not thrown, and only on an unfiltered query', async () => {
