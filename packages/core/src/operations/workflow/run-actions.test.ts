@@ -43,7 +43,41 @@ describe('getWorkflowStatus', () => {
     });
   });
 
-  test('drops the bound when asked for every active run', async () => {
+  test('walks every page when asked for every active run, and stops at a short page', async () => {
+    mockListWorkflowRuns
+      .mockResolvedValueOnce({
+        runs: Array.from({ length: 50 }, (_, index) =>
+          makeDashboardRun({ id: `run-${String(index)}`, status: 'running' })
+        ),
+        total: 51,
+        counts: EMPTY_COUNTS,
+      })
+      .mockResolvedValueOnce({
+        runs: [makeDashboardRun({ id: 'run-50', status: 'paused' })],
+        total: 51,
+        counts: EMPTY_COUNTS,
+      });
+
+    const result = await getWorkflowStatus({ every: true, codebaseId: 'cb-project-a' });
+
+    expect(result.runs.map(run => run.id)).toHaveLength(51);
+    expect(result.runs[50]?.id).toBe('run-50');
+    expect(mockListWorkflowRuns).toHaveBeenCalledTimes(2);
+    expect(mockListWorkflowRuns).toHaveBeenNthCalledWith(1, {
+      status: ['running', 'paused'],
+      limit: 50,
+      offset: 0,
+      codebaseId: 'cb-project-a',
+    });
+    expect(mockListWorkflowRuns).toHaveBeenNthCalledWith(2, {
+      status: ['running', 'paused'],
+      limit: 50,
+      offset: 50,
+      codebaseId: 'cb-project-a',
+    });
+  });
+
+  test('stops after one page when asked for every active run and the page is short', async () => {
     mockListWorkflowRuns.mockResolvedValueOnce({
       runs: [],
       total: 0,
@@ -52,7 +86,12 @@ describe('getWorkflowStatus', () => {
 
     await getWorkflowStatus({ every: true });
 
-    expect(mockListWorkflowRuns).toHaveBeenCalledWith({ status: ['running', 'paused'] });
+    expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith({
+      status: ['running', 'paused'],
+      limit: 50,
+      offset: 0,
+    });
   });
 
   test('passes an explicit codebase scope to the active-run query', async () => {

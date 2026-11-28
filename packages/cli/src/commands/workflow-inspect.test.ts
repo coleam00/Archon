@@ -589,8 +589,12 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand(host, '/test/path', { all: true, lost: true });
     const printed = consoleSpy.mock.calls.flat().join('\n');
-    // A recovery read is only honest if it checks every active run, not the bounded listing.
-    expect(mockListDashboardRuns).toHaveBeenLastCalledWith({ status: ['running', 'paused'] });
+    // A recovery read is only honest if it checks every active run: it pages from offset 0.
+    expect(mockListDashboardRuns).toHaveBeenNthCalledWith(1, {
+      status: ['running', 'paused'],
+      limit: 50,
+      offset: 0,
+    });
     expect(printed).toContain('run-orphan');
     expect(printed).toContain('Owner:  unreachable');
     expect(printed).toContain('resume: archon workflow resume run-orphan');
