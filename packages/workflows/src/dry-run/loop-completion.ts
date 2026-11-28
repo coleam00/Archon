@@ -10,35 +10,13 @@ export type SimulatedCompletion =
   | { kind: 'field' }
   | { kind: 'signal' }
   | { kind: 'assumed' }
+  | { kind: 'bash' }
   | { kind: 'incomplete' };
 
-/**
- * Would this iteration's output end the loop, as far as a dry run can tell?
- *
- * Two of the three channels are decidable from a stub and one is not:
- *  - `until_field` IS evaluable — a stub object is hydrated onto
- *    `NodeOutput.structuredOutput`, so the engine's own `=== true` rule can be
- *    applied exactly. Guessing here would be strictly worse than deciding.
- *  - `until` IS evaluable — run the same detector the executor runs.
- *  - `until_bash` is NOT: the simulator executes nothing.
- *
- * So: an evaluable channel that fires wins. If none fires but an unevaluable one is
- * declared, assume completion — reporting a max-iterations failure the real run
- * would not produce is the worse lie, and the trace reason names the channel that
- * went unevaluated. If none fires and there is nothing unevaluable to hide behind,
- * the iteration genuinely did not complete.
- *
- * Note the reach of that middle rule (#2563): it fires whenever `until_bash` is
- * declared, INCLUDING alongside an `until:` whose sentinel the stub did not carry.
- * That combination previously simulated as a max-iterations failure. Assuming completion
- * is the honest answer — the real run's `until_bash` may well have fired — but it
- * does mean a dry run cannot prove a prose stub trips `until:` on a loop that also
- * declares `until_bash`. Drop `until_bash` from the workflow, or stub the sentinel,
- * if that is what you are trying to check.
- */
 export function loopIterationCompletes(
   control: LoopChannels,
-  hydrated: { output: string; structuredOutput?: unknown }
+  hydrated: { output: string; structuredOutput?: unknown },
+  bash: 'assumed' | 'incomplete' = 'assumed'
 ): SimulatedCompletion {
   let fieldComplete = false;
   let signalComplete = false;
@@ -59,7 +37,7 @@ export function loopIterationCompletes(
           control.until !== undefined && detectCompletionSignal(hydrated.output, control.until);
         break;
       case 'until_bash':
-        assumed = control.until_bash !== undefined;
+        assumed = control.until_bash !== undefined && bash === 'assumed';
         break;
       default: {
         const unhandled: never = field;
@@ -85,6 +63,8 @@ export function completionReason(
       return `'${control.until_field ?? ''}' is true after ${n} iteration(s)`;
     case 'signal':
       return `completion signal after ${n} iteration(s)`;
+    case 'bash':
+      return `until_bash completed after ${n} iteration(s)`;
     default:
       return `assumed complete after ${n} iteration(s) — 'until_bash' is not executed in a dry run`;
   }

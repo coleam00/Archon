@@ -6,7 +6,10 @@ import {
   nodeTemplateReferences,
   type ShellInputContext,
   type TextSurface,
+  type RequiredOutputRefContext,
 } from '../dag/references';
+import type { InvocationListings } from '../invocation-listings';
+import type { NodeOutcome } from '../schemas/node-outcomes';
 import { type LoopBodyScope } from '../dag/loop-scope';
 import { resolveIncludeOutputAliases } from '../compiled-command';
 import type { JsonValue } from '../output-ref';
@@ -37,6 +40,7 @@ import {
   assertAuthoredStubSatisfiesSchema,
   generatedStubFor,
   type DryRunStubs,
+  type DryRunIterationStubs,
   type DryRunStubValue,
 } from './stubs';
 
@@ -73,6 +77,7 @@ export interface DryRunContext
    */
   sourceRoots: WorkflowSourceRoots;
   stubs: DryRunStubs;
+  iterationStubs: DryRunIterationStubs;
   /** Nodes whose execution record some binding reads (`$<node>.execution.checkoutStart`). */
   checkoutProducers: ReadonlySet<string>;
   /**
@@ -96,16 +101,20 @@ export interface DryRunContext
   /** The enclosing loop_group iterations, outermost first, as a real run records them. */
   loopGroupPath: readonly NodeArtifactLoopFrame[];
   /**
-   * Every typed output the simulation has produced, in order: what a real run records
-   * under `nodes/` and a typed-outputs binding reads. Held in memory because a dry run
-   * writes no artifacts.
+   * Every typed output the simulation has produced, in order, for typed bindings.
+   * With execution enabled, authored and executed outputs are also published once.
    */
-  typedOutputs: RecordedTypedOutput[];
+  typedOutputs: { recorded: RecordedTypedOutput; output: NodeOutput }[];
+  nodeOutcomes: NodeOutcome[];
+  /** Placeholders remain visible in previews but cannot decide executed completion. */
+  generatedOutputs: WeakSet<NodeOutput>;
+  /** A probe tree could not be stopped; its writable scratch must remain available. */
+  survivingProbeTree?: true;
   /**
    * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
-   * only (#2619). Created lazily before the first `--exec-code` execution (#2617) and
-   * removed when the simulation ends; a pure-stub dry run creates nothing.
+   * only (#2619). Created for enabled code execution or authored typed-output publication,
+   * and removed when the simulation ends. Disabled execution creates nothing.
    */
   artifactsDir: string;
   stateDir: string;
@@ -161,9 +170,14 @@ export function resolveText(
   // The `$INPUTS` bag for this text — run-level inputs unless the node carries
   // node-local `with:` bindings, which merge OVER them (#2637; nearest wins,
   // matching the executor's command-prompt path).
-  inputs: Record<string, JsonValue> | undefined = ctx.inputs
+  inputs: Record<string, JsonValue> | undefined = ctx.inputs,
+  probe?: {
+    listings: InvocationListings;
+    requiredContext: RequiredOutputRefContext;
+    loopBodyScopes?: readonly LoopBodyScope[];
+  }
 ): string {
-  const docsDir = join(ctx.cwd, 'docs');
+  const docsDir = join(ctx.execCode && surface !== 'prompt' ? ctx.execWorkspace : ctx.cwd, 'docs');
   return substituteWorkflowVariables(
     text,
     'dry-run',
@@ -175,19 +189,17 @@ export function resolveText(
     undefined,
     undefined,
     loopPrevOutput,
-    // A dry run never writes typed artifacts or node state, so it has no listing to
-    // point at. Pass explicit empty values: the preview substitutes '' rather than
-    // throwing the way a real invocation that forgot to materialize a listing does.
     {
       shellSafe: surface !== 'prompt',
       stateDir: ctx.stateDir,
-      typedArtifactsFile: '',
-      nodeOutcomesFile: '',
+      typedArtifactsFile: probe?.listings.typedArtifactsFile ?? '',
+      nodeOutcomesFile: probe?.listings.nodeOutcomesFile ?? '',
       ...(inputs ? { inputs } : {}),
       references: nodeTemplateReferences(
         text,
-        { nodeOutputs: outputs, loopBodyScopes: ctx.loopBodyScopes },
-        surface
+        { nodeOutputs: outputs, loopBodyScopes: probe?.loopBodyScopes ?? ctx.loopBodyScopes },
+        surface,
+        probe ? { artifactsDir: ctx.artifactsDir, requiredContext: probe.requiredContext } : {}
       ),
     }
   ).prompt;
@@ -209,7 +221,7 @@ export function bindingShellContext(
     artifactsDir: ctx.artifactsDir,
     stateDir: ctx.stateDir,
     baseBranch: 'dry-run-base',
-    docsDir: join(ctx.cwd, 'docs'),
+    docsDir: join(ctx.execCode ? ctx.execWorkspace : ctx.cwd, 'docs'),
     nodeOutputs: outputs,
     loopBodyScopes: ctx.loopBodyScopes,
   };
@@ -301,13 +313,24 @@ export function recordFailed(
 export const TOLERATED_STUB_REASON =
   'Missing stub tolerated by trigger_rule: all_done — using a generated placeholder';
 
-export function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | undefined {
-  if (Object.hasOwn(ctx.stubs, node.id)) {
-    ctx.consumedStubs.add(node.id);
-    const authored = ctx.stubs[node.id];
-    // The one place an authored stub enters a simulation, so the one place that can
-    // hold its contract by construction rather than by each caller remembering to.
+export function hasAuthoredStub(node: DagNode, ctx: DryRunContext): boolean {
+  return Object.hasOwn(ctx.stubs, node.id) || Object.hasOwn(ctx.iterationStubs, node.id);
+}
+
+export function stubFor(
+  node: DagNode,
+  ctx: DryRunContext,
+  iteration = 1
+): DryRunStubValue | undefined {
+  if (hasAuthoredStub(node, ctx)) {
+    const sequence = Object.hasOwn(ctx.iterationStubs, node.id)
+      ? ctx.iterationStubs[node.id]
+      : undefined;
+    const authored = sequence
+      ? sequence[Math.min(iteration - 1, sequence.length - 1)]
+      : ctx.stubs[node.id];
     if (authored !== undefined) assertAuthoredStubSatisfiesSchema(node, authored);
+    if (authored !== undefined) ctx.consumedStubs.add(node.id);
     return authored;
   }
   if (ctx.defaultStubs && !(isExecNode(node) && ctx.execCode)) {

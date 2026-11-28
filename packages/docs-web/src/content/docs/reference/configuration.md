@@ -541,7 +541,7 @@ worktree:
 
 Without a remote, nothing is fetched or synced. The selected base (`--base`, `worktree.baseBranch`, or the registered codebase's stored default branch) is used as a local branch; the checkout's current branch is used only when none is set. Creation fails if the selected local branch is missing, a detached HEAD has no selected base, the fallback current branch has no commit, or a `--from` start point does not exist. See [Base branch precedence](/reference/cli/#base-branch-precedence) for the full resolution order.
 
-**Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).
+**Docs path behavior:** In live runs, the `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`). Dry runs currently resolve `$DOCS_DIR` to `docs/` regardless of `docs.path`; executable fixtures use their scratch checkout. See the [variable reference](/reference/variables/#workflow-variables).
 
 ### Recommended workflows (`recommendedWorkflows`)
 

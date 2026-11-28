@@ -1,0 +1,1418 @@
+// @archon-test-isolated
+// @archon-test-windows
+import { describe, expect, test, spyOn } from 'bun:test';
+import * as git from '@archon/git';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
+import { dryRunWorkflow, useDryRunFiles } from './dry-run-test-utils';
+import { nodeOutcomesListingSchema } from './schemas/node-outcomes';
+import { nodeArtifactsListingSchema } from './schemas/node-artifact';
+import * as dryRunListings from './dry-run/invocation-listings';
+import * as artifactsIndex from './artifacts-index';
+import * as subprocess from './subprocess';
+import { DryRunProbeTreeSurvivedError } from './dry-run';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { dirname } from 'node:path';
+
+const { temporaryDirectory } = useDryRunFiles();
+const verdictSchema = {
+  type: 'object',
+  properties: { done: { type: 'boolean' }, note: { type: 'string' } },
+  required: ['done', 'note'],
+};
+
+describe('dry-run until_bash', () => {
+  test.each(['loop', 'loop_group'] as const)(
+    'composed %s probes refuse skipped current verdicts but accept authored empty text',
+    async kind => {
+      const cwd = temporaryDirectory();
+      const until_bash = 'printf probe >> invoked; test -z $INPUTS.verdict';
+      const block = makeTestWorkflow({
+        name: 'check',
+        inputs: { verdict: { required: true } },
+        nodes: [
+          kind === 'loop'
+            ? { id: 'probe', loop: { prompt: 'review', max_iterations: 1, until_bash } }
+            : {
+                id: 'probe',
+                loop_group: {
+                  max_iterations: 1,
+                  until_bash,
+                  nodes: [{ id: 'body', prompt: 'review' }],
+                },
+              },
+        ],
+      });
+      const parent = makeTestWorkflow({
+        name: 'parent',
+        inputs: { take: { default: 'no' } },
+        nodes: [
+          { id: 'verdict', prompt: 'review', when: "$INPUTS.take == 'yes'" },
+          {
+            id: 'check',
+            include: 'check',
+            depends_on: ['verdict'],
+            trigger_rule: 'all_done',
+            with: { verdict: '$verdict.output' },
+          },
+        ],
+      });
+      const workflow = makeTestComposedWorkflow([block, parent], 'parent');
+      const stubs = { verdict: '', check__probe: 'continue', body: 'continue' };
+      const skipped = await dryRunWorkflow({ cwd, workflow, execCode: true, stubs });
+      expect(skipped.outcome).toBe('failed');
+      expect(existsSync(join(cwd, 'invoked'))).toBe(false);
+      const authored = await dryRunWorkflow({
+        cwd,
+        workflow,
+        execCode: true,
+        stubs,
+        inputs: { take: 'yes' },
+      });
+      expect(authored.outcome).toBe('completed');
+      expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('probe');
+    }
+  );
+
+  test('composed probe docs inputs belong to the execution checkout', async () => {
+    const cwd = temporaryDirectory();
+    const execWorkspace = temporaryDirectory();
+    for (const root of [cwd, execWorkspace]) mkdirSync(join(root, 'docs'));
+    writeFileSync(join(cwd, 'docs', 'state'), 'caller');
+    writeFileSync(join(execWorkspace, 'docs', 'state'), 'scratch');
+    const block = makeTestWorkflow({
+      name: 'check',
+      inputs: { docs: { required: true } },
+      nodes: [
+        {
+          id: 'probe',
+          loop: {
+            prompt: 'review',
+            max_iterations: 1,
+            until_bash:
+              'docs=$INPUTS.docs; printf probe > "$docs/written"; test "$(cat "$docs/state")" = scratch',
+          },
+        },
+      ],
+    });
+    const parent = makeTestWorkflow({
+      name: 'parent',
+      nodes: [{ id: 'check', include: 'check', with: { docs: '$DOCS_DIR' } }],
+    });
+    const result = await dryRunWorkflow({
+      cwd,
+      execWorkspace,
+      execCode: true,
+      workflow: makeTestComposedWorkflow([block, parent], 'parent'),
+      stubs: { check__probe: 'continue' },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(existsSync(join(cwd, 'docs', 'written'))).toBe(false);
+    expect(readFileSync(join(execWorkspace, 'docs', 'written'), 'utf8')).toBe('probe');
+  });
+
+  test.each(
+    [false, true].flatMap(defaultStubs =>
+      ['LOOP_PREV_OUTPUT', 'TYPED_ARTIFACTS_FILE', 'NODE_OUTCOMES_FILE'].flatMap(channel =>
+        [`value="\${${channel}:-}"`, `value=$(printenv ${channel})`].map(read => ({
+          defaultStubs,
+          channel,
+          read,
+        }))
+      )
+    )
+  )('native environment reads cannot accept generated probe data: %j', async options => {
+    const cwd = temporaryDirectory();
+    const until_bash = `printf probe >> invoked; ${options.read}; test -n "$value"`;
+    const workflow = makeTestWorkflow({
+      name: 'native-generated',
+      nodes: [
+        options.channel === 'LOOP_PREV_OUTPUT'
+          ? {
+              id: 'verdict',
+              trigger_rule: 'all_done',
+              loop: { prompt: 'review', max_iterations: 2, until_bash },
+            }
+          : {
+              id: 'rounds',
+              loop_group: {
+                max_iterations: 2,
+                until_bash,
+                nodes: [
+                  {
+                    id: 'verdict',
+                    prompt: 'review',
+                    trigger_rule: 'all_done',
+                    output_type: 'judgment',
+                  },
+                ],
+              },
+            },
+      ],
+    });
+    const generated = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      defaultStubs: options.defaultStubs,
+      workflow,
+    });
+    expect(generated.outcome).toBe('failed');
+    expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('probeprobe');
+    const authored = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow,
+      stubs: { verdict: 'authored' },
+    });
+    expect(authored.outcome).toBe('completed');
+    expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe(
+      options.channel === 'LOOP_PREV_OUTPUT' ? 'probeprobeprobeprobe' : 'probeprobeprobe'
+    );
+  });
+
+  test.each(process.platform === 'win32' ? [] : ['success', 'nonzero', 'signal', 'timeout'])(
+    'probe children end before storage release on %s',
+    async exit => {
+      const cwd = temporaryDirectory();
+      const ending =
+        exit === 'success'
+          ? 'exit 0'
+          : exit === 'nonzero'
+            ? 'exit 7'
+            : exit === 'signal'
+              ? 'kill -TERM $$'
+              : 'while :; do :; done';
+      let pid: number | undefined;
+      const alive = () => {
+        if (pid === undefined || pid <= 0) return false;
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+          return false;
+        }
+      };
+      try {
+        const result = await dryRunWorkflow({
+          cwd,
+          execCode: true,
+          workflow: makeTestWorkflow({
+            name: 'probe-children',
+            nodes: [
+              {
+                id: 'review',
+                timeout: exit === 'timeout' ? 100 : 5000,
+                loop: {
+                  prompt: 'review',
+                  max_iterations: 1,
+                  until_bash: `(printf ready > started; while :; do :; done) </dev/null >/dev/null 2>&1 &
+printf '%s' "$!" > child-pid
+while ! test -f started; do :; done
+${ending}`,
+                },
+              },
+            ],
+          }),
+          stubs: { review: 'authored' },
+        });
+        pid = Number(readFileSync(join(cwd, 'child-pid'), 'utf8'));
+        expect(pid).toBeGreaterThan(0);
+        expect(result.outcome).toBe(exit === 'success' ? 'completed' : 'failed');
+        expect(alive()).toBe(false);
+      } finally {
+        if (pid === undefined && existsSync(join(cwd, 'child-pid')))
+          pid = Number(readFileSync(join(cwd, 'child-pid'), 'utf8'));
+        if (alive()) process.kill(pid!, 'SIGKILL');
+      }
+    }
+  );
+
+  test.each(
+    (['loop', 'loop_group'] as const).flatMap(kind =>
+      [false, true].flatMap(defaultStubs =>
+        [
+          '$verdict.output',
+          '$verdict.output.done',
+          { from: '$verdict.output' },
+          { from: '$verdict.output.done' },
+        ].map(binding => ({ kind, defaultStubs, binding }))
+      )
+    )
+  )('composed probe inputs require an authored verdict: %j', async options => {
+    const cwd = temporaryDirectory();
+    const until_bash = 'printf probe >> invoked; test -n $INPUTS.verdict';
+    const block = makeTestWorkflow({
+      name: 'check',
+      inputs: { verdict: { required: true } },
+      nodes: [
+        options.kind === 'loop'
+          ? { id: 'probe', loop: { prompt: 'review', max_iterations: 1, until_bash } }
+          : {
+              id: 'probe',
+              loop_group: {
+                max_iterations: 1,
+                until_bash,
+                nodes: [{ id: 'body', prompt: 'review' }],
+              },
+            },
+      ],
+    });
+    const parent = makeTestWorkflow({
+      name: 'parent',
+      nodes: [
+        {
+          id: 'verdict',
+          prompt: 'review',
+          trigger_rule: 'all_done',
+          output_format: verdictSchema,
+        },
+        {
+          id: 'check',
+          include: 'check',
+          depends_on: ['verdict'],
+          with: { verdict: options.binding },
+        },
+      ],
+    });
+    const workflow = makeTestComposedWorkflow([block, parent], 'parent');
+    const stubs = { check__probe: 'continue', body: 'continue' };
+    const missing = await dryRunWorkflow({
+      cwd,
+      workflow,
+      execCode: true,
+      defaultStubs: options.defaultStubs,
+      stubs,
+    });
+    expect(missing.outcome).toBe('failed');
+    expect(existsSync(join(cwd, 'invoked'))).toBe(false);
+    const authored = await dryRunWorkflow({
+      cwd,
+      workflow,
+      execCode: true,
+      stubs: { ...stubs, verdict: { done: true, note: 'accepted' } },
+    });
+    expect(authored.outcome).toBe('completed');
+    expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('probe');
+  });
+
+  test.each(
+    (['loop', 'loop_group'] as const).flatMap(kind =>
+      (
+        [
+          { sourceRuns: false, fallback: '$LOOP_PREV.seed.output.done', outcome: 'failed' },
+          { sourceRuns: false, fallback: '$seed.output.done', outcome: 'completed' },
+          { sourceRuns: false, fallback: true, outcome: 'completed' },
+          { sourceRuns: true, fallback: '$LOOP_PREV.seed.output.done', outcome: 'completed' },
+        ] as const
+      ).map(row => ({ kind, ...row }))
+    )
+  )('composed probe inputs validate only the selected fallback: %j', async options => {
+    const cwd = temporaryDirectory();
+    const control = {
+      max_iterations: 1,
+      on_exhausted: 'complete',
+      until_bash: 'printf probe >> invoked; value=$INPUTS.verdict; exit 7',
+    };
+    const block = makeTestWorkflow({
+      name: 'check',
+      inputs: { verdict: { required: true } },
+      nodes: [
+        options.kind === 'loop'
+          ? { id: 'probe', loop: { ...control, prompt: 'review' } }
+          : { id: 'probe', loop_group: { ...control, nodes: [{ id: 'body', prompt: 'review' }] } },
+      ],
+    });
+    const parent = makeTestWorkflow({
+      name: 'parent',
+      inputs: { take: { default: options.sourceRuns } },
+      nodes: [
+        {
+          id: 'outer',
+          loop_group: {
+            max_iterations: 2,
+            on_exhausted: 'complete',
+            until_bash: 'exit 7',
+            nodes: [
+              {
+                id: 'seed',
+                prompt: 'review',
+                trigger_rule: 'all_done',
+                output_format: verdictSchema,
+              },
+              {
+                id: 'source',
+                prompt: 'review',
+                when: '$INPUTS.take == true',
+                output_format: verdictSchema,
+              },
+              {
+                id: 'check',
+                include: 'check',
+                depends_on: ['seed', 'source'],
+                trigger_rule: 'all_done',
+                with: { verdict: { from: '$source.output.done', if_skipped: options.fallback } },
+              },
+            ],
+          },
+        },
+      ],
+    });
+    const result = await dryRunWorkflow({
+      cwd,
+      workflow: makeTestComposedWorkflow([block, parent], 'parent'),
+      execCode: true,
+      stubs: {
+        source: { done: true, note: 'accepted' },
+        check__probe: 'continue',
+        body: 'continue',
+      },
+    });
+    expect(result.outcome).toBe(options.outcome);
+    expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe(
+      options.outcome === 'failed' ? 'probe' : 'probeprobe'
+    );
+  });
+
+  test.each(process.platform === 'win32' ? [] : [0, 7])(
+    'a deadline remains fatal when a TERM trap exits %s',
+    async exit => {
+      const cwd = temporaryDirectory();
+      const result = await dryRunWorkflow({
+        cwd,
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'trapped-deadline',
+          nodes: [
+            {
+              id: 'review',
+              timeout: 100,
+              loop: {
+                prompt: 'review',
+                max_iterations: 2,
+                on_exhausted: 'complete',
+                until_bash: `trap 'printf terminated >> term-handler; exit ${exit}' TERM; printf probe >> invoked; while :; do :; done`,
+              },
+            },
+          ],
+        }),
+        stubs: { review: 'continue' },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('probe');
+      expect(readFileSync(join(cwd, 'term-handler'), 'utf8')).toBe('terminated');
+    }
+  );
+
+  test.each(['loop', 'loop_group'] as const)(
+    'executed %s probes resolve docs in their workspace',
+    async kind => {
+      const cwd = temporaryDirectory();
+      const execWorkspace = temporaryDirectory();
+      for (const root of [cwd, execWorkspace]) mkdirSync(join(root, 'docs'));
+      writeFileSync(join(cwd, 'docs', 'state'), 'caller');
+      writeFileSync(join(execWorkspace, 'docs', 'state'), 'scratch');
+      const until_bash =
+        'printf probe > $DOCS_DIR/written; test "$(cat $DOCS_DIR/state)" = scratch';
+      const result = await dryRunWorkflow({
+        cwd,
+        execWorkspace,
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'probe-docs',
+          nodes: [
+            kind === 'loop'
+              ? { id: 'review', loop: { prompt: 'review', max_iterations: 1, until_bash } }
+              : {
+                  id: 'rounds',
+                  loop_group: {
+                    max_iterations: 1,
+                    until_bash,
+                    nodes: [{ id: 'review', prompt: 'review' }],
+                  },
+                },
+          ],
+        }),
+        stubs: { review: 'continue' },
+      });
+      expect(result.outcome).toBe('completed');
+      expect(existsSync(join(cwd, 'docs', 'written'))).toBe(false);
+      expect(readFileSync(join(execWorkspace, 'docs', 'written'), 'utf8')).toBe('probe');
+    }
+  );
+
+  test.each([false, true])(
+    'a generated verdict retains provenance through checkout metadata (defaultStubs: %s)',
+    async defaultStubs => {
+      const cwd = temporaryDirectory();
+      const result = await dryRunWorkflow({
+        cwd,
+        execCode: true,
+        defaultStubs,
+        workflow: makeTestWorkflow({
+          name: 'placeholder-verdict',
+          nodes: [
+            {
+              id: 'rounds',
+              loop_group: {
+                max_iterations: 2,
+                on_exhausted: 'complete',
+                until_bash: 'touch probe; done=$verdict.output.done; test "$done" = true',
+                nodes: [
+                  {
+                    id: 'verdict',
+                    prompt: 'review',
+                    trigger_rule: 'all_done',
+                    output_format: {
+                      ...verdictSchema,
+                      properties: {
+                        ...verdictSchema.properties,
+                        done: { type: 'boolean', default: true },
+                      },
+                    },
+                  },
+                  {
+                    id: 'checkout',
+                    script: 'checkout',
+                    runtime: 'bun',
+                    with: { checkout: '$verdict.execution.checkoutStart' },
+                    depends_on: ['verdict'],
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        stubs: { checkout: 'observed' },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(existsSync(join(cwd, 'probe'))).toBe(false);
+    }
+  );
+
+  test.each([
+    ['whole', 'value=$verdict.output; exit 0', ''],
+    ['prior-whole', 'value=$LOOP_PREV.verdict.output; exit 7', 'probe'],
+    ['prior-field', 'value=$LOOP_PREV.verdict.output.done; exit 7', 'probe'],
+    ['typed', 'test -f "$TYPED_ARTIFACTS_FILE"', ''],
+    ['outcomes', 'test -f "$NODE_OUTCOMES_FILE"', ''],
+  ])('generated verdicts cannot enter the %s probe channel', async (_channel, code, marker) => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      defaultStubs: true,
+      workflow: makeTestWorkflow({
+        name: 'placeholder-channels',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 2,
+              on_exhausted: 'complete',
+              until_bash: `printf probe >> invoked; ${code}`,
+              nodes: [
+                {
+                  id: 'verdict',
+                  prompt: 'review',
+                  output_format: verdictSchema,
+                  output_type: 'judgment',
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    expect(result.outcome).toBe('failed');
+    expect(existsSync(join(cwd, 'invoked')) ? readFileSync(join(cwd, 'invoked'), 'utf8') : '').toBe(
+      marker
+    );
+  });
+
+  test('a generated single-loop previous output cannot enter a probe', async () => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      defaultStubs: true,
+      workflow: makeTestWorkflow({
+        name: 'generated-previous',
+        nodes: [
+          {
+            id: 'review',
+            loop: {
+              prompt: 'review',
+              max_iterations: 2,
+              on_exhausted: 'complete',
+              until_bash: 'printf probe >> invoked; test -n "$LOOP_PREV_OUTPUT"',
+            },
+          },
+        ],
+      }),
+    });
+    expect(result.outcome).toBe('failed');
+    expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('probe');
+  });
+
+  test.each(['field', 'signal'] as const)(
+    'generated completion %s cannot bypass an enabled probe',
+    async channel => {
+      const cwd = temporaryDirectory();
+      const result = await dryRunWorkflow({
+        cwd,
+        execCode: true,
+        defaultStubs: true,
+        workflow: makeTestWorkflow({
+          name: 'generated-field',
+          nodes: [
+            {
+              id: 'review',
+              ...(channel === 'field' ? { output_format: verdictSchema } : {}),
+              loop: {
+                prompt: 'review',
+                max_iterations: 2,
+                ...(channel === 'field' ? { until_field: 'done' } : { until: 'DONE' }),
+                until_bash: 'touch probe',
+              },
+            },
+          ],
+        }),
+      });
+      expect(result.outcome).toBe('failed');
+      expect(existsSync(join(cwd, 'probe'))).toBe(false);
+    }
+  );
+
+  test('a nested group retains the provenance of its generated verdict', async () => {
+    const result = await dryRunWorkflow({
+      execCode: true,
+      defaultStubs: true,
+      workflow: makeTestWorkflow({
+        name: 'nested-generated',
+        nodes: [
+          {
+            id: 'outer',
+            loop_group: {
+              max_iterations: 1,
+              until_bash: 'value=$inner.output; exit 0',
+              nodes: [
+                {
+                  id: 'inner',
+                  loop_group: {
+                    max_iterations: 1,
+                    until_bash: 'exit 0',
+                    nodes: [{ id: 'verdict', prompt: 'review', output_format: verdictSchema }],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    expect(result.outcome).toBe('failed');
+  });
+
+  test('each typed payload is published once across probe rounds', async () => {
+    const writer = spyOn(artifactsIndex, 'writeNodeArtifact');
+    try {
+      const result = await dryRunWorkflow({
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'publish-once',
+          nodes: [
+            { id: 'upstream', prompt: 'prepare', output_type: 'context' },
+            {
+              id: 'rounds',
+              depends_on: ['upstream'],
+              loop_group: {
+                max_iterations: 3,
+                until_bash: 'done=$verdict.output.done; test "$done" = true',
+                nodes: [
+                  {
+                    id: 'verdict',
+                    prompt: 'review',
+                    output_format: verdictSchema,
+                    output_type: 'judgment',
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        stubs: { upstream: 'prepared' },
+        iterationStubs: {
+          verdict: [
+            { done: false, note: 'first' },
+            { done: false, note: 'second' },
+            { done: true, note: 'last' },
+          ],
+        },
+      });
+      expect(result.outcome).toBe('completed');
+      expect(writer).toHaveBeenCalledTimes(4);
+    } finally {
+      writer.mockRestore();
+    }
+  });
+
+  test('artifact publication failure stops the body before its probe', async () => {
+    const cwd = temporaryDirectory();
+    const writer = spyOn(artifactsIndex, 'writeNodeArtifact').mockRejectedValueOnce(
+      new Error('publication refused')
+    );
+    try {
+      const result = await dryRunWorkflow({
+        cwd,
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'publication-failure',
+          nodes: [
+            {
+              id: 'rounds',
+              loop_group: {
+                max_iterations: 2,
+                on_exhausted: 'complete',
+                until_bash: 'touch probe',
+                nodes: [{ id: 'verdict', prompt: 'review', output_type: 'judgment' }],
+              },
+            },
+          ],
+        }),
+        stubs: { verdict: 'authored' },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(writer).toHaveBeenCalledTimes(1);
+      expect(existsSync(join(cwd, 'probe'))).toBe(false);
+    } finally {
+      writer.mockRestore();
+    }
+  });
+
+  test.each(['fail', 'complete'] as const)('group probes stop at the cap (%s)', async mode => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'group-cap',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 3,
+              ...(mode === 'complete' ? { on_exhausted: mode } : {}),
+              until_bash: 'printf probe >> invoked; exit 7',
+              nodes: [{ id: 'verdict', prompt: 'review' }],
+            },
+          },
+        ],
+      }),
+      iterationStubs: { verdict: ['first', 'second', 'last'] },
+    });
+    expect(result.outcome).toBe(mode === 'complete' ? 'completed' : 'failed');
+    expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('probeprobeprobe');
+    if (mode === 'complete') expect(result.trace.at(-1)?.output).toBe('last');
+  });
+
+  test('a group completion signal short-circuits its probe', async () => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'group-short-circuit',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 2,
+              until: 'DONE',
+              until_bash: 'touch probe',
+              nodes: [{ id: 'verdict', prompt: 'review' }],
+            },
+          },
+        ],
+      }),
+      stubs: { verdict: '<promise>DONE</promise>' },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(existsSync(join(cwd, 'probe'))).toBe(false);
+  });
+
+  test('a single-node loop completes by its actual probe exactly at the cap', async () => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'single-cap',
+        nodes: [
+          {
+            id: 'review',
+            loop: {
+              prompt: 'review',
+              max_iterations: 3,
+              until_bash:
+                'printf "%s\\n" "$LOOP_PREV_OUTPUT" >> previous; test "$LOOP_PREV_OUTPUT" = ready',
+            },
+          },
+        ],
+      }),
+      iterationStubs: { review: ['first', 'ready', 'accepted'] },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(result.trace[0]?.output).toBe('accepted');
+    expect(readFileSync(join(cwd, 'previous'), 'utf8')).toBe('\nfirst\nready\n');
+  });
+
+  test('separate groups sharing a bare stub id select independently', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'independent-groups',
+      nodes: ['first', 'second'].map(id => ({
+        id,
+        loop_group: {
+          max_iterations: 2,
+          until_bash: 'done=$verdict.output.done; test "$done" = true',
+          nodes: [{ id: 'verdict', prompt: 'review', output_format: verdictSchema }],
+        },
+      })),
+    });
+    const result = await dryRunWorkflow({
+      execCode: true,
+      workflow,
+      iterationStubs: {
+        verdict: [
+          { done: false, note: 'revise' },
+          { done: true, note: 'accepted' },
+        ],
+      },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'verdict').map(entry => entry.output)
+    ).toEqual([
+      '{"done":false,"note":"revise"}',
+      '{"done":true,"note":"accepted"}',
+      '{"done":false,"note":"revise"}',
+      '{"done":true,"note":"accepted"}',
+    ]);
+  });
+  test('listing provisioning failures stop without executing a probe', async () => {
+    const cwd = temporaryDirectory();
+    const writer = spyOn(dryRunListings, 'writeDryRunInvocationListings').mockRejectedValueOnce(
+      new Error('observation write refused')
+    );
+    try {
+      const result = await dryRunWorkflow({
+        cwd,
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'listing-failure',
+          nodes: [
+            {
+              id: 'rounds',
+              loop_group: {
+                max_iterations: 3,
+                on_exhausted: 'complete',
+                until_bash: 'touch probe',
+                nodes: [{ id: 'verdict', prompt: 'review' }],
+              },
+            },
+          ],
+        }),
+        stubs: { verdict: 'continue' },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(writer).toHaveBeenCalledTimes(1);
+      expect(existsSync(join(cwd, 'probe'))).toBe(false);
+    } finally {
+      writer.mockRestore();
+    }
+  });
+  test('large current references spill safely and retain their exact bytes', async () => {
+    const cwd = temporaryDirectory();
+    const note = 'quoted " $(touch injected) é'.repeat(1600);
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'large-probe',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 2,
+              until_bash: 'note=$verdict.output.note; printf "%s" "$note" > received',
+              nodes: [{ id: 'verdict', prompt: 'review', output_format: verdictSchema }],
+            },
+          },
+        ],
+      }),
+      stubs: { verdict: { done: true, note } },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(readFileSync(join(cwd, 'received'), 'utf8')).toBe(note);
+    expect(existsSync(join(cwd, 'injected'))).toBe(false);
+  });
+
+  test('invalid shell source fails without executing a prefix', async () => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'invalid-probe',
+        nodes: [
+          {
+            id: 'review',
+            loop: {
+              prompt: 'review',
+              max_iterations: 2,
+              on_exhausted: 'complete',
+              until_bash: 'touch prefix\0; exit 0',
+            },
+          },
+        ],
+      }),
+      stubs: { review: 'continue' },
+    });
+    expect(result.outcome).toBe('failed');
+    expect(existsSync(join(cwd, 'prefix'))).toBe(false);
+  });
+
+  test('configured environment preserves input, engine and credential ownership', async () => {
+    const cwd = temporaryDirectory();
+    const protectedValue = 'private-account-value';
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      inputs: { label: 'bound' },
+      config: {
+        assistant: undefined,
+        assistants: { claude: {}, codex: {} },
+        commands: {},
+        envVars: {
+          ACCOUNT: protectedValue,
+          INPUTS_LABEL: 'shadow',
+          WORKFLOW_ID: 'shadow',
+          PWD: 'shadow',
+        },
+        protectedEnvKeys: ['ACCOUNT'],
+        protectedCredentialValues: [protectedValue],
+      },
+      workflow: makeTestWorkflow({
+        name: 'probe-env',
+        inputs: { label: { required: true } },
+        nodes: [
+          {
+            id: 'review',
+            loop: {
+              prompt: 'review',
+              max_iterations: 2,
+              on_exhausted: 'complete',
+              until_bash:
+                'test "$PWD" != shadow || exit 7; printf "%s %s" "$INPUTS_LABEL" "$WORKFLOW_ID" > environment; printf "public-marker %s" "$ACCOUNT" >&2; printf "%1048577s" overflow',
+            },
+          },
+        ],
+      }),
+      stubs: { review: 'continue' },
+    });
+    expect(result.outcome).toBe('failed');
+    expect(readFileSync(join(cwd, 'environment'), 'utf8')).toBe('bound dry-run');
+    expect(JSON.stringify(result)).toContain('public-marker');
+    expect(JSON.stringify(result)).not.toContain(protectedValue);
+  });
+
+  test('unstubbed executable bodies run before their actual probe', async () => {
+    const cwd = temporaryDirectory();
+    writeFileSync(join(cwd, 'remaining'), 'two');
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      defaultStubs: true,
+      workflow: makeTestWorkflow({
+        name: 'executable-body',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 3,
+              until_bash: 'printf probe >> probes; done=$work.output.done; test "$done" = true',
+              nodes: [
+                {
+                  id: 'work',
+                  bash: 'if test "$(cat remaining)" = two; then printf one > remaining; done=false; else printf done > remaining; done=true; fi; printf body >> bodies; printf \'{"done":%s,"note":"executed"}\' "$done"',
+                  output_format: verdictSchema,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+    expect(result.outcome).toBe('completed');
+    expect(readFileSync(join(cwd, 'bodies'), 'utf8')).toBe('bodybody');
+    expect(readFileSync(join(cwd, 'probes'), 'utf8')).toBe('probeprobe');
+    expect(result.trace.filter(entry => entry.nodeId === 'work')).toHaveLength(2);
+  });
+
+  test('parallel interactive probes retain their invocation and run storage', async () => {
+    const cwd = temporaryDirectory();
+    const artifacts: string[] = [];
+    const scratch: string[] = [];
+    const execute = spyOn(subprocess, 'execOwnedProcessGroup').mockImplementation(
+      async (_command, _args, options) => {
+        if (options.env?.ARTIFACTS_DIR) artifacts.push(options.env.ARTIFACTS_DIR);
+        if (options.env?.NODE_SCRATCH_DIR) scratch.push(options.env.NODE_SCRATCH_DIR);
+        throw Object.assign(new Error('process group still alive'), {
+          code: 0,
+          treeSurvived: true,
+        });
+      }
+    );
+    try {
+      await expect(
+        dryRunWorkflow({
+          cwd,
+          execCode: true,
+          stubs: { first: 'authored', second: 'authored', later: 'authored' },
+          workflow: makeTestWorkflow({
+            name: 'parallel-retention',
+            nodes: [
+              {
+                id: 'rounds',
+                loop_group: {
+                  max_iterations: 1,
+                  until_bash: 'exit 0',
+                  nodes: [
+                    ...['first', 'second'].map(id => ({
+                      id,
+                      loop: {
+                        prompt: 'review',
+                        interactive: true,
+                        gate_message: 'Review required',
+                        max_iterations: 1,
+                        until_bash: 'exit 0',
+                      },
+                    })),
+                    {
+                      id: 'later',
+                      depends_on: ['first', 'second'],
+                      loop: { prompt: 'review', max_iterations: 1, until_bash: 'exit 0' },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+        })
+      ).rejects.toBeInstanceOf(DryRunProbeTreeSurvivedError);
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(artifacts).toHaveLength(2);
+      expect(scratch).toHaveLength(2);
+      for (const path of [...artifacts, ...scratch]) expect(existsSync(path)).toBe(true);
+    } finally {
+      execute.mockRestore();
+      for (const root of new Set(artifacts.map(dirname))) await removeTempTree(root);
+    }
+  });
+
+  test.each(['fail', 'pause'] as const)('body %s prevents any completion probe', async outcome => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'body-failure',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 3,
+              on_exhausted: 'complete',
+              until_bash: 'touch probe',
+              nodes:
+                outcome === 'fail'
+                  ? [{ id: 'work', bash: 'exit 9' }]
+                  : [{ id: 'ask', wait: { attention: 'Answer' } }],
+            },
+          },
+        ],
+      }),
+    });
+    expect(result.outcome).toBe(outcome === 'fail' ? 'failed' : 'paused');
+    expect(existsSync(join(cwd, 'probe'))).toBe(false);
+  });
+
+  test.each(['exit 0', 'exit 7'] as const)(
+    'tolerated placeholder completes only on real completion: %s',
+    async code => {
+      const cwd = temporaryDirectory();
+      const result = await dryRunWorkflow({
+        cwd,
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'tolerated-probe',
+          nodes: [
+            {
+              id: 'review',
+              trigger_rule: 'all_done',
+              loop: {
+                prompt: 'review',
+                max_iterations: 2,
+                on_exhausted: 'complete',
+                until_bash: `printf probe >> invocations; ${code}`,
+              },
+            },
+          ],
+        }),
+      });
+      expect(result.outcome).toBe('completed');
+      expect(result.missingStubs).toEqual(['review']);
+      expect(result.toleratedMissingStubs).toEqual(['review']);
+      expect(readFileSync(join(cwd, 'invocations'), 'utf8')).toBe(
+        code === 'exit 0' ? 'probe' : 'probeprobe'
+      );
+    }
+  );
+  test('probe observations are readable, iteration-qualified and immutable', async () => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'observations',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 3,
+              until_bash:
+                'if test -f first-typed; then cmp "$(cat first-typed)" typed-0.json || exit 7; cmp "$(cat first-outcomes)" outcomes-0.json || exit 7; else printf "%s" "$TYPED_ARTIFACTS_FILE" > first-typed; printf "%s" "$NODE_OUTCOMES_FILE" > first-outcomes; fi; cp "$TYPED_ARTIFACTS_FILE" "typed-$(ls typed-* 2>/dev/null | wc -l | tr -d \' \').json"; cp "$NODE_OUTCOMES_FILE" "outcomes-$(ls outcomes-* 2>/dev/null | wc -l | tr -d \' \').json"; done=$verdict.output.done; test "$done" = true',
+              nodes: [
+                {
+                  id: 'verdict',
+                  prompt: 'review',
+                  output_format: verdictSchema,
+                  output_type: 'judgment',
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      iterationStubs: {
+        verdict: [
+          { done: false, note: 'revise' },
+          { done: true, note: 'accepted' },
+        ],
+      },
+    });
+    expect(result.outcome).toBe('completed');
+    const first = nodeOutcomesListingSchema.parse(
+      JSON.parse(readFileSync(join(cwd, 'outcomes-0.json'), 'utf8'))
+    );
+    const second = nodeOutcomesListingSchema.parse(
+      JSON.parse(readFileSync(join(cwd, 'outcomes-1.json'), 'utf8'))
+    );
+    expect(first.nodes).toEqual([
+      {
+        node_id: 'rounds.verdict',
+        state: 'completed',
+        loop_group_path: [{ groupId: 'rounds', iteration: 1 }],
+        output: { done: false, note: 'revise' },
+      },
+    ]);
+    expect(second.nodes).toHaveLength(2);
+    const typed = nodeArtifactsListingSchema.parse(
+      JSON.parse(readFileSync(join(cwd, 'typed-1.json'), 'utf8'))
+    );
+    expect(typed.runId).toBe('dry-run');
+    expect(typed.artifactsByType.judgment?.map(entry => entry.loopGroupPath)).toEqual([
+      [{ groupId: 'rounds', iteration: 1 }],
+      [{ groupId: 'rounds', iteration: 2 }],
+    ]);
+    for (const file of ['first-typed', 'first-outcomes']) {
+      expect(existsSync(readFileSync(join(cwd, file), 'utf8'))).toBe(false);
+    }
+  });
+
+  test('probes resolve previous body snapshots, protected inputs and shell-safe values', async () => {
+    const cwd = temporaryDirectory();
+    const note = 'quoted \' " $(touch injected) ; &';
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      inputs: { label: note },
+      workflow: makeTestWorkflow({
+        name: 'probe-context',
+        inputs: { label: { required: true } },
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 3,
+              until_bash:
+                'printf "%s\\n" $LOOP_PREV.verdict.output.note >> prior; test $verdict.output.note = "$INPUTS_LABEL" || exit 7; done=$verdict.output.done; test "$done" = true',
+              nodes: [{ id: 'verdict', prompt: 'review', output_format: verdictSchema }],
+            },
+          },
+        ],
+      }),
+      iterationStubs: {
+        verdict: [
+          { done: false, note },
+          { done: true, note },
+        ],
+      },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(readFileSync(join(cwd, 'prior'), 'utf8')).toBe(`\n${note}\n`);
+    expect(existsSync(join(cwd, 'injected'))).toBe(false);
+  });
+
+  test('schema-valid sequences suppress executable bodies but not enabled probes', async () => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'stubbed-body',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 3,
+              until_bash: 'touch probe; done=$verdict.output.done; test "$done" = true',
+              nodes: [{ id: 'verdict', bash: 'touch body; exit 9', output_format: verdictSchema }],
+            },
+          },
+        ],
+      }),
+      iterationStubs: {
+        verdict: [
+          { done: false, note: 'revise' },
+          { done: true, note: 'accepted' },
+        ],
+      },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(existsSync(join(cwd, 'body'))).toBe(false);
+    expect(existsSync(join(cwd, 'probe'))).toBe(true);
+  });
+
+  test.each(['field', 'signal'] as const)(
+    'a satisfied %s channel short-circuits the probe',
+    async channel => {
+      const cwd = temporaryDirectory();
+      const result = await dryRunWorkflow({
+        cwd,
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'short-circuit',
+          nodes: [
+            {
+              id: 'review',
+              ...(channel === 'field' ? { output_format: verdictSchema } : {}),
+              loop: {
+                prompt: 'review',
+                max_iterations: 3,
+                until_bash: 'touch probe',
+                ...(channel === 'field' ? { until_field: 'done' } : { until: 'DONE' }),
+              },
+            },
+          ],
+        }),
+        stubs: { review: channel === 'field' ? { done: true, note: 'accepted' } : 'DONE' },
+      });
+      expect(result.outcome).toBe('completed');
+      expect(existsSync(join(cwd, 'probe'))).toBe(false);
+    }
+  );
+
+  test.each(
+    process.platform === 'win32'
+      ? (['missing-reference', 'timeout'] as const)
+      : (['missing-reference', 'timeout', 'signal'] as const)
+  )('a fatal %s does not become exhaustion success', async kind => {
+    const cwd = temporaryDirectory();
+    const code =
+      kind === 'missing-reference'
+        ? 'test $absent.output = true'
+        : kind === 'timeout'
+          ? 'printf started >> invoked; sleep 1'
+          : 'printf started >> invoked; kill -TERM $$';
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'fatal-probe',
+        nodes: [
+          {
+            id: 'review',
+            ...(kind === 'timeout' ? { timeout: 200 } : {}),
+            loop: {
+              prompt: 'review',
+              max_iterations: 3,
+              on_exhausted: 'complete',
+              until_bash: code,
+            },
+          },
+        ],
+      }),
+      stubs: { review: 'continue' },
+    });
+    expect(result.outcome).toBe('failed');
+    if (kind !== 'missing-reference')
+      expect(readFileSync(join(cwd, 'invoked'), 'utf8')).toBe('started');
+  });
+
+  test('an unavailable shell fails before the cap', async () => {
+    const resolver = spyOn(git, 'resolveBashPath').mockReturnValue(
+      join(temporaryDirectory(), 'absent-shell')
+    );
+    try {
+      const result = await dryRunWorkflow({
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'absent-shell',
+          nodes: [
+            {
+              id: 'review',
+              loop: {
+                prompt: 'review',
+                max_iterations: 3,
+                on_exhausted: 'complete',
+                until_bash: 'exit 0',
+              },
+            },
+          ],
+        }),
+        stubs: { review: 'continue' },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(resolver).toHaveBeenCalledTimes(1);
+    } finally {
+      resolver.mockRestore();
+    }
+  });
+
+  test.each([false, true])(
+    'generated defaults %s never fabricate probe success',
+    async defaultStubs => {
+      const result = await dryRunWorkflow({
+        execCode: true,
+        defaultStubs,
+        workflow: makeTestWorkflow({
+          name: 'generated-probe',
+          nodes: [
+            {
+              id: 'review',
+              trigger_rule: 'all_done',
+              loop: {
+                prompt: 'review',
+                max_iterations: 2,
+                until_bash: 'exit 7',
+              },
+            },
+          ],
+        }),
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.toleratedMissingStubs).toEqual([]);
+      expect(result.missingStubs).toEqual(defaultStubs ? [] : ['review']);
+    }
+  );
+  test('uses current body output and real exit status across iterations', async () => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode: true,
+      workflow: makeTestWorkflow({
+        name: 'probe-group',
+        nodes: [
+          {
+            id: 'rounds',
+            loop_group: {
+              max_iterations: 4,
+              until_bash:
+                'printf "probe\\n" >> probes; done=$verdict.output.done; test "$done" = true',
+              nodes: [{ id: 'verdict', prompt: 'review', output_format: verdictSchema }],
+            },
+          },
+          { id: 'after', prompt: 'final $rounds.output', depends_on: ['rounds'] },
+        ],
+      }),
+      iterationStubs: {
+        verdict: [
+          { done: false, note: 'revise' },
+          { done: true, note: 'accepted' },
+        ],
+      },
+      stubs: { after: 'received' },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(
+      result.trace.filter(entry => entry.nodeId === 'verdict').map(entry => entry.output)
+    ).toEqual(['{"done":false,"note":"revise"}', '{"done":true,"note":"accepted"}']);
+    expect(readFileSync(join(cwd, 'probes'), 'utf8')).toBe('probe\nprobe\n');
+    expect(result.trace.at(-1)?.resolvedText).toContain('accepted');
+  });
+
+  test.each([false, undefined])('execution %s never invokes a probe', async execCode => {
+    const cwd = temporaryDirectory();
+    const result = await dryRunWorkflow({
+      cwd,
+      execCode,
+      workflow: makeTestWorkflow({
+        name: 'disabled-probe',
+        nodes: [
+          {
+            id: 'review',
+            loop: {
+              prompt: 'review',
+              max_iterations: 3,
+              until_bash: 'touch probe; exit 7',
+            },
+          },
+        ],
+      }),
+      stubs: { review: 'continue' },
+    });
+    expect(result.outcome).toBe('completed');
+    expect(existsSync(join(cwd, 'probe'))).toBe(false);
+  });
+
+  test.each(['fail', 'complete'] as const)(
+    'single-node probes honor the cap and on_exhausted: %s',
+    async onExhausted => {
+      const cwd = temporaryDirectory();
+      const result = await dryRunWorkflow({
+        cwd,
+        execCode: true,
+        workflow: makeTestWorkflow({
+          name: 'probe-cap',
+          nodes: [
+            {
+              id: 'review',
+              loop: {
+                prompt: 'review',
+                max_iterations: 3,
+                ...(onExhausted === 'complete' ? { on_exhausted: onExhausted } : {}),
+                until_bash: 'printf "%s\\n" "$LOOP_PREV_OUTPUT" >> previous; exit 7',
+              },
+            },
+          ],
+        }),
+        iterationStubs: { review: ['first', 'second', 'last'] },
+      });
+      expect(result.outcome).toBe(onExhausted === 'complete' ? 'completed' : 'failed');
+      expect(readFileSync(join(cwd, 'previous'), 'utf8')).toBe('\nfirst\nsecond\n');
+      if (onExhausted === 'complete') expect(result.trace.at(-1)?.output).toBe('last');
+    }
+  );
+});

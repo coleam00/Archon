@@ -1,7 +1,8 @@
-import { readComposedBindings } from '../../compiled-command';
+import { readComposedBindings, readComposedMeta } from '../../compiled-command';
 import { inputEnvVars, resolveNodeBindings } from '../../dag/references';
 import { substituteLoopBodyText } from '../../dag/loop-scope';
 import { bindTypedOutputs } from '../../typed-output-bindings';
+import { isAbsentInputForward, substituteTemplate } from '../../output-ref';
 import type { NodeExecutionMetadata } from '../../schemas/node-execution';
 import {
   isAgentNode,
@@ -13,6 +14,7 @@ import {
 import {
   TOLERATED_STUB_REASON,
   bindingShellContext,
+  hasAuthoredStub,
   loadDryRunCommand,
   nodeType,
   recordFailed,
@@ -22,6 +24,11 @@ import {
   type DryRunContext,
 } from '../context';
 import { completedOutput, generatedStubFor, type DryRunStubValue } from '../stubs';
+import {
+  assertAuthoredBindings,
+  assertAuthoredOutput,
+  authoredOutputReferences,
+} from '../output-provenance';
 import { executeCodeNode } from './exec';
 
 /** An agent or exec node: resolve its text, then hydrate a stub or, with `--exec-code`, run the code. */
@@ -33,7 +40,7 @@ export async function simulateAgentOrExec(
   execution?: NodeExecutionMetadata
 ): Promise<void> {
   const resolvedText = await resolveNodeText(node, outputs, ctx);
-  const stub = stubFor(node, ctx);
+  const stub = stubFor(node, ctx, iteration);
   if (stub === undefined && isExecNode(node) && ctx.execCode) {
     await executeLocally(node, resolvedText, outputs, ctx, iteration, execution);
     return;
@@ -67,6 +74,9 @@ async function resolveNodeText(
     : node.source.kind === 'command'
       ? node.source.with
       : readComposedBindings(node);
+  if (isExecNode(node) && ctx.execCode && !hasAuthoredStub(node, ctx)) {
+    assertExecutableInputs(node, sourceText, nodeWith, outputs, ctx);
+  }
   const nodeBindings =
     nodeWith !== undefined
       ? resolveNodeBindings(node.id, nodeWith, bindingShellContext(ctx, outputs), ctx.inputs)
@@ -85,13 +95,43 @@ async function resolveNodeText(
   );
 }
 
+function assertExecutableInputs(
+  node: ExecNode,
+  sourceText: string,
+  nodeWith: ExecNode['with'],
+  outputs: Map<string, NodeOutput>,
+  ctx: DryRunContext
+): void {
+  const references = authoredOutputReferences(outputs, ctx.loopBodyScopes, ctx.generatedOutputs);
+  substituteTemplate(sourceText, references.current);
+  assertAuthoredBindings(Object.values(nodeWith ?? {}), outputs, references);
+  const composed = readComposedMeta(node);
+  assertAuthoredBindings(
+    Object.entries(composed?.inputs ?? {})
+      .filter(
+        ([name, value]) =>
+          !Object.hasOwn(nodeWith ?? {}, name) &&
+          !isAbsentInputForward(name, value, ctx.inputs, composed?.forwarded ?? [])
+      )
+      .map(([, value]) => value),
+    outputs,
+    references
+  );
+}
+
 /**
  * A script node's `with:` map with its typed-outputs bindings resolved by the executor's
  * own `bindTypedOutputs`, against the outputs the simulation has produced so far.
  */
 function boundWith(node: ExecNode, ctx: DryRunContext): Promise<ExecNode['with']> {
-  return bindTypedOutputs(node.id, node.with, outputType =>
-    Promise.resolve(ctx.typedOutputs.filter(recorded => recorded.outputType === outputType))
+  return bindTypedOutputs(node.id, node.with, async outputType =>
+    ctx.typedOutputs
+      .filter(({ recorded }) => recorded.outputType === outputType)
+      .map(({ recorded, output }) => {
+        if (ctx.execCode && !hasAuthoredStub(node, ctx))
+          assertAuthoredOutput(output, ctx.generatedOutputs);
+        return recorded;
+      })
   );
 }
 
@@ -154,6 +194,7 @@ function hydrateStub(
     // any earlier would report a gap that never blocked it while that gap is
     // exactly what blocked it, and `checkFixture` would filter the blocker away.
     const hydrated = completedOutput(node, stub === undefined ? generatedStubFor(node) : stub);
+    if (!hasAuthoredStub(node, ctx)) ctx.generatedOutputs.add(hydrated);
     if (tolerated) ctx.toleratedMissingStubs.add(node.id);
     outputs.set(node.id, hydrated);
     ctx.trace.push({

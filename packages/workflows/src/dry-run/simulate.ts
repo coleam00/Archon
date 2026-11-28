@@ -18,7 +18,7 @@ import {
   type GraphPlan,
   type NodeOutput,
 } from '../schemas';
-import { recordFailed, recordSkipped, type DryRunContext } from './context';
+import { hasAuthoredStub, recordFailed, recordSkipped, type DryRunContext } from './context';
 import { simulateAgentOrExec } from './nodes/agent-exec';
 import { simulateGate } from './nodes/gate';
 import { simulateHalt } from './nodes/halt';
@@ -31,6 +31,7 @@ import { runWithNodeScratch, runWithPackDir } from '../workflow-variables';
 import { getNodeScratchDir } from '@archon/paths/archon-paths';
 import { randomUUID } from 'node:crypto';
 import { releaseNodeScratch } from '../run-scratch';
+import { writeNodeArtifact } from '../artifacts-index';
 
 /** Whether the node runs at all; a node the trigger rule or its `when:` turns away is recorded here. */
 function isReached(
@@ -158,13 +159,14 @@ async function simulateNode(
         )
       );
     } finally {
-      await releaseNodeScratch({
-        artifactsDir: ctx.artifactsDir,
-        invocationId,
-        repoPath: ctx.execWorkspace,
-        execContext: { kind: 'host' },
-        logContext: { workflowRunId: 'dry-run', nodeId: node.id, invocationId },
-      });
+      if (!ctx.survivingProbeTree)
+        await releaseNodeScratch({
+          artifactsDir: ctx.artifactsDir,
+          invocationId,
+          repoPath: ctx.execWorkspace,
+          execContext: { kind: 'host' },
+          logContext: { workflowRunId: 'dry-run', nodeId: node.id, invocationId },
+        });
     }
   } catch (error) {
     recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
@@ -182,7 +184,7 @@ export async function simulateNodes(
       ? [layer.filter(node => !canSuspend(node)), layer.filter(canSuspend)]
       : [layer];
     for (const phase of phases) {
-      if (ctx.halted) return;
+      if (ctx.halted || ctx.survivingProbeTree) return;
       await simulatePhase(phase, outputs, ctx, iteration);
     }
   }
@@ -202,6 +204,7 @@ async function simulatePhase(
         try {
           await simulateLayerNode(node, outputs, nodeCtx, iteration);
           if (nodeCtx.halted) ctx.halted = nodeCtx.halted;
+          if (nodeCtx.survivingProbeTree) ctx.survivingProbeTree = true;
         } finally {
           peers[index].finished();
         }
@@ -209,7 +212,7 @@ async function simulatePhase(
     );
   } else {
     for (const node of phase) {
-      if (ctx.halted) return;
+      if (ctx.halted || ctx.survivingProbeTree) return;
       await simulateLayerNode(node, outputs, ctx, iteration);
     }
   }
@@ -223,22 +226,57 @@ async function simulateLayerNode(
 ): Promise<void> {
   const execution = await simulatedExecution(node, ctx);
   await simulateNode(node, outputs, ctx, iteration, execution);
-  const result = outputs.get(node.id);
+  let result = outputs.get(node.id);
+  try {
+    await publishTypedOutput(node, result, ctx);
+  } catch (error) {
+    recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
+    result = outputs.get(node.id);
+  }
+  if (ctx.execCode && result !== undefined && !ctx.generatedOutputs.has(result))
+    recordNodeOutcome(node, result, ctx);
   if (result?.state === 'failed') ctx.interactionAdmission?.failed(node.id);
-  // The real run's rule (`writeTypedArtifacts`): a completed node that declares a type.
-  if (result?.state === 'completed' && node.output_type) {
-    ctx.typedOutputs.push({
-      nodeId: node.id,
-      outputType: node.output_type,
-      ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: [...ctx.loopGroupPath] } : {}),
-      producedAt: new Date().toISOString(),
-      source: `the simulated output of node '${node.id}'`,
-      text: result.output,
-    });
-  }
   if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
-    outputs.set(node.id, { ...result, execution });
+    const observed = { ...result, execution };
+    if (ctx.generatedOutputs.has(result)) ctx.generatedOutputs.add(observed);
+    outputs.set(node.id, observed);
   }
+}
+
+async function publishTypedOutput(
+  node: DagNode,
+  result: NodeOutput | undefined,
+  ctx: DryRunContext
+): Promise<void> {
+  if (result?.state !== 'completed' || !node.output_type) return;
+  const recorded = {
+    nodeId: node.id,
+    outputType: node.output_type,
+    ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: [...ctx.loopGroupPath] } : {}),
+    producedAt: new Date().toISOString(),
+    source: `the simulated output of node '${node.id}'`,
+    text: result.output,
+  };
+  if (ctx.execCode && !ctx.generatedOutputs.has(result)) {
+    const { source: _source, text, ...artifact } = recorded;
+    await writeNodeArtifact(ctx.artifactsDir, { ...artifact, runId: 'dry-run' }, text);
+  }
+  ctx.typedOutputs.push({ recorded, output: result });
+}
+
+function recordNodeOutcome(node: DagNode, result: NodeOutput, ctx: DryRunContext): void {
+  ctx.nodeOutcomes.push({
+    node_id: [...ctx.loopGroupPath.map(frame => frame.groupId), node.id].join('.'),
+    state: result.state,
+    ...(ctx.loopGroupPath.length > 0 ? { loop_group_path: [...ctx.loopGroupPath] } : {}),
+    ...(result.state === 'failed' ? { error: result.error } : {}),
+    ...(result.state === 'skipped' ? { cause: result.cause } : {}),
+    ...(result.state === 'completed' &&
+    node.output_format !== undefined &&
+    'structuredOutput' in result
+      ? { output: result.structuredOutput }
+      : {}),
+  });
 }
 
 /**
@@ -252,7 +290,7 @@ async function simulatedExecution(
   node: DagNode,
   ctx: DryRunContext
 ): Promise<NodeExecutionMetadata | undefined> {
-  const executes = isExecNode(node) && ctx.execCode && !Object.hasOwn(ctx.stubs, node.id);
+  const executes = isExecNode(node) && ctx.execCode && !hasAuthoredStub(node, ctx);
   if (!executes && !ctx.checkoutProducers.has(node.id)) return undefined;
   if (!isExecNode(node) && !isAgentNode(node) && !isLoopNode(node)) return undefined;
   const checkoutStart = await observeCheckout(

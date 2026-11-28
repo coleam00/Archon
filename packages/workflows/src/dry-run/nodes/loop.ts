@@ -3,6 +3,7 @@ import { describeUnmetCompletion } from '../../executor-shared';
 import type { LoopNode, NodeOutput } from '../../schemas';
 import {
   TOLERATED_STUB_REASON,
+  hasAuthoredStub,
   loadDryRunCommand,
   recordFailed,
   resolveText,
@@ -12,6 +13,7 @@ import {
 } from '../context';
 import { completionReason, loopIterationCompletes } from '../loop-completion';
 import { completedOutput, generatedStubFor } from '../stubs';
+import { evaluateLoopCompletion } from '../until-bash';
 
 async function loadLoopTemplate(node: LoopNode, ctx: DryRunContext): Promise<string> {
   if (node.loop.prompt !== undefined) return node.loop.prompt;
@@ -29,14 +31,13 @@ async function loadLoopTemplate(node: LoopNode, ctx: DryRunContext): Promise<str
   return loadDryRunCommand(ctx, node, command);
 }
 
-function recordMissingLoopStub(
+function missingLoopOutput(
   node: LoopNode,
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
   resolvedText: string,
-  current: number,
   iteration?: number
-): void {
+): NodeOutput | undefined {
   ctx.missingStubs.add(node.id);
   if (node.trigger_rule !== 'all_done') {
     recordFailed(
@@ -49,19 +50,12 @@ function recordMissingLoopStub(
     );
     return;
   }
-  // Same tolerance the single-node gate applies (#2869), extended to the loop
-  // shape that never reaches it (#2966). One placeholder covers every iteration —
-  // `stubFor` is constant for this node — so the question of "which iteration's
-  // stub" collapses: `generatedStubFor` builds a loop placeholder that satisfies
-  // the node's own completion channel, so a tolerated loop always ends on
-  // iteration 1, and never runs a second one.
   const placeholder = completedOutput(node, generatedStubFor(node));
   const toleratedCompletion = loopIterationCompletes(node.loop, placeholder);
-  if (toleratedCompletion.kind === 'incomplete') {
-    // The tolerance claim waits for a placeholder that actually carries the node,
-    // exactly as the join gate waits for one that can be generated at all. A
-    // placeholder that ends no iteration would burn `max_iterations` and fail —
-    // calling that tolerated would let `checkFixture` filter away the real blocker.
+  if (
+    (!ctx.execCode || node.loop.until_bash === undefined) &&
+    toleratedCompletion.kind === 'incomplete'
+  ) {
     recordFailed(
       node,
       outputs,
@@ -72,18 +66,7 @@ function recordMissingLoopStub(
     );
     return;
   }
-  ctx.toleratedMissingStubs.add(node.id);
-  outputs.set(node.id, placeholder);
-  ctx.trace.push({
-    nodeId: node.id,
-    nodeType: 'loop',
-    state: 'stubbed',
-    reason: `${TOLERATED_STUB_REASON}; ${completionReason(toleratedCompletion, node.loop, current)}`,
-    resolvedText,
-    output: placeholder.output,
-    ...(iteration ? { iteration } : {}),
-    ...withResolution(node, ctx),
-  });
+  return placeholder;
 }
 
 export async function simulateLoop(
@@ -96,44 +79,45 @@ export async function simulateLoop(
   const template = await loadLoopTemplate(node, ctx);
   let resolvedText = template;
   let last: NodeOutput | undefined;
+  let tolerated = false;
   for (let current = 1; current <= node.loop.max_iterations; current++) {
     resolvedText = resolveText(template, ctx, outputs, 'prompt', previous);
-    const stub = stubFor(node, ctx);
-    if (stub === undefined) {
-      recordMissingLoopStub(node, outputs, ctx, resolvedText, current, iteration);
-      return;
-    }
-    const hydrated = completedOutput(node, stub);
+    const stub = stubFor(node, ctx, current);
+    const hydrated =
+      stub === undefined
+        ? missingLoopOutput(node, outputs, ctx, resolvedText, iteration)
+        : completedOutput(node, stub);
+    if (hydrated === undefined) return;
+    if (!hasAuthoredStub(node, ctx)) ctx.generatedOutputs.add(hydrated);
+    tolerated = stub === undefined;
+    const completion = await evaluateLoopCompletion(node, hydrated, outputs, ctx, last);
     last = hydrated;
     previous = hydrated.output;
-    const completion = loopIterationCompletes(node.loop, hydrated);
     if (completion.kind !== 'incomplete') {
-      outputs.set(node.id, hydrated);
-      ctx.trace.push({
-        nodeId: node.id,
-        nodeType: 'loop',
-        state: 'stubbed',
-        reason: completionReason(completion, node.loop, current),
+      recordLoopCompletion(
+        node,
+        hydrated,
+        outputs,
+        ctx,
         resolvedText,
-        output: previous,
-        ...(iteration ? { iteration } : {}),
-        ...withResolution(node, ctx),
-      });
+        completionReason(completion, node.loop, current),
+        tolerated,
+        iteration
+      );
       return;
     }
   }
   if (node.loop.on_exhausted === 'complete' && last !== undefined) {
-    outputs.set(node.id, last);
-    ctx.trace.push({
-      nodeId: node.id,
-      nodeType: 'loop',
-      state: 'stubbed',
-      reason: `reached max iterations (${String(node.loop.max_iterations)}) ${describeUnmetCompletion(node.loop)}; completed with the last output (on_exhausted: complete)`,
+    recordLoopCompletion(
+      node,
+      last,
+      outputs,
+      ctx,
       resolvedText,
-      output: previous,
-      ...(iteration ? { iteration } : {}),
-      ...withResolution(node, ctx),
-    });
+      `reached max iterations (${String(node.loop.max_iterations)}) ${describeUnmetCompletion(node.loop)}; completed with the last output (on_exhausted: complete)`,
+      tolerated,
+      iteration
+    );
     return;
   }
   recordFailed(
@@ -144,4 +128,28 @@ export async function simulateLoop(
     resolvedText,
     iteration
   );
+}
+
+function recordLoopCompletion(
+  node: LoopNode,
+  hydrated: NodeOutput,
+  outputs: Map<string, NodeOutput>,
+  ctx: DryRunContext,
+  resolvedText: string,
+  reason: string,
+  tolerated: boolean,
+  iteration?: number
+): void {
+  if (tolerated) ctx.toleratedMissingStubs.add(node.id);
+  outputs.set(node.id, hydrated);
+  ctx.trace.push({
+    nodeId: node.id,
+    nodeType: 'loop',
+    state: 'stubbed',
+    reason: `${tolerated ? `${TOLERATED_STUB_REASON}; ` : ''}${reason}`,
+    resolvedText,
+    output: hydrated.output,
+    ...(iteration ? { iteration } : {}),
+    ...withResolution(node, ctx),
+  });
 }

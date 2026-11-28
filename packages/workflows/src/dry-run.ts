@@ -1,4 +1,4 @@
-/** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
+/** Workflow DAG simulation with caller-supplied outputs and opt-in trusted code execution. */
 import { formatSkipCause } from './skip-cause';
 import { createLogger, getArchonTempPath } from '@archon/paths';
 import { validateStructuredOutput } from './structured-output';
@@ -30,7 +30,13 @@ import {
   type DryRunResolution,
   type DryRunTraceEntry,
 } from './dry-run/schemas';
-import { isRecord, type DryRunStubs } from './dry-run/stubs';
+import {
+  assertDisjointStubs,
+  dryRunIterationStubsSchema,
+  isRecord,
+  type DryRunIterationStubs,
+  type DryRunStubs,
+} from './dry-run/stubs';
 import { simulateNodes } from './dry-run/simulate';
 
 export {
@@ -45,6 +51,8 @@ export {
   createDryRunStubScaffold,
   dryRunStubValueSchema,
   dryRunStubsSchema,
+  dryRunIterationStubsSchema,
+  type DryRunIterationStubs,
   loadDryRunStubs,
   writeDryRunStubScaffold,
   type DryRunStubValue,
@@ -124,6 +132,7 @@ interface DryRunOptions {
   userMessage: string;
   cwd: string;
   stubs?: DryRunStubs;
+  iterationStubs?: DryRunIterationStubs;
   /**
    * Caller-SUPPLIED input values, already validated against the workflow's declared
    * `inputs:` and pack settings at the invocation gate (`resolveTopLevelInputs`) — the
@@ -176,11 +185,14 @@ function createDryRunContext(
     execWorkspace: options.execWorkspace ?? options.cwd,
     sourceRoots: options.sourceRoots ?? liveSourceRoots(options.cwd),
     stubs: options.stubs ?? {},
+    iterationStubs: options.iterationStubs ?? {},
     checkoutProducers: collectCheckoutProducers(options.workflow.nodes),
     ...(inputs ? { inputs } : {}),
     loopBodyScopes: [],
     loopGroupPath: [],
     typedOutputs: [],
+    nodeOutcomes: [],
+    generatedOutputs: new WeakSet(),
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),
     logDir: join(tempRoot, 'logs'),
@@ -202,7 +214,20 @@ function createDryRunContext(
   };
 }
 
+export class DryRunProbeTreeSurvivedError extends Error {
+  constructor(tempRoot: string, workspace: string, cause: Error) {
+    super(
+      `Dry-run probe tree could not be stopped; retained scratch at '${tempRoot}' and execution checkout '${workspace}': ${cause.message}`,
+      { cause }
+    );
+    this.name = 'DryRunProbeTreeSurvivedError';
+  }
+}
+
 export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResult> {
+  const iterationStubs = dryRunIterationStubsSchema.parse(options.iterationStubs ?? {});
+  assertDisjointStubs(options.stubs ?? {}, iterationStubs);
+  options = { ...options, iterationStubs };
   const tempRoot = join(getArchonTempPath(), `dry-run-${randomUUID()}`);
   // The same layering a real run fixes at its start: pack defaults, then declared
   // defaults, then the project's `.archon/packs/` file, then supplied values.
@@ -218,15 +243,7 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
   try {
     await simulateNodes(options.workflow.plan, outputs, ctx);
   } finally {
-    // Simulations are throwaway: whatever exec'd nodes wrote is discarded with the
-    // per-run root (`force: true` makes the nothing-executed case a no-op). A cleanup
-    // failure must not fail a finished simulation, so it is logged, not thrown.
-    await rm(tempRoot, { recursive: true, force: true }).catch((error: unknown) => {
-      getLog().warn(
-        { tempRoot, error: error instanceof Error ? error.message : String(error) },
-        'dry_run.temp_cleanup_failed'
-      );
-    });
+    await releaseSimulationScratch(ctx, tempRoot);
   }
 
   const summary = options.workflow.plan.sinks
@@ -254,10 +271,31 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
     trace: ctx.trace,
     missingStubs: [...ctx.missingStubs].sort(),
     toleratedMissingStubs: [...ctx.toleratedMissingStubs].sort(),
-    unusedStubs: Object.keys(ctx.stubs)
+    unusedStubs: [...new Set([...Object.keys(ctx.stubs), ...Object.keys(ctx.iterationStubs)])]
       .filter(id => !ctx.consumedStubs.has(id))
       .sort(),
     ...(summary ? { summary } : {}),
+  });
+}
+
+async function releaseSimulationScratch(ctx: DryRunContext, tempRoot: string): Promise<void> {
+  if (ctx.survivingProbeTree)
+    throw new DryRunProbeTreeSurvivedError(
+      tempRoot,
+      ctx.execWorkspace,
+      new Error(
+        ctx.trace
+          .filter(entry => entry.state === 'failed')
+          .map(entry => entry.reason)
+          .join('\n')
+      )
+    );
+  // Cleanup I/O must not replace a finished simulation's verdict.
+  await rm(tempRoot, { recursive: true, force: true }).catch((error: unknown) => {
+    getLog().warn(
+      { tempRoot, error: error instanceof Error ? error.message : String(error) },
+      'dry_run.temp_cleanup_failed'
+    );
   });
 }
 
