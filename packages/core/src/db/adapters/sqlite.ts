@@ -564,6 +564,7 @@ export class SqliteAdapter implements IDatabase {
         project_key TEXT NOT NULL,
         key TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        title TEXT,
         moved_on_at TEXT,
         moved_on_tie INTEGER,
         UNIQUE(project_key, key)

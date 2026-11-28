@@ -26,6 +26,7 @@ import { loadConfig } from '@archon/core/config/config-loader';
 import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
 import { loadStoreSelection } from '@archon/core/config/store-selection';
 import * as codebaseDb from '@archon/core/db/codebases';
+import { listSlotOccupancy } from '@archon/core/db/resource-slots';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -56,13 +57,13 @@ import {
   type PackCopy,
   packCopies,
   type PackGraph,
-  type PackGraphLink,
   bindingWorkflowNames,
   packWorkflowName,
   packWorkflows,
 } from '@archon/workflows/pack-graph';
 import { packBindingScope, packBindingWorkflowMissing } from '@archon/workflows/pack-binding-rule';
 import { liveSourceRoots } from '@archon/workflows/workflow-source';
+import { arrowText, groupLines } from './pack-graph-text';
 import { writeJsonLine } from '../utils/stdout';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type {
@@ -752,31 +753,6 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
 const GRAPH_USAGE =
   'Usage: archon pack graph <pack> [--cwd <checkout>] [--workflow-source <dir>] [--json]';
 
-function arrowText(arrow: PackGraph['arrows'][number]): string {
-  const problems = arrow.active ? arrow.installed.problems : [];
-  const state = !arrow.active
-    ? 'declared, inactive'
-    : problems.length > 0
-      ? `active, refused: ${problems.join('; ')}`
-      : 'active';
-  const declared = arrow.declared?.problems ?? [];
-  const note = declared.length > 0 ? ` (binding ${declared.join('; ')})` : '';
-  const from =
-    'outcome' in arrow.from
-      ? `${arrow.from.stage}:${arrow.from.outcome}`
-      : `${arrow.from.stage}:asks(${arrow.from.settled}${arrow.from.option === undefined ? '' : `: ${arrow.from.option}`})`;
-  return `  ${from} -> ${arrow.to}${arrow.linked ? linkText(arrow.linked) : ''} [${state}]${note}`;
-}
-
-/** ` linked <kind> <holder>`, then the items it names and each input read from an entry. */
-function linkText(link: PackGraphLink): string {
-  const parts = [`linked ${link.kind} ${link.holder}`];
-  if (link.items !== undefined) parts.push(`items ${link.items}`);
-  for (const [target, pointer] of Object.entries(link.entries))
-    parts.push(`${target} from entry ${pointer}`);
-  return ` ${parts.join(', ')}`;
-}
-
 /** The graph as plain lines; `--json` prints the read itself, which is the contract. */
 function graphText(graph: PackGraph, source: string, explicitSource: boolean): string {
   const lines = [
@@ -787,6 +763,7 @@ function graphText(graph: PackGraph, source: string, explicitSource: boolean): s
     const values = stage.outcome?.values.map(v => v.value).join(', ');
     lines.push(`  ${stage.name}${values === undefined ? ' (no outcome)' : `: ${values}`}`);
   }
+  lines.push(...groupLines(graph));
   lines.push('', `Arrows: ${String(graph.arrows.length)}`);
   for (const arrow of graph.arrows) lines.push(arrowText(arrow));
   // `stops` counts an arrow to an observing stage as starting no step.
@@ -818,6 +795,7 @@ async function packGraph(packKey: string, options: PackBindingsOptions): Promise
       loadConfig,
       providers: providerRegistry,
       triggersDirectory: getTriggersPath,
+      slotOccupancy: listSlotOccupancy,
       projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
       projectOf: cwd => registeredProjectForPath(cwd, codebaseDb),
     },

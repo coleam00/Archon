@@ -23,6 +23,7 @@ export const WIRE_KEY_ROLES = {
   id: 'id',
 
   description: 'base',
+  display: 'base',
   depends_on: 'base',
   when: 'base',
   trigger_rule: 'base',

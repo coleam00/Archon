@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { providerRegistry } from '@archon/providers';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { readPackGraph } from './pack-graph';
 
 const track = trackTempRoots();
@@ -106,6 +107,88 @@ describe('readPackGraph', () => {
 
     expect(graph.stages.map(s => s.name).sort()).toEqual(['chain-a', 'chain-b']);
     expect(graph.arrows.map(arrow => arrow.installed?.sourceInstanceId)).toEqual(['here']);
+  });
+
+  test("the document's groups lose only a stale stage, and an ungrouped in-flow stage is a problem", async () => {
+    const { project, pack, write, deps } = await fixture('project');
+    await write('here', trigger('here', project));
+    // `chain-c` is a workflow of the pack that nothing starts: not in flow, so no group needs it.
+    await mkdir(join(pack, 'chain-c'), { recursive: true });
+    await writeFile(join(pack, 'chain-c', 'chain-c.yaml'), stage('chain-c'));
+    // No `document` key: the pack's `how-it-works.md` is read.
+    await writeFile(
+      join(pack, 'archon-plugin.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow-pack',
+        name: 'chain',
+        description: 'A pack.',
+        entrypoints: { 'chain-a': 'chain-a/chain-a.yaml', 'chain-b': 'chain-b/chain-b.yaml' },
+      })
+    );
+    await writeFile(
+      join(pack, 'how-it-works.md'),
+      '---\ncolour: blue\ngroups:\n  - name: Start\n    kind: intake\n    stages: [chain-a, ghost]\n---\n# Chain\n'
+    );
+
+    const graph = await readPackGraph(project, 'chain', deps);
+
+    expect(graph.stages.find(s => s.workflow === 'chain-c')?.inFlow).toBe(false);
+    expect(graph.document?.path).toBe('how-it-works.md');
+    expect(graph.document?.text).toBe('# Chain\n');
+    // One problem each: the stale name, the in-flow stage left out, and the unknown key.
+    const problems = graph.document?.problems ?? [];
+    expect(problems).toHaveLength(3);
+    expect(problems.filter(problem => problem.includes("'ghost'"))).toHaveLength(1);
+    expect(problems.filter(problem => problem.includes("'chain-b'"))).toHaveLength(1);
+    expect(problems.filter(problem => problem.includes("'colour'"))).toHaveLength(1);
+    expect(problems.some(problem => problem.includes('chain-c'))).toBe(false);
+    expect(graph.groups).toEqual([{ name: 'Start', kind: 'intake', stages: ['chain-a'] }]);
+  });
+
+  test('a setting naming a missing file is a settings problem, and the other values still show', async () => {
+    const { project, pack, deps } = await fixture('project');
+    await writeFile(
+      join(pack, '.pack', 'pack.yaml'),
+      'inputs:\n  policy:\n    file: true\n  label: {}\n'
+    );
+    // A file setting is checked only where a stage reads it.
+    await writeFile(
+      join(pack, 'chain-a', 'chain-a.yaml'),
+      stage('chain-a').replace("bash: echo '", "bash: cat $INPUTS.policy; echo '")
+    );
+    await mkdir(join(project, '.archon', 'packs'), { recursive: true });
+    await writeFile(
+      join(project, '.archon', 'packs', 'chain.yaml'),
+      'settings:\n  policy: docs/missing.md\n  label: hello\n'
+    );
+
+    const graph = await readPackGraph(project, 'chain', deps);
+
+    expect(graph.settingsFile.problems).toEqual([expect.stringContaining('policy')]);
+    expect(graph.settings.map(setting => [setting.name, setting.value])).toEqual([
+      ['policy', 'docs/missing.md'],
+      ['label', 'hello'],
+    ]);
+  });
+
+  test('discovers through the discover it is given, from the workflow source', async () => {
+    const { project, source, deps } = await fixture('source');
+    const roots: string[] = [];
+    const graph = await readPackGraph(
+      project,
+      'chain',
+      {
+        ...deps,
+        discover: root => {
+          roots.push(root);
+          return discoverWorkflowsWithConfig(root, deps.loadConfig, deps.providers);
+        },
+      },
+      { workflowSource: source }
+    );
+    expect(roots).toEqual([source]);
+    expect(graph.stages.map(s => s.name).sort()).toEqual(['chain-a', 'chain-b']);
   });
 
   test('a pack in a separate workflow source is read from there, with the project arrows', async () => {

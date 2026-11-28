@@ -1,18 +1,26 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
+import { join } from 'node:path';
 import { loadConfig, type CloneOptions, type ConversationLockManager } from '@archon/core';
 import { webPushPayloadSchema } from '@archon/core/schemas/web-push';
 import {
   createSqlWorkflowHost,
   createSqlWorkflowOperations,
+  createWorkflowHostStore,
 } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as codebaseDb from '@archon/core/db/codebases';
+import { listSlotOccupancy } from '@archon/core/db/resource-slots';
+import { attentionQueueSource } from '@archon/core/operations/attention-queue';
+import { changeMergeState, forgePluginsOnce, viewWorkItem } from '@archon/adapters/forge-host';
+import { getArchonHome } from '@archon/paths/archon-paths';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
 } from '@archon/core/services/codebase-checkout-resolver';
+import { createDiscoveryCache } from '@archon/core/workflows/discovery-cache';
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
 import { providerRegistry } from '@archon/providers';
 import type { WebAdapter } from '../adapters/web';
@@ -29,9 +37,13 @@ import { registerCodebaseEnvironmentRoute, registerCodebaseRoutes } from './api.
 import { registerConfigRoutes } from './api.config';
 import { registerConversationRoutes } from './api.conversations';
 import { registerConversationProcessingRoute } from './api.conversation-processing';
+import { deliveredRunFrom, registerForgeRoutes } from './api.forge';
+import { forgeAnswerFile } from './forge-answer-file';
+import { getLog } from './api-route-kit';
 import { registerHealthRoutes } from './api.health';
 import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
+import { registerObservingRoute } from './api.observing';
 import { registerMetricViewsRoute, registerMetricsRoute } from './api.metrics';
 import { registerPackGraphRoute } from './api.packs';
 import { registerProviderKeyRoutes } from './api.provider-keys';
@@ -45,6 +57,8 @@ import { registerWorkflowRunLaunchRoute } from './api.workflow-run-launch';
 import { registerDashboardRunsRoute, registerWorkflowRunReadRoutes } from './api.workflow-runs';
 import { registerWorkflowDefinitionRoutes, registerWorkflowListRoute } from './api.workflows';
 import type { AppCommit } from './schemas/system.schemas';
+import type { ObservingSource } from '@archon/core/workflows/source-plugins';
+import { readWakeLastPass } from '@archon/core/workflows/wake-last-pass';
 import { RUN_ATTENTION_SCHEMA_NAME, runAttentionSchema } from './schemas/workflow.schemas';
 
 /**
@@ -54,6 +68,16 @@ import { RUN_ATTENTION_SCHEMA_NAME, runAttentionSchema } from './schemas/workflo
  * generated web client types, so `check:api-types` fails on any reorder. Each module
  * keeps its own Hono match-order constraints beside the routes they order.
  */
+/** What the server does with its API routes once it is listening. */
+export interface ApiRoutes {
+  /**
+   * Discovers each registered project's workflows once, one project at a time, so the first
+   * board after a start does not pay for discovery (DESIGN.md, "Speed is a requirement").
+   * Never throws.
+   */
+  warmPackDiscovery: () => Promise<void>;
+}
+
 export function registerApiRoutes(
   app: OpenAPIHono,
   webAdapter: WebAdapter,
@@ -65,8 +89,9 @@ export function registerApiRoutes(
     tracker?: Pick<ItemTracker, 'health'>;
   },
   registration: Pick<CloneOptions, 'githubAppAuth'> = {},
-  commit?: AppCommit
-): void {
+  commit?: AppCommit,
+  observing: readonly ObservingSource[] = []
+): ApiRoutes {
   const operations = createSqlWorkflowOperations();
   const dispatchToOrchestrator = createOrchestratorDispatch(webAdapter, lockManager);
 
@@ -136,19 +161,50 @@ export function registerApiRoutes(
     codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
     loadConfig,
   });
+  registerObservingRoute(app, { observing, lastPass: () => readWakeLastPass() });
+  // One forge plugin search for every lookup these routes make (`forgePluginsOnce`), made on
+  // the first lookup: registering the routes reads nothing, not even the home.
+  let forgePlugins: ReturnType<typeof forgePluginsOnce> | undefined;
+  const forgeOptions = {
+    plugins: () => (forgePlugins ??= forgePluginsOnce(getArchonHome(), process.env))(),
+    env: process.env,
+  };
+  const queueSource = attentionQueueSource(
+    createWorkflowStore(),
+    createWorkflowHostStore().isolation
+  );
+  registerForgeRoutes(app, {
+    remote: async id => {
+      const codebase = await codebaseDb.getCodebase(id);
+      return codebase === null ? undefined : codebase.repository_url;
+    },
+    deliveredRun: deliveredRunFrom(createWorkflowStore(), run => queueSource.branchOf(run)),
+    changeMergeState: (lookup, branches) => changeMergeState(lookup, branches, forgeOptions),
+    viewWorkItem: (number, remote) => viewWorkItem(number, remote, forgeOptions),
+    answerFile: forgeAnswerFile(() => join(getArchonHome(), 'cache', 'forge-subjects.json')),
+  });
+  const packDiscovery = createDiscoveryCache(loadConfig, root =>
+    discoverWorkflowsWithConfig(root, loadConfig, providerRegistry)
+  );
+  const packCodebaseCwd = async (id: string): Promise<string | null> =>
+    (await codebaseDb.getCodebase(id))?.default_cwd ?? null;
+  const packGraphDeps = {
+    loadConfig,
+    providers: providerRegistry,
+    triggersDirectory: getTriggersPath,
+    slotOccupancy: listSlotOccupancy,
+    projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
+    projectOf: (path: string) => registeredProjectForPath(path, codebaseDb),
+    // Discovery is kept while the files it reads are unchanged (discovery-cache.ts).
+    discover: packDiscovery,
+  };
   registerPackGraphRoute(app, {
-    codebaseCwd: async id => (await codebaseDb.getCodebase(id))?.default_cwd ?? null,
-    readPackGraph: (cwd, pack, workflowSource) =>
+    codebaseCwd: packCodebaseCwd,
+    readPackGraph: (cwd: string, pack: string, workflowSource?: string) =>
       readPackGraph(
         cwd,
         pack,
-        {
-          loadConfig,
-          providers: providerRegistry,
-          triggersDirectory: getTriggersPath,
-          projectKeyOf: launchProjectKey(path => registeredProjectKeyForPath(path, codebaseDb)),
-          projectOf: path => registeredProjectForPath(path, codebaseDb),
-        },
+        packGraphDeps,
         workflowSource === undefined ? {} : { workflowSource }
       ),
   });
@@ -159,4 +215,25 @@ export function registerApiRoutes(
   registerCodebaseEnvironmentRoute(app);
   registerWebPushRoutes(app, attention);
   registerHealthRoutes(app, { lockManager, activePlatforms, attention, commit });
+  return {
+    warmPackDiscovery: async () => {
+      let codebases: Awaited<ReturnType<typeof codebaseDb.listCodebases>>;
+      try {
+        codebases = await codebaseDb.listCodebases();
+      } catch (error) {
+        // Nothing is warmed; each graph route discovers on its first read as it would anyway.
+        getLog().warn({ err: error }, 'api.pack_discovery_warm_failed');
+        return;
+      }
+      for (const codebase of codebases) {
+        if (!codebase.default_cwd) continue;
+        try {
+          await packDiscovery(codebase.default_cwd);
+        } catch (error) {
+          // The graph route discovers again on its first read and reports the error there.
+          getLog().warn({ err: error, codebaseId: codebase.id }, 'api.pack_discovery_warm_failed');
+        }
+      }
+    },
+  };
 }

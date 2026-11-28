@@ -58,9 +58,9 @@ export async function readPriorityItems(query: TransactionQuery): Promise<Set<st
 }
 
 async function readPriority(query: TransactionQuery, itemId: string): Promise<ItemPriority | null> {
-  const rows = await query<{ id: string; project_key: string; key: string }>(
+  const rows = await query<{ id: string; project_key: string; key: string; title: string | null }>(
     `WITH RECURSIVE ${PRIORITY_ITEMS_CTE}
-     SELECT DISTINCT i.id, i.project_key, i.key FROM prio p
+     SELECT DISTINCT i.id, i.project_key, i.key, i.title FROM prio p
        JOIN remote_agent_items i ON i.id = p.source_id
       WHERE p.item_id = $1
       ORDER BY i.key, i.id`,
@@ -71,6 +71,7 @@ async function readPriority(query: TransactionQuery, itemId: string): Promise<It
     id: String(row.id),
     projectKey: row.project_key,
     key: row.key,
+    title: row.title,
   }));
   return {
     own: sources.some(source => source.id === itemId),

@@ -23,7 +23,8 @@ import {
 } from '../test-support/workflow-store';
 import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
 import { triggerCommand } from './trigger';
-import { wakeLastPassPath, workflowWakeScheduleConfig, writeWakeLastPass } from './wake-schedule';
+import { wakeLastPassPath, writeWakeLastPass } from '@archon/core/workflows/wake-last-pass';
+import { workflowWakeScheduleConfig } from './wake-schedule';
 
 const tempRoots = trackTempRoots();
 const previousHome = process.env.ARCHON_HOME;
@@ -393,6 +394,17 @@ test('names the observing sources nothing watches with the fix, and the watcher 
       "The wake watcher runs, but its last pass, at 2026-11-23T21:30:00.000Z, failed: Webhook source 'github' resolved an unknown run-as user.",
   });
   expect(failing.error).toBeUndefined();
+
+  // A record that exists but fails validation is a problem, not "no pass recorded".
+  await writeFile(lastPass, JSON.stringify({ ...failed, ok: 'yes' }));
+  const unreadable = await check();
+  expect(unreadable.observing).toEqual({
+    sources: observed,
+    watcher: { installed: true, registered: true },
+    unwatched: false,
+    problem: expect.stringContaining(`its last-pass record ${lastPass} could not be read`),
+  });
+  expect(unreadable.error).toBeUndefined();
 
   // With the sources file only in the job (passed with --sources), check reads the file the
   // job's watcher recorded.

@@ -76,6 +76,7 @@ import {
   createAsksSettledStarts,
 } from './asks-settled';
 import { createEndedCheckout } from './ended-checkout';
+import { heldStartReads } from './held-item-starts';
 import {
   registeredProjectForPath,
   registeredProjectKeyForPath,
@@ -159,22 +160,19 @@ function collectOAuthCredentialValues(
 const launchProjectKeyOf = launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb));
 const launchProjectOf = (cwd: string) => registeredProjectForPath(cwd, codebaseDb);
 
-/**
- * The held binding starts on item `itemId`: those naming its key whose checkout is in its
- * project. A binding is resolved to a project only when it is prepared, so the checkout
- * decides it here the way it will then.
- */
+// Every held-start read, so the bulk one and one item's agree on the project (`heldStartReads`).
+const heldStarts = heldStartReads({
+  listHeldStarts: () => installHold.listHeldStarts(),
+  projectKeyOf: launchProjectKeyOf,
+});
+
+/** The held binding starts on item `itemId`: those naming its key whose checkout is in its project. */
 async function listHeldItemStarts(itemId: string): Promise<HeldItemStart[]> {
   const item = await itemsDb.getItem(itemId);
   if (!item) return [];
-  const held: HeldItemStart[] = [];
-  for (const start of await installHold.listHeldStarts()) {
-    if (start.kind !== 'trigger' || start.itemKey !== item.key || start.cwd === null) continue;
-    if ((await launchProjectKeyOf(start.cwd)) !== item.projectKey) continue;
-    const { receiptId, bindingId, hostId, workflow, receivedAt } = start;
-    held.push({ receiptId, bindingId, hostId, workflow, receivedAt });
-  }
-  return held;
+  return (await heldStarts.naming(item.key))
+    .filter(start => start.projectKey === item.projectKey)
+    .map(({ projectKey: _project, itemKey: _key, ...start }) => start);
 }
 
 /**
@@ -305,6 +303,7 @@ export function createWorkflowStore(): IWorkflowStore {
     liftInstallHold: installHold.liftInstallHold,
     listHeldStarts: installHold.listHeldStarts,
     listHeldItemStarts,
+    listAllHeldItemStarts: heldStarts.all,
     listItemStarts,
     listPreparingStarts,
     listRefusedStarts,
@@ -348,6 +347,7 @@ export function createWorkflowStore(): IWorkflowStore {
     recordItemMerge: itemMergesDb.recordItemMerge,
     getItemLanding: itemLandingsDb.getItemLanding,
     recordItemLanding: itemLandingsDb.recordItemLanding,
+    recordItemTitle: itemsDb.recordItemTitle,
     getItemPriority: itemPrioritiesDb.getItemPriority,
     setItemPriority: itemPrioritiesDb.setItemPriority,
     clearItemPriority: itemPrioritiesDb.clearItemPriority,

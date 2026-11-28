@@ -295,9 +295,10 @@ mock.module('./adapters/web/pg-notify-listener', () => ({
 }));
 mock.module('./static-cache', () => ({ serveWebUi: (): void => undefined }));
 mock.module('./routes/openapi-defaults', () => ({ validationErrorHook: (): void => undefined }));
-const mockRegisterApiRoutes = mock<typeof import('./routes/api').registerApiRoutes>(
-  () => undefined
-);
+const mockWarmPackDiscovery = mock(async (): Promise<void> => undefined);
+const mockRegisterApiRoutes = mock<typeof import('./routes/api').registerApiRoutes>(() => ({
+  warmPackDiscovery: mockWarmPackDiscovery,
+}));
 mock.module('./routes/api', () => ({ registerApiRoutes: mockRegisterApiRoutes }));
 mock.module('./routes/webhooks', () => ({
   registerGiteaWebhookRoute: (): void => undefined,
@@ -442,6 +443,7 @@ describe('server conversation admission configuration', () => {
     if (env === undefined) delete process.env.MAX_CONCURRENT_CONVERSATIONS;
     else process.env.MAX_CONCURRENT_CONVERSATIONS = env;
     mockRegisterApiRoutes.mockClear();
+    mockWarmPackDiscovery.mockClear();
     const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
       port: 43210,
     })) as unknown as typeof Bun.serve);
@@ -449,6 +451,9 @@ describe('server conversation admission configuration', () => {
     try {
       const { startServer } = await import('./index');
       await startServer({ port: 12345, skipPlatformAdapters: true });
+      // Once listening, the server discovers each project's workflows once, so the first
+      // board after a restart reads a kept discovery.
+      expect(mockWarmPackDiscovery).toHaveBeenCalledTimes(1);
       const manager = mockRegisterApiRoutes.mock.calls[0]?.[2];
       if (!manager) throw new Error('Startup did not pass a lock manager to the API');
       expect(manager.getStats().maxConcurrent).toBe(limit);

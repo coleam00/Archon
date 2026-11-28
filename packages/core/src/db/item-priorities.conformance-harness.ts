@@ -136,7 +136,7 @@ export function describeItemPriorityConformance(makeHarness: () => Promise<Harne
       const nested = await partOf(store, 'task', 'epic');
       // A cycle ends the walk instead of looping.
       await partOf(store, 'wo', 'task');
-      const wo = { id: await itemId(store, 'wo'), projectKey, key: 'wo' };
+      const wo = { id: await itemId(store, 'wo'), projectKey, key: 'wo', title: null };
       expect(await store.getItemPriority(await itemId(store, 'task'))).toEqual({
         own: false,
         inheritedFrom: [wo],
