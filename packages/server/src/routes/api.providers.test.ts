@@ -134,6 +134,8 @@ mock.module('@archon/core/db/workflows', () => ({
   getRunningWorkflows: mock(async () => []),
 }));
 mock.module('@archon/core/db/workflow-events', () => ({
+  listLatestEventTimes: mock(async () => new Map()),
+  listLatestAgentMessages: mock(async () => new Map()),
   listWorkflowEvents: mock(async () => []),
 }));
 mock.module('@archon/core/db/messages', () => ({

@@ -375,7 +375,7 @@ function RunInternals({ run, isLive }: { run: Run; isLive: boolean }): ReactElem
     !isDocker && hasValue(run.workingPath) && !run.id.startsWith('demo-') ? run.workingPath : null;
   const baseBranch = run.progress?.base_branch;
   return (
-    <div className="mt-2 grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-4 gap-y-2 rounded bg-surface-inset px-3 py-2">
+    <div className="mt-2 flex flex-wrap gap-x-6 gap-y-2 rounded bg-surface-inset px-3 py-2">
       <Fact label="Run">
         <span title={run.id}>{shortRunId(run.id)}</span> · {run.workflow}
       </Fact>

@@ -505,6 +505,8 @@ mock.module('../db/workflows', () => ({
   WorkflowNotResumableError: MockWorkflowNotResumableError,
 }));
 mock.module('../db/workflow-events', () => ({
+  listLatestEventTimes: mock(async () => new Map()),
+  listLatestAgentMessages: mock(async () => new Map()),
   createWorkflowEvent: mockCreateWorkflowEvent,
 }));
 mock.module('../config/config-loader', () => ({

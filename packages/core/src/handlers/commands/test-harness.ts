@@ -356,6 +356,8 @@ mock.module('../../db/workflows', () => ({
 }));
 
 mock.module('../../db/workflow-events', () => ({
+  listLatestEventTimes: mock(async () => new Map()),
+  listLatestAgentMessages: mock(async () => new Map()),
   listWorkflowEvents: mock<typeof WorkflowEventDb.listWorkflowEvents>(async () => []),
   createWorkflowEvent: mockCreateWorkflowEvent,
 }));
