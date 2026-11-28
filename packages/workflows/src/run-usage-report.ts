@@ -5,7 +5,7 @@ import {
   type DagUsageObservation,
   type UsageContribution,
 } from './dag-usage-fold';
-import { parseRunUsage, type RunUsageFigures } from './schemas/run-usage';
+import { parseRunUsage, runUsageTotalFields, type RunUsageFigures } from './schemas/run-usage';
 import { runGraphSchema, RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
 import {
   usageNodeIdentitySchema,
@@ -93,12 +93,7 @@ function totalLimitation(
   total: number | null
 ): UsageLimitation[] {
   if (validUsageAmount(metric, total)) return [];
-  const fields = {
-    usd: 'total_cost_usd',
-    inputTokens: 'total_tokens_in',
-    outputTokens: 'total_tokens_out',
-  } as const;
-  const raw = run.metadata[fields[metric]];
+  const raw = run.metadata[runUsageTotalFields[metric]];
   const invalid = raw != null && !validUsageAmount(metric, raw);
   return [{ runId: run.id, reason: invalid ? 'total_invalid' : 'total_unavailable' }];
 }
@@ -192,19 +187,28 @@ function allContributions(contributions: readonly UsageContribution[]): UsageCon
   ]);
 }
 
+/**
+ * AI starts that no later end closes. An end counts only when it was recorded after the
+ * start: rows without attempt ids share a path across reruns, and an earlier completion
+ * must not close a later start. Ends are indexed by path so a long history is read once.
+ */
 function unfinishedObservations(fold: DagUsageFold): DagUsageObservation[] {
+  const ends = new Map<string, { at: number; end: DagUsageObservation }[]>();
+  fold.observations.forEach((end, at) => {
+    if (!executedObservation(end) && end.eventType !== 'node_skipped') return;
+    const list = ends.get(end.path) ?? [];
+    list.push({ at, end });
+    ends.set(end.path, list);
+  });
+  const closes = (start: DagUsageObservation, end: DagUsageObservation): boolean =>
+    end.eventType === DEFERRED_NODE_USAGE_EVENT_TYPE
+      ? end.invocationId === start.invocationId
+      : start.attemptId === undefined || end.attemptId === start.attemptId;
   return fold.observations.filter(
     (start, startAt) =>
       start.eventType === 'node_started' &&
       aiObservation(start, fold.observations) &&
-      !fold.observations.some(
-        (end, endAt) =>
-          end.path === start.path &&
-          (executedObservation(end) || end.eventType === 'node_skipped') &&
-          (end.eventType === DEFERRED_NODE_USAGE_EVENT_TYPE
-            ? endAt > startAt && end.invocationId === start.invocationId
-            : start.attemptId === undefined || end.attemptId === start.attemptId)
-      )
+      !(ends.get(start.path) ?? []).some(({ at, end }) => at > startAt && closes(start, end))
   );
 }
 
@@ -340,15 +344,21 @@ function attributedContributors(
 function metricRecord(observation: DagUsageObservation, metric: UsageMetric): string {
   const measurement = observation.measurement;
   if (measurement === undefined) return '';
-  if (metric === 'usd') return JSON.stringify(measurement.costUsd);
+  // Only the source and this metric's own figure. A partial-cost or partial-cache flag
+  // says the figure is a floor; it does not make two equal figures contradict each other.
+  if (metric === 'usd')
+    return JSON.stringify([
+      measurement.costUsd.source,
+      measurement.costUsd.source === 'provider'
+        ? measurement.costUsd.value
+        : measurement.costUsd.reason,
+    ]);
   const tokens = measurement.tokens;
-  if (tokens.source !== 'provider') return JSON.stringify(tokens);
-  return JSON.stringify({
-    source: tokens.source,
-    value: metric === 'inputTokens' ? tokens.value.input : tokens.value.output,
-    cachePartial: tokens.value.cachePartial,
-    callsPartial: tokens.value.callsPartial,
-  });
+  if (tokens.source !== 'provider') return JSON.stringify([tokens.source, tokens.reason]);
+  return JSON.stringify([
+    tokens.source,
+    metric === 'inputTokens' ? tokens.value.input : tokens.value.output,
+  ]);
 }
 
 function contradictoryTerminals(fold: DagUsageFold, metric: UsageMetric): UsageLimitation[] {
@@ -358,7 +368,9 @@ function contradictoryTerminals(fold: DagUsageFold, metric: UsageMetric): UsageL
     if (
       !observation.attemptId ||
       !executedObservation(observation) ||
-      observation.eventType === 'node_suspended'
+      observation.eventType === 'node_suspended' ||
+      // An amendment restates an attempt's accounting without measuring it again.
+      observation.accounting === 'amendment'
     )
       continue;
     const key = JSON.stringify([observation.path, observation.attemptId]);
@@ -398,7 +410,9 @@ function hasUnknownPopulation(limitations: readonly UsageLimitation[]): boolean 
       limitation.reason !== 'total_unavailable' &&
       limitation.reason !== 'total_invalid' &&
       limitation.reason !== 'total_mismatch' &&
-      limitation.reason !== 'unfinished_execution'
+      limitation.reason !== 'unfinished_execution' &&
+      // The node is known to have executed; only where its figure came from is not.
+      limitation.reason !== 'measurement_source_absent'
   );
 }
 
@@ -439,15 +453,6 @@ function childMetricCoverage(
   return result;
 }
 
-function metricPopulationNodes(coverage: MetricEvidence): UsageNodeIdentity[] {
-  return uniqueUsageNodes([
-    ...coverage.recordedNodes,
-    ...coverage.gaps.map(gap => gap.node),
-    ...coverage.partial,
-    ...coverage.contributors,
-  ]);
-}
-
 function wrapperPartial(
   runId: string,
   fold: DagUsageFold,
@@ -480,11 +485,11 @@ function buildMetricEvidence(
   totals: UsageTotals,
   metric: UsageMetric,
   children: ReadonlyMap<string, ChildUsageReport>,
-  readLimitations: readonly UsageLimitation[]
+  readLimitations: readonly UsageLimitation[],
+  unfinished: readonly DagUsageObservation[]
 ): MetricEvidence {
   const observations = consumedObservations(fold);
   const evidence = observationCoverage(run.id, observations, metric);
-  const unfinished = unfinishedObservations(fold);
   const child = childMetricCoverage(fold, children, metric);
   const limitations: UsageLimitation[] = [
     ...readLimitations,
@@ -510,7 +515,7 @@ function buildMetricEvidence(
   const population = uniqueUsageNodes(
     [...observations, ...unfinished].map(observation => identity(run.id, observation))
   );
-  population.push(...child.reports.flatMap(metricPopulationNodes));
+  population.push(...child.reports.flatMap(report => report.population));
   const gaps: EvidenceGap[] = [
     ...evidence.gaps,
     ...child.reports.flatMap(report => report.gaps),
@@ -619,8 +624,10 @@ export function collectRunUsageEvidence(
 ): UsageEvidence {
   const totals = storedTotals(run);
   const children = options.children ?? new Map();
+  // The same for every metric, so read once rather than once per metric.
+  const unfinished = unfinishedObservations(fold);
   const metric = (key: UsageMetric): MetricEvidence =>
-    buildMetricEvidence(run, fold, totals, key, children, options.limitations ?? []);
+    buildMetricEvidence(run, fold, totals, key, children, options.limitations ?? [], unfinished);
   return {
     runId: run.id,
     totals,
@@ -634,26 +641,22 @@ export function collectRunUsageEvidence(
 
 /**
  * Reduces one metric's evidence to what a reader needs: the state, how many executed AI
- * nodes should have recorded the metric and how many did, and one gap per node. The first
- * reason found for a node is kept, because it is the most specific: what the node recorded
- * about its own measurement comes before what the report concluded about the evidence.
+ * nodes should have recorded the metric and how many did, and the gaps. A node appears once
+ * per reason, not once per row that mentioned it. A partial measurement is only a gap when
+ * nothing else explains the node: it says why the figure is a floor, and a node with no
+ * figure has a more specific reason already.
  */
 function reportedCoverage(runId: string, evidence: MetricEvidence): MetricCoverage {
   const recorded = new Set([...evidence.recordedNodes, ...evidence.contributors].map(nodeKey));
   const populationKeys = new Set(evidence.population.map(nodeKey));
   const gaps: UsageGap[] = [];
-  const seenNodes = new Set<string>();
-  const seenRunGaps = new Set<string>();
-  const addGap = (gap: UsageGap): void => {
-    if (gap.path === undefined) {
-      const key = JSON.stringify([gap.runId ?? '', gap.reason]);
-      if (seenRunGaps.has(key)) return;
-      seenRunGaps.add(key);
-    } else {
-      const key = JSON.stringify([gap.runId ?? '', gap.path]);
-      if (seenNodes.has(key)) return;
-      seenNodes.add(key);
-    }
+  const seen = new Set<string>();
+  const addGap = (gap: UsageGap, onlyIfNewNode = false): void => {
+    const key = JSON.stringify([gap.runId ?? '', gap.path ?? null, gap.reason]);
+    if (seen.has(key)) return;
+    if (onlyIfNewNode && gaps.some(item => item.path === gap.path && item.runId === gap.runId))
+      return;
+    seen.add(key);
     gaps.push(gap);
   };
   const inRun = (nodeRunId: string | undefined): { runId?: string } =>
@@ -661,7 +664,7 @@ function reportedCoverage(runId: string, evidence: MetricEvidence): MetricCovera
   for (const gap of evidence.gaps)
     addGap({ path: gap.node.path, reason: gap.reason, ...inRun(gap.node.runId) });
   for (const node of evidence.partial)
-    addGap({ path: node.path, reason: 'partial_measurement', ...inRun(node.runId) });
+    addGap({ path: node.path, reason: 'partial_measurement', ...inRun(node.runId) }, true);
   for (const limitation of evidence.limitations)
     addGap({
       ...inRun(limitation.runId),

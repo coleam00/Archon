@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { countedUsage, foldDagUsage } from './dag-usage-fold';
 import { finishNodeExecution, newNodeInvocation, startNodeExecution } from './node-execution';
 import { serializeNodeStateRecord, serializeDeferredNodeUsage } from './node-record-serialization';
-import { buildRunUsageReport } from './run-usage-report';
+import { buildRunUsageReport, collectRunUsageEvidence } from './run-usage-report';
 import { formatUsageReport } from './run-usage-format';
 import { runUsageReportSchema, USAGE_METRICS } from './schemas/run-usage-report';
 import { serializeRunUsage } from './schemas/run-usage';
@@ -305,9 +305,115 @@ describe('recorded usage coverage', () => {
     ]);
     expect(legacy.totals.usd).toBe(0.25);
     expect(legacy.coverage.usd.state).not.toBe('complete');
+    // The node is known to have executed; only where its figure came from is not.
+    expect(legacy.coverage.usd).toMatchObject({ recordedNodes: 1, expectedNodes: 1 });
     expect(legacy.coverage.usd.gaps).toContainEqual({
       path: 'old',
       reason: 'measurement_source_absent',
+    });
+  });
+
+  it('keeps two gaps on one node apart when their reasons differ', () => {
+    const record = agent('review');
+    record.spend.costUsd = { source: 'unavailable', reason: 'unsupported' };
+    record.spend.tokens = { source: 'unavailable', reason: 'not_reported' };
+    const result = report([serializeNodeStateRecord(record)]);
+    expect(result.coverage.usd.gaps).toContainEqual({ path: 'review', reason: 'unsupported' });
+    expect(result.coverage.inputTokens.gaps).toContainEqual({
+      path: 'review',
+      reason: 'not_reported',
+    });
+    const lines = formatUsageReport(result);
+    expect(lines).toContain('    review: cost not recorded (unsupported)');
+    expect(lines).toContain('    review: input tokens and output tokens not reported');
+    expect(lines).toHaveLength(4);
+  });
+
+  it('does not close a start with an end that was recorded before it', () => {
+    const earlier: DagResumeEvent = {
+      event_type: 'node_completed',
+      step_name: 'build',
+      data: { type: 'agent', cost_usd: 0.25, tokens: measured.tokens },
+    };
+    const rerun: DagResumeEvent = {
+      event_type: 'node_started',
+      step_name: 'build',
+      data: { type: 'agent' },
+    };
+    const result = report([earlier, rerun]);
+    expect(result.coverage.usd.gaps).toContainEqual({
+      path: 'build',
+      reason: 'unfinished_execution',
+    });
+  });
+
+  it('does not call equal figures contradictory when only a partial flag differs', () => {
+    const record = agent('build', measured);
+    const floored = finishNodeExecution(
+      record,
+      { status: 'completed' },
+      { ...measured, costPartial: true }
+    );
+    const result = report([serializeNodeStateRecord(record), serializeNodeStateRecord(floored)]);
+    expect(result.totals.usd).toBe(0.5);
+    expect(result.coverage.usd.gaps.filter(gap => gap.reason === 'record_unreadable')).toEqual([]);
+    expect(result.coverage.inputTokens).toMatchObject({ state: 'complete', recordedNodes: 1 });
+  });
+
+  it('leaves an amendment out of the comparison of one attempt\u2019s terminals', () => {
+    const record = agent('build', measured);
+    const amendment = finishNodeExecution(
+      { ...record, accounting: 'amendment' },
+      { status: 'failed', error: 'contract' },
+      {}
+    );
+    expect(amendment.attempt.id).toBe(record.attempt.id);
+    const result = report([serializeNodeStateRecord(record), serializeNodeStateRecord(amendment)]);
+    expect(result.coverage.usd).toMatchObject({ state: 'complete', recordedNodes: 1 });
+  });
+
+  it('counts a child\u2019s AI nodes as the child counted them', () => {
+    const leaf = serializeNodeStateRecord(agent('fan__item__build', measured));
+    const wrapper: DagResumeEvent = {
+      event_type: 'node_completed',
+      step_name: 'fan__item',
+      data: {
+        type: 'compose_fan_out_instance',
+        cost_scope: 'total',
+        cost_usd: 0.25,
+        cost_partial: true,
+        tokens: measured.tokens,
+      },
+    };
+    const childFold = foldDagUsage([leaf, wrapper], 'child');
+    const child = collectRunUsageEvidence(
+      { id: 'child', metadata: serializeRunUsage(countedUsage(childFold)) },
+      childFold
+    );
+    const parent: DagResumeEvent = {
+      event_type: 'node_completed',
+      step_name: 'children',
+      data: {
+        type: 'workflow',
+        cost_usd: 0.25,
+        tokens: measured.tokens,
+        child_usage: [{ childRunId: 'child', costUsd: 0.25, tokens: measured.tokens }],
+      },
+    };
+    const result = buildRunUsageReport(
+      { id: 'run', metadata: serializeRunUsage(countedUsage(foldDagUsage([parent], 'run'))) },
+      foldDagUsage([parent], 'run'),
+      { children: new Map([['child', { evidence: child }]]) }
+    );
+    expect(result.coverage.usd).toMatchObject({
+      recordedNodes: 1,
+      expectedNodes: 1,
+      state: 'partial',
+    });
+    expect(result.coverage.usd.gaps).toContainEqual({
+      runId: 'child',
+      path: 'fan__item',
+      reason: 'partial_measurement',
     });
   });
 

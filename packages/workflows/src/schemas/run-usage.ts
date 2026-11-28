@@ -39,6 +39,13 @@ const tokenFields = {
   cachePartial: 'total_cache_partial',
 } as const satisfies Record<keyof z.infer<typeof persistedTokensSchema>, string>;
 
+/** Where a run stores each total a usage report shows. */
+export const runUsageTotalFields = {
+  usd: fields.cost,
+  inputTokens: tokenFields.input,
+  outputTokens: tokenFields.output,
+} as const;
+
 export function serializeRunUsage(usage: RunUsageFigures): Record<string, unknown> {
   const metadata: Record<string, unknown> = {};
   if (usage.costUsd !== undefined) metadata[fields.cost] = usage.costUsd;

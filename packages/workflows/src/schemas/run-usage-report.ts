@@ -57,8 +57,9 @@ export const usageGapReasonSchema = z.enum([
 export type UsageGapReason = z.infer<typeof usageGapReasonSchema>;
 
 /**
- * One gap. A node gap names its node. A run-level gap has no path. `runId` is present only
- * for a gap in a child run: the report's own run is known to the reader.
+ * One gap. A node gap names its node and one reason it has no usable figure; a node with
+ * two reasons has two gaps. A run-level gap has no path. `runId` is present only for a gap
+ * in a child run: the report's own run is known to the reader.
  */
 export const usageGapSchema = z.object({
   path: z.string().optional(),
@@ -80,12 +81,6 @@ export const metricCoverageSchema = z.object({
 });
 export type MetricCoverage = z.infer<typeof metricCoverageSchema>;
 
-export const usageCoverageSchema = z.object({
-  usd: metricCoverageSchema,
-  inputTokens: metricCoverageSchema,
-  outputTokens: metricCoverageSchema,
-});
-export type UsageCoverage = z.infer<typeof usageCoverageSchema>;
 export const usageTotalsSchema = z.object({
   usd: z.number().nullable(),
   inputTokens: z.number().nullable(),
@@ -94,6 +89,9 @@ export const usageTotalsSchema = z.object({
 export type UsageTotals = z.infer<typeof usageTotalsSchema>;
 export type UsageMetric = keyof UsageTotals;
 export const USAGE_METRICS = usageTotalsSchema.keyof().options;
+// Keyed by the totals schema, so coverage cannot gain or lose a metric the totals lack.
+export const usageCoverageSchema = z.record(z.enum(USAGE_METRICS), metricCoverageSchema);
+export type UsageCoverage = z.infer<typeof usageCoverageSchema>;
 export const runUsageReportSchema = z.object({
   totals: usageTotalsSchema,
   coverage: usageCoverageSchema,

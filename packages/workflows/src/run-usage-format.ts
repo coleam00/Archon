@@ -60,7 +60,8 @@ function nodeGapLines(coverage: UsageCoverage): string[] {
   for (const metric of USAGE_METRICS) {
     for (const gap of coverage[metric].gaps) {
       if (gap.path === undefined) continue;
-      const key = JSON.stringify([gap.runId ?? '', gap.path]);
+      // A node can miss two metrics for two different reasons; those are two lines.
+      const key = JSON.stringify([gap.runId ?? '', gap.path, gap.reason]);
       const group = groups.get(key) ?? {
         path: gap.path,
         child: gap.runId !== undefined,
