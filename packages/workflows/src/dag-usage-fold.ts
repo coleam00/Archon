@@ -509,14 +509,13 @@ function foldChildUsage(fold: DagUsageFold, record: ReadNodeRecordEvent): void {
   }
   if (data.type !== 'workflow') return;
   const usage = readUsage(fold, path, record.rawUsage);
-  if (
+  // A zero increment has no amount to allocate among children.
+  const zeroIncrement =
     (usage.costUsd ?? 0) === 0 &&
     !usage.tokensUnknown &&
     Object.values(usage.tokens ?? {}).every(
       value => value === undefined || value === 0 || (Array.isArray(value) && value.length === 0)
-    )
-  )
-    return;
+    );
   const ids = new Set(
     data.fan_out_outcome?.slots.flatMap(slot => ('child_run_id' in slot ? [slot.child_run_id] : []))
   );
@@ -524,10 +523,11 @@ function foldChildUsage(fold: DagUsageFold, record: ReadNodeRecordEvent): void {
   // Historical fan-out increments cannot be allocated among children. Keep their
   // node-level spend readable without inventing cumulative child baselines.
   if (ids.size !== 1) {
-    fold.unattributedChildUsagePaths.add(path);
+    if (!zeroIncrement) fold.unattributedChildUsagePaths.add(path);
     return;
   }
   // Legacy workflow rows report increments, unlike child_usage's cumulative baselines.
+  // A zero increment still names its child, which the usage report reads through this map.
   for (const id of ids) {
     recordChildUsagePath(fold, id, path);
     const contributions = [fold.reportedChildUsage.get(id) ?? {}, usage];
