@@ -1,0 +1,8 @@
+{
+  "name": "archon-attention",
+  "version": "0.1.0",
+  "description": "Live Archon attention queue pane, typed answer_attention tool, and optional automation skill for Claude Code",
+  "author": {
+    "name": "Archon"
+  }
+}
