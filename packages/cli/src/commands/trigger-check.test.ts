@@ -5,190 +5,17 @@
  * config lives, and reports a start that would be refused for its inputs, reading only.
  * `trigger schedule` finds the timer it installed by the same reading of `ARCHON_HOME`.
  */
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { basename, dirname, join, sep } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { providerRegistry } from '@archon/providers';
-import { registerBuiltinProviders } from '@archon/providers/in-process';
-import { loadConfig } from '@archon/core/config/config-loader';
-import { setPlatformPolicies } from '@archon/core/platforms/registry';
-import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
-import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
-import {
-  createInMemoryWorkflowHostStore,
-  createInMemoryWorkflowStore,
-} from '../test-support/workflow-store';
-import { installNativeSchedule, type NativeScheduleOptions } from '../triggers/native-schedule';
-import { triggerCommand } from './trigger';
+import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { mkdir, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join, sep } from 'node:path';
+import { triggerCheckFixtures } from '../test-support/trigger-check-fixture';
+import { cliProgramArguments } from '../utils/cli-program-arguments';
+import { installNativeSchedule, scheduleLabel } from '../triggers/native-schedule';
 import { wakeLastPassPath, writeWakeLastPass } from '@archon/core/workflows/wake-last-pass';
-import { workflowWakeScheduleConfig } from './wake-schedule';
+import { workflowWakeScheduleConfig, workflowWakeScheduleTarget } from './wake-schedule';
 
-const tempRoots = trackTempRoots();
-const previousHome = process.env.ARCHON_HOME;
-const previousSources = process.env.ARCHON_WEBHOOK_SOURCES;
-
-afterEach(() => {
-  if (previousHome === undefined) delete process.env.ARCHON_HOME;
-  else process.env.ARCHON_HOME = previousHome;
-  if (previousSources === undefined) delete process.env.ARCHON_WEBHOOK_SOURCES;
-  else process.env.ARCHON_WEBHOOK_SOURCES = previousSources;
-});
-
-function hostForTest(): WorkflowHost {
-  const records = createInMemoryWorkflowHostStore();
-  const store = createInMemoryWorkflowStore(records);
-  const deps = {
-    store,
-    providers: providerRegistry,
-    loadConfig,
-    getAgentProvider: (): never => {
-      throw new Error('No AI provider');
-    },
-  };
-  const unsupported = async (): Promise<never> => {
-    throw new Error('Unexpected host effect');
-  };
-  return {
-    deps,
-    records,
-    engine: new InProcessWorkflowEngine(deps),
-    operations: createWorkflowOperations({
-      store: { ...store, deleteWorkflowRun: unsupported },
-      hostStore: records,
-      getUserRole: async id => (await records.users.getUserById(id))?.role,
-      requestDetachedRunStop: unsupported,
-      isRunOwnedByThisProcess: () => false,
-      isRunOwnerAnswering: async () => false,
-      reclaimRunWorktree: unsupported,
-      reclaimContainerEnv: unsupported,
-    }),
-  };
-}
-
-// `a` is required, `b` is not declared.
-const WORKFLOW =
-  'name: stage\ndescription: A stage\ninputs:\n  a: { required: true }\nnodes:\n  - id: one\n    bash: echo one\n';
-
-interface CheckedBinding {
-  file: string;
-  workflowName: string | null;
-  timer: string | null;
-  problems: string[];
-}
-
-async function fixture() {
-  const root = tempRoots(await realpath(await mkdtemp(join(tmpdir(), 'archon-trigger-check-'))));
-  const project = join(root, 'project');
-  const archonHome = join(root, 'home');
-  await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
-  await writeFile(join(project, '.archon', 'workflows', 'stage.yaml'), WORKFLOW);
-  await mkdir(join(archonHome, 'triggers'), { recursive: true });
-  process.env.ARCHON_HOME = archonHome;
-  registerBuiltinProviders();
-  setPlatformPolicies([]);
-  const scheduled: string[][] = [];
-  const runCommand: NativeScheduleOptions['runCommand'] = async (executable, args) => {
-    scheduled.push([executable, ...args]);
-  };
-  // A job is validated by its scheduler's path rules, so the scheduler must be one whose
-  // rules accept the host paths this fixture writes: Task Scheduler on Windows, launchd elsewhere.
-  const { schedules, timerPrefix, removeByHand } =
-    process.platform === 'win32'
-      ? {
-          schedules: { platform: 'win32', windowsUserId: 'me', runCommand } as const,
-          timerPrefix: join(archonHome, 'schedules', 'com.archon.trigger.'),
-          removeByHand: 'schtasks.exe /Delete /TN \\Archon\\com.archon.trigger.',
-        }
-      : {
-          schedules: {
-            platform: 'darwin',
-            uid: 501,
-            launchAgentsDirectory: join(root, 'LaunchAgents'),
-            runCommand,
-          } as const,
-          timerPrefix: join(root, 'LaunchAgents', 'com.archon.trigger.'),
-          removeByHand: 'launchctl bootout gui/501/com.archon.trigger.',
-        };
-  const config = (inputs: Record<string, unknown>, schedule = true) => ({
-    version: 1,
-    sourceInstanceId: 'timer',
-    binding: {
-      bindingId: 'timer',
-      bindingRevision: null,
-      hostId: 'host',
-      runAsUserId: 'user',
-      resource: 'stage',
-      overlap: 'queue',
-      launch: { cwd: project, workflowName: 'stage', inputs, isolation: { kind: 'in-place' } },
-    },
-    ...(schedule ? { schedule: { intervalSeconds: 1800, runAtLoad: false } } : {}),
-  });
-  /** A timer whose config file is outside the triggers directory, as `schedule install` leaves it. */
-  const installTimer = async (path: string): Promise<void> => {
-    await installNativeSchedule(
-      {
-        id: 'timer',
-        programArguments: ['/opt/archon/bin/archon', 'trigger', 'fire', '--config', path],
-        workingDirectory: project,
-        archonHome,
-        path: '/usr/bin:/bin',
-        schedule: { intervalSeconds: 1800, runAtLoad: false },
-        output: 'log',
-        removeCommand: `archon trigger schedule remove --config ${path}`,
-      },
-      schedules
-    );
-  };
-  const check = async (): Promise<{
-    bindings: CheckedBinding[];
-    observing?: Record<string, unknown>;
-    error: unknown;
-  }> => {
-    let printed = '';
-    const stdout = spyOn(process.stdout, 'write').mockImplementation(((
-      chunk: unknown,
-      encodingOrCallback?: unknown,
-      callback?: () => void
-    ) => {
-      // The check prints one pretty JSON document; log lines are single-line.
-      if (String(chunk).startsWith('{\n')) printed = String(chunk);
-      (typeof encodingOrCallback === 'function'
-        ? (encodingOrCallback as () => void)
-        : callback)?.();
-      return true;
-    }) as typeof process.stdout.write);
-    let error: unknown;
-    try {
-      await triggerCommand(hostForTest(), 'check', [], {}, { schedules });
-    } catch (caught) {
-      error = caught;
-    } finally {
-      stdout.mockRestore();
-    }
-    if (printed === '') throw error;
-    return {
-      ...(JSON.parse(printed) as {
-        bindings: CheckedBinding[];
-        observing?: Record<string, unknown>;
-      }),
-      error,
-    };
-  };
-  return {
-    root,
-    archonHome,
-    config,
-    installTimer,
-    check,
-    scheduled,
-    schedules,
-    timerPrefix,
-    removeByHand,
-  };
-}
+const { fixture, scheduleFixture } = triggerCheckFixtures();
 
 test('reports an installed timer outside the triggers directory that passes an undeclared input', async () => {
   const { root, archonHome, config, installTimer, check, scheduled, timerPrefix } = await fixture();
@@ -306,7 +133,7 @@ test('reports the outcomes after which a stage a fire-only file starts would sto
 });
 
 test('names the observing sources nothing watches with the fix, and the watcher once installed', async () => {
-  const { root, check, schedules } = await fixture();
+  const { root, archonHome, check, schedules } = await fixture();
   const plugin = join(root, 'source.mjs');
   await writeFile(
     plugin,
@@ -360,7 +187,10 @@ test('names the observing sources nothing watches with the fix, and the watcher 
   // A report, not a binding problem: the check still passes.
   expect(unwatched.error).toBeUndefined();
 
+  process.env.ARCHON_HOME = `${archonHome}${sep}`;
+  const installedTarget = workflowWakeScheduleTarget();
   await installNativeSchedule(workflowWakeScheduleConfig(), schedules);
+  process.env.ARCHON_HOME = archonHome;
   const watched = await check();
   expect(watched.observing).toEqual({
     sources: observed,
@@ -370,7 +200,7 @@ test('names the observing sources nothing watches with the fix, and the watcher 
   expect(watched.error).toBeUndefined();
 
   // The job discards the watcher's output; a failed last pass is reported, still not an error.
-  const lastPass = wakeLastPassPath();
+  const lastPass = wakeLastPassPath(installedTarget);
   await mkdir(dirname(lastPass), { recursive: true });
   const failed = {
     at: '2026-11-23T21:30:00.000Z',
@@ -413,50 +243,114 @@ test('names the observing sources nothing watches with the fix, and the watcher 
   expect((await check()).observing).toMatchObject({ sources: observed, unwatched: false });
 });
 
+test('finds the registered wake duplicate and its recorded sources and last pass', async () => {
+  const { root, archonHome, schedules, registered, check } = await fixture();
+  const plugin = join(root, 'duplicate-source.mjs');
+  await writeFile(
+    plugin,
+    `export default () => ({ receive: async () => ({ kind: 'ignored' }), observe: async () => ({ events: [] }) });`
+  );
+  const sources = join(root, 'duplicate-sources.json');
+  await writeFile(
+    sources,
+    JSON.stringify({
+      version: 1,
+      sources: [
+        {
+          sourceInstanceId: 'duplicate',
+          module: plugin,
+          config: {},
+          observe: { everySeconds: 60 },
+        },
+      ],
+    })
+  );
+  process.env.ARCHON_WEBHOOK_SOURCES = sources;
+  const targets = [
+    workflowWakeScheduleTarget(archonHome),
+    workflowWakeScheduleTarget(`${archonHome}${sep}`),
+  ].sort((a, b) => a.id.localeCompare(b.id));
+  const [inactive, active] = targets;
+  if (!inactive || !active) throw new Error('Expected two wake targets');
+  const interval = schedules.platform === 'win32' ? 60 : 5;
+  await installNativeSchedule(workflowWakeScheduleConfig(interval, inactive), schedules);
+  registered.clear();
+  expect((await check()).observing).toMatchObject({
+    watcher: { installed: true, registered: false },
+    unwatched: true,
+  });
+
+  await installNativeSchedule(workflowWakeScheduleConfig(interval, active), schedules);
+  const label = scheduleLabel(active.id);
+  expect([...registered]).toEqual([schedules.platform === 'win32' ? `\\Archon\\${label}` : label]);
+  const pass = { at: '2026-11-27T00:00:00.000Z', pid: 2, ok: true, parts: {}, sources };
+  await writeWakeLastPass(wakeLastPassPath(active), pass);
+  expect((await check()).observing).toMatchObject({
+    watcher: { installed: true, registered: true, lastPass: pass },
+    unwatched: false,
+  });
+
+  await writeWakeLastPass(wakeLastPassPath(inactive), {
+    ...pass,
+    pid: 1,
+    sources: join(root, 'missing-inactive-sources.json'),
+  });
+  delete process.env.ARCHON_WEBHOOK_SOURCES;
+  const report = await check();
+  expect(report.observing).toMatchObject({
+    sources: [expect.objectContaining({ source: 'duplicate' })],
+    watcher: { installed: true, registered: true, lastPass: pass },
+    unwatched: false,
+  });
+  expect(report.error).toBeUndefined();
+});
+
 describe('schedule finds the binding timer however ARCHON_HOME is spelled', () => {
-  async function scheduleFixture() {
-    const base = await fixture();
-    const host = hostForTest();
-    const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'me');
-    if (!user) throw new Error('No run-as user');
-    const path = join(base.root, 'timer.json');
-    const timerConfig = base.config({ a: 1 });
-    timerConfig.binding.runAsUserId = user.id;
-    await writeFile(path, JSON.stringify(timerConfig));
-    const alias = join(base.root, 'home-link');
-    await symlink(base.archonHome, alias, 'junction');
-    const schedule = async (operation: string): Promise<Record<string, unknown>> => {
-      let printed = '';
-      const stdout = spyOn(process.stdout, 'write').mockImplementation(((
-        chunk: unknown,
-        encodingOrCallback?: unknown,
-        callback?: () => void
-      ) => {
-        printed += String(chunk);
-        (typeof encodingOrCallback === 'function'
-          ? (encodingOrCallback as () => void)
-          : callback)?.();
-        return true;
-      }) as typeof process.stdout.write);
-      try {
-        await triggerCommand(
-          host,
-          'schedule',
-          [operation],
-          { config: path },
-          { schedules: base.schedules }
-        );
-      } finally {
-        stdout.mockRestore();
-      }
-      return JSON.parse(printed) as Record<string, unknown>;
-    };
-    const timerFiles = async (): Promise<string[]> =>
-      (await readdir(dirname(base.timerPrefix))).filter(name =>
-        name.startsWith(basename(base.timerPrefix))
+  test('status and reinstall prefer a registered duplicate timer', async () => {
+    const { archonHome, alias, config, path, schedule, schedules, registered, scheduled } =
+      await scheduleFixture();
+    const homes = [archonHome, `${archonHome}${sep}`]
+      .map(home => ({
+        archonHome: home,
+        id: createHash('sha256')
+          .update(JSON.stringify([home, 'timer', 'timer']))
+          .digest('hex'),
+      }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const [inactive, active] = homes;
+    if (!inactive || !active) throw new Error('Expected two timer targets');
+    const definitions: string[] = [];
+    for (const target of [inactive, active]) {
+      registered.clear();
+      definitions.push(
+        (
+          await installNativeSchedule(
+            {
+              ...target,
+              workingDirectory: config({ a: 1 }).binding.launch.cwd,
+              programArguments: [...cliProgramArguments(), 'trigger', 'fire', '--config', path],
+              path: process.env.PATH ?? '',
+              schedule: { intervalSeconds: 1800, runAtLoad: false },
+              output: 'log',
+              removeCommand: `archon trigger schedule remove --config ${path}`,
+            },
+            schedules
+          )
+        ).path
       );
-    return { ...base, path, alias, schedule, timerFiles };
-  }
+    }
+    process.env.ARCHON_HOME = alias;
+    scheduled.length = 0;
+    expect(await schedule('status')).toMatchObject({
+      installed: true,
+      registered: true,
+      path: definitions[1],
+    });
+    await schedule('install');
+    expect(
+      scheduled.some(command => command.includes('bootstrap') || command.includes('/Create'))
+    ).toBe(false);
+  });
 
   test('status and remove find a timer installed under another spelling of the home', async () => {
     const { archonHome, alias, schedule, timerFiles } = await scheduleFixture();

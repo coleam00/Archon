@@ -216,13 +216,14 @@ export function taskSchedulerBackend(
     unregister: async label => {
       if (await isRegistered(label)) await deleteTask(label);
     },
-    installed: async () =>
+    installed: async matchesLabel =>
       readInstalled(
         await installedLabels(join(archonHome, 'schedules'), '.cmd'),
         label => wrapperPath(archonHome, label),
         readTaskWrapper,
         label =>
-          `${SCHTASKS} /Delete /TN ${taskName(label)} /F, then delete ${definitionPath(archonHome, label)} and ${wrapperPath(archonHome, label)}`
+          `${SCHTASKS} /Delete /TN ${taskName(label)} /F, then delete ${definitionPath(archonHome, label)} and ${wrapperPath(archonHome, label)}`,
+        matchesLabel
       ),
   };
 }

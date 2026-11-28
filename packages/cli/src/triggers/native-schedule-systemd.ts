@@ -127,13 +127,14 @@ export function systemdBackend(run: RunCommand, options: NativeScheduleOptions):
     },
     unregister: label => systemctl('disable', '--now', timer(label)),
     afterRemove: () => systemctl('daemon-reload'),
-    installed: async () =>
+    installed: async matchesLabel =>
       readInstalled(
         await installedLabels(directory, '.service'),
         label => paths(label)[1],
         readSystemdService,
         label =>
-          `${SYSTEMCTL} --user disable --now ${timer(label)}, then delete ${paths(label).join(' and ')} and run ${SYSTEMCTL} --user daemon-reload`
+          `${SYSTEMCTL} --user disable --now ${timer(label)}, then delete ${paths(label).join(' and ')} and run ${SYSTEMCTL} --user daemon-reload`,
+        matchesLabel
       ),
   };
 }

@@ -1,0 +1,268 @@
+// @archon-test-isolated
+import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { chmod, mkdir, readdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { dirname, join, sep } from 'node:path';
+import { triggerCheckFixtures } from '../test-support/trigger-check-fixture';
+import {
+  installNativeSchedule,
+  inspectNativeSchedule,
+  scheduleLabel,
+  type NativeScheduleOptions,
+} from '../triggers/native-schedule';
+import { workflowWakeScheduleConfig, workflowWakeScheduleTarget } from './wake-schedule';
+
+const { fixture, scheduleFixture } = triggerCheckFixtures();
+
+test.skipIf(process.platform === 'win32')(
+  'a source-free check does not require watcher log metadata across home spellings',
+  async () => {
+    const { root, archonHome, schedules, check } = await fixture();
+    delete process.env.ARCHON_WEBHOOK_SOURCES;
+    const recordedHome = `${archonHome}${sep}`;
+    process.env.ARCHON_HOME = recordedHome;
+    const target = workflowWakeScheduleTarget();
+    await installNativeSchedule(workflowWakeScheduleConfig(), schedules);
+    const alias = join(root, 'home-link');
+    await symlink(archonHome, alias);
+    const plugin = join(root, 'receive-only.mjs');
+    await writeFile(
+      plugin,
+      "export default () => ({ receive: async () => ({ kind: 'ignored' }) });"
+    );
+    const configPath = join(root, 'sources.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sources: [{ sourceInstanceId: 'receive-only', module: plugin, config: {} }],
+      })
+    );
+    const stateDirectory = join(archonHome, 'schedules');
+    const log = join(stateDirectory, `${scheduleLabel(target.id)}.log`);
+    await chmod(stateDirectory, 0);
+    try {
+      await expect(stat(log)).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(inspectNativeSchedule(target, schedules)).rejects.toMatchObject({
+        code: 'EACCES',
+      });
+      for (const sources of [undefined, configPath]) {
+        if (sources) process.env.ARCHON_WEBHOOK_SOURCES = sources;
+        else delete process.env.ARCHON_WEBHOOK_SOURCES;
+        for (const spelling of [recordedHome, archonHome, alias]) {
+          process.env.ARCHON_HOME = spelling;
+          const result = await check();
+          expect(result.error).toBeUndefined();
+          expect(result.observing).toBeUndefined();
+        }
+      }
+    } finally {
+      await chmod(stateDirectory, 0o700);
+    }
+  }
+);
+
+test.skipIf(process.platform === 'win32')(
+  'reports a corrupted native definition and fails trigger checking',
+  async () => {
+    const { root, config, installTimer, check, scheduled } = await fixture();
+    const path = join(root, 'timer.json');
+    await writeFile(path, JSON.stringify(config({ a: 1 })));
+    const definition = await installTimer(path);
+    await writeFile(definition, '<plist/>');
+    scheduled.length = 0;
+
+    const result = await check();
+
+    expect(result.bindings).toEqual([
+      expect.objectContaining({
+        file: definition,
+        timer: definition,
+        workflowName: null,
+        problems: [expect.any(String)],
+      }),
+    ]);
+    expect(result.error).toBeInstanceOf(Error);
+    expect(scheduled).toEqual([]);
+  }
+);
+
+async function seedUnresolvableCleanupHome(root: string, schedules: NativeScheduleOptions) {
+  const archonHome = join(root, 'other-install');
+  await installNativeSchedule(
+    {
+      id: `isolation-cleanup-${createHash('sha256').update(archonHome).digest('hex')}`,
+      archonHome,
+      workingDirectory: archonHome,
+      programArguments: [process.execPath, 'isolation', 'cleanup', '--merged'],
+      path: '/usr/bin',
+      schedule: { intervalSeconds: 60, runAtLoad: true },
+      output: 'log',
+      removeCommand: 'archon isolation cleanup schedule remove',
+    },
+    schedules
+  );
+  await rm(archonHome, { recursive: true });
+  await symlink(archonHome, archonHome);
+}
+
+test.skipIf(process.platform === 'win32')(
+  'check ignores another job family with an unresolvable home',
+  async () => {
+    const { root, config, installTimer, check, schedules, scheduled } = await fixture();
+    const path = join(root, 'timer.json');
+    await writeFile(path, JSON.stringify(config({ a: 1 })));
+    await installTimer(path);
+    await seedUnresolvableCleanupHome(root, schedules);
+    scheduled.length = 0;
+
+    const result = await check();
+    expect(result.bindings).toEqual([expect.objectContaining({ file: path, problems: [] })]);
+    expect(result.error).toBeUndefined();
+    expect(scheduled).toEqual([]);
+  }
+);
+
+describe('schedule finds the binding timer however ARCHON_HOME is spelled', () => {
+  describe.each(['darwin', 'linux'] as const)('%s backend', platform => {
+    test.skipIf(process.platform === 'win32')(
+      'malformed alternate timers refuse status, removal and a second installation',
+      async () => {
+        const { root, archonHome, schedules, schedule, scheduled } = await scheduleFixture();
+        schedules.platform = platform;
+        schedules.systemdUserDirectory = join(root, 'units');
+        process.env.ARCHON_HOME = `${archonHome}${sep}`;
+        await schedule('install');
+        const installed = await schedule('status');
+        const definition =
+          platform === 'linux'
+            ? String(installed.path).replace(/\.timer$/, '.service')
+            : String(installed.path);
+        await writeFile(definition, 'malformed definition');
+        const files = (await readdir(dirname(definition))).sort();
+        const contents = await Promise.all(
+          files.map(file => readFile(join(dirname(definition), file)))
+        );
+        scheduled.length = 0;
+        process.env.ARCHON_HOME = archonHome;
+        for (const operation of ['status', 'remove', 'install']) {
+          await expect(schedule(operation)).rejects.toThrow();
+          expect((await readdir(dirname(definition))).sort()).toEqual(files);
+          expect(
+            await Promise.all(files.map(file => readFile(join(dirname(definition), file))))
+          ).toEqual(contents);
+        }
+        expect(scheduled).toEqual([]);
+      }
+    );
+
+    test.skipIf(process.platform === 'win32').each(['ELOOP', 'EACCES'] as const)(
+      'equivalent-home timer reinstall ignores unused %s log metadata while status still reads it',
+      async errorCode => {
+        const { root, archonHome, alias, schedules, schedule, registered } =
+          await scheduleFixture();
+        schedules.platform = platform;
+        schedules.systemdUserDirectory = join(root, 'units');
+        const recordedHome = `${archonHome}${sep}`;
+        process.env.ARCHON_HOME = recordedHome;
+        await schedule('install');
+        const installed = await schedule('status');
+        const definition = String(installed.path);
+        const files = (await readdir(dirname(definition))).sort();
+        const contents = await Promise.all(
+          files.map(file => readFile(join(dirname(definition), file)))
+        );
+        const log = String(installed.log);
+        const metadataDirectory = join(root, 'log-metadata');
+        if (errorCode === 'ELOOP') await symlink(log, log);
+        else {
+          await mkdir(metadataDirectory);
+          const entry = join(metadataDirectory, 'entry');
+          await writeFile(entry, 'log');
+          await symlink(entry, log);
+          await chmod(metadataDirectory, 0);
+        }
+        registered.clear();
+        const loaded: string[][] = [];
+        schedules.runCommand = async (executable, args) => {
+          if (args[0] === 'print' || args[1] === 'is-active') throw new Error('Job is not loaded');
+          loaded.push([executable, ...args]);
+        };
+        try {
+          await expect(stat(log)).rejects.toMatchObject({ code: errorCode });
+          for (const spelling of [recordedHome, archonHome, alias]) {
+            process.env.ARCHON_HOME = spelling;
+            await schedule('install');
+            await expect(schedule('status')).rejects.toMatchObject({ code: errorCode });
+          }
+          expect(
+            loaded.filter(args => args.includes(platform === 'darwin' ? 'bootstrap' : 'enable'))
+          ).toHaveLength(3);
+          expect((await readdir(dirname(definition))).sort()).toEqual(files);
+          expect(
+            await Promise.all(files.map(file => readFile(join(dirname(definition), file))))
+          ).toEqual(contents);
+          expect(await schedule('remove')).toMatchObject({ removed: true });
+        } finally {
+          if (errorCode === 'EACCES') await chmod(metadataDirectory, 0o700);
+        }
+      }
+    );
+  });
+
+  test.skipIf(process.platform === 'win32')(
+    'another job family with an unresolvable home does not block schedule operations',
+    async () => {
+      const { root, schedules, schedule, timerFiles } = await scheduleFixture();
+      await schedule('install');
+      const installed = await timerFiles();
+      await seedUnresolvableCleanupHome(root, schedules);
+
+      expect(await schedule('status')).toMatchObject({ installed: true, registered: true });
+      await schedule('install');
+      expect(await timerFiles()).toHaveLength(installed.length + 1);
+      expect(await schedule('remove')).toMatchObject({ removed: true });
+      const remaining = await timerFiles();
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]).toContain('isolation-cleanup-');
+      expect(await schedule('remove')).toMatchObject({ removed: false });
+    }
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'a potentially matching recorded home failure is not successful absence',
+    async () => {
+      const { archonHome, alias, schedule } = await scheduleFixture();
+      process.env.ARCHON_HOME = alias;
+      await schedule('install');
+      await rm(alias);
+      await symlink(alias, alias);
+      process.env.ARCHON_HOME = archonHome;
+
+      for (const operation of ['install', 'status', 'remove']) {
+        await expect(schedule(operation)).rejects.toMatchObject({ code: 'ELOOP' });
+      }
+    }
+  );
+
+  test.skipIf(process.platform === 'win32')(
+    'remove reaches an unreadable current timer beside a readable alternate',
+    async () => {
+      const { archonHome, schedules, schedule, timerFiles } = await scheduleFixture();
+      process.env.ARCHON_HOME = `${archonHome}${sep}`;
+      await schedule('install');
+      const currentId = createHash('sha256')
+        .update(JSON.stringify([archonHome, 'timer', 'timer']))
+        .digest('hex');
+      await writeFile(
+        join(schedules.launchAgentsDirectory!, `${scheduleLabel(currentId)}.plist`),
+        '<plist/>'
+      );
+      expect(await timerFiles()).toHaveLength(2);
+
+      process.env.ARCHON_HOME = archonHome;
+      expect(await schedule('remove')).toMatchObject({ removed: true });
+      expect(await timerFiles()).toEqual([]);
+    }
+  );
+});

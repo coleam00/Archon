@@ -23,14 +23,18 @@ import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { parseIntervalSeconds, validateFlags } from '../utils/command-flags';
 import { writeStdout } from '../utils/stdout';
 import {
-  inspectNativeSchedule,
+  findNativeScheduleTargets,
+  inspectNativeScheduleRegistrationTargets,
+  inspectNativeScheduleTargets,
   installNativeSchedule,
   removeNativeSchedule,
   type NativeScheduleConfig,
+  type NativeScheduleOptions,
   type NativeScheduleTarget,
 } from '../triggers/native-schedule';
 
 export const WAKE_SCHEDULE_INSTALL_COMMAND = 'archon workflow wake schedule install';
+const WAKE_SCHEDULE_ID_PREFIX = 'workflow-wake-';
 
 /** Task Scheduler repeats a task in whole minutes only, from one minute. */
 export function defaultWakeIntervalSeconds(platform: NodeJS.Platform = process.platform): number {
@@ -38,9 +42,20 @@ export function defaultWakeIntervalSeconds(platform: NodeJS.Platform = process.p
 }
 
 /** One job per install: the id is keyed on the Archon home. */
-export function workflowWakeScheduleTarget(): NativeScheduleTarget {
-  const archonHome = getArchonHome();
+export function workflowWakeScheduleTarget(archonHome = getArchonHome()): NativeScheduleTarget {
   return { id: wakeJobId(archonHome), archonHome };
+}
+
+export async function workflowWakeScheduleTargets(
+  schedules: NativeScheduleOptions = {}
+): Promise<[NativeScheduleTarget, ...NativeScheduleTarget[]]> {
+  const archonHome = getArchonHome();
+  return findNativeScheduleTargets(
+    archonHome,
+    home => workflowWakeScheduleTarget(home).id,
+    schedules,
+    WAKE_SCHEDULE_ID_PREFIX
+  );
 }
 
 /**
@@ -59,9 +74,10 @@ function homeEnvNamesSources(archonHome: string): boolean {
 }
 
 export function workflowWakeScheduleConfig(
-  intervalSeconds = defaultWakeIntervalSeconds()
+  intervalSeconds = defaultWakeIntervalSeconds(),
+  target = workflowWakeScheduleTarget()
 ): NativeScheduleConfig {
-  const { id, archonHome } = workflowWakeScheduleTarget();
+  const { id, archonHome } = target;
   const [executable, ...prefix] = cliProgramArguments();
   // The job sets only ARCHON_HOME and PATH, so a sources file only this shell names travels
   // as an argument. Otherwise the job could read it only from ARCHON_HOME/.env, which every
@@ -124,8 +140,17 @@ interface Outcome {
   text: string;
 }
 
-async function install(config: NativeScheduleConfig): Promise<Outcome> {
-  const { path } = await installNativeSchedule(config);
+async function install(
+  interval: number,
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  const target =
+    targets.length === 1
+      ? targets[0]
+      : (await inspectNativeScheduleRegistrationTargets(targets, schedules)).target;
+  const config = workflowWakeScheduleConfig(interval, target);
+  const { path } = await installNativeSchedule(config, schedules);
   const every = String(config.schedule.intervalSeconds);
   return {
     result: { path },
@@ -133,19 +158,43 @@ async function install(config: NativeScheduleConfig): Promise<Outcome> {
   };
 }
 
-async function remove(config: NativeScheduleConfig): Promise<Outcome> {
-  const removed = await removeNativeSchedule(config);
-  await unlink(wakeLastPassPath(config)).catch(() => undefined);
+async function remove(
+  targets: readonly NativeScheduleTarget[],
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  let removed = false;
+  const recordsLeft: string[] = [];
+  for (const target of targets) {
+    if (await removeNativeSchedule(target, schedules)) removed = true;
+    // A record left behind is still read as a pass of a job that no longer exists, so a
+    // failure to delete it is reported. Only a record that was never written is ignored.
+    const record = wakeLastPassPath(target);
+    await unlink(record).catch(error => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') recordsLeft.push(record);
+    });
+  }
+  const left =
+    recordsLeft.length === 0
+      ? ''
+      : `, but could not delete its last-pass record: ${recordsLeft.join(', ')}. Delete it by hand`;
+  const text = removed
+    ? `Removed the wake watcher job${left}.`
+    : recordsLeft.length === 0
+      ? NOT_INSTALLED
+      : `${NOT_INSTALLED} Could not delete its last-pass record: ${recordsLeft.join(', ')}. Delete it by hand.`;
   return {
-    result: { removed },
-    text: removed ? 'Removed the wake watcher job.' : NOT_INSTALLED,
+    result: { removed, ...(recordsLeft.length === 0 ? {} : { lastPassNotRemoved: recordsLeft }) },
+    text,
   };
 }
 
-async function status(config: NativeScheduleConfig): Promise<Outcome> {
-  const installed = await inspectNativeSchedule(config);
+async function status(
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
+  schedules: NativeScheduleOptions
+): Promise<Outcome> {
+  const { target, status: installed } = await inspectNativeScheduleTargets(targets, schedules);
   if (!installed) return { result: { installed: false }, text: NOT_INSTALLED };
-  const passPath = wakeLastPassPath(config);
+  const passPath = wakeLastPassPath(target);
   const recorded = await readWakeLastPass(passPath);
   const lastPass = recorded.kind === 'read' ? recorded.pass : undefined;
   const result = {
@@ -171,11 +220,6 @@ async function status(config: NativeScheduleConfig): Promise<Outcome> {
   return { result, text: `The wake watcher job is installed: ${installed.path}.${last}` };
 }
 
-const OPERATIONS = { install, remove, status } satisfies Record<
-  Operation,
-  (config: NativeScheduleConfig) => Promise<Outcome>
->;
-
 function parseOperation(args: string[]): Operation {
   const operation = args[1];
   if (
@@ -187,15 +231,23 @@ function parseOperation(args: string[]): Operation {
 }
 
 /** `args` starts at `schedule`. */
-export async function workflowWakeScheduleCommand(args: string[], values: Values): Promise<number> {
+export async function workflowWakeScheduleCommand(
+  args: string[],
+  values: Values,
+  schedules: NativeScheduleOptions = {}
+): Promise<number> {
   const json = values.json === true;
   try {
     const operation = parseOperation(args);
     validateFlags(values, operation === 'install' ? ['interval'] : []);
-    const config = workflowWakeScheduleConfig(
-      parseIntervalSeconds(values, defaultWakeIntervalSeconds())
-    );
-    const { result, text } = await OPERATIONS[operation](config);
+    const interval = parseIntervalSeconds(values, defaultWakeIntervalSeconds());
+    const targets = await workflowWakeScheduleTargets(schedules);
+    const { result, text } =
+      operation === 'install'
+        ? await install(interval, targets, schedules)
+        : operation === 'remove'
+          ? await remove(targets, schedules)
+          : await status(targets, schedules);
     await writeStdout(
       json
         ? `${JSON.stringify({ ok: true, action: `wake schedule ${operation}`, ...result })}\n`

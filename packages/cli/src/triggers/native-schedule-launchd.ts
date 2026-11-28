@@ -109,12 +109,13 @@ export function launchdBackend(run: RunCommand, options: NativeScheduleOptions):
     render: job => [{ path: plistPath(job.label), contents: renderMacosLaunchAgent(job) }],
     isRegistered,
     register: job => run(LAUNCHCTL, ['bootstrap', domain, plistPath(job.label)]),
-    installed: async () =>
+    installed: async matchesLabel =>
       readInstalled(
         await installedLabels(directory, '.plist'),
         plistPath,
         readMacosLaunchAgent,
-        label => `${LAUNCHCTL} bootout ${domain}/${label}, then delete ${plistPath(label)}`
+        label => `${LAUNCHCTL} bootout ${domain}/${label}, then delete ${plistPath(label)}`,
+        matchesLabel
       ),
     // bootout fails for a plist launchd has not loaded, which would strand its file.
     unregister: async label => {

@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readdir, readFile, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
+  findNativeScheduleTargets,
   inspectNativeSchedule,
   installNativeSchedule,
   listNativeSchedules,
@@ -631,16 +632,138 @@ describe('reading installed jobs back', () => {
     ]);
   });
 
+  itOnPosixHost('Task Scheduler filters unrelated wrappers before reading them', async () => {
+    const archonHome = await scratchDirectory();
+    const id = 'workflow-wake-source-refresh';
+    const scheduler: NativeScheduleOptions = {
+      platform: 'win32',
+      windowsUserId: 'me',
+      runCommand: recorder().runCommand,
+    };
+    await installNativeSchedule(
+      config({ id, archonHome, schedule: { intervalSeconds: 60, runAtLoad: false } }),
+      scheduler
+    );
+    const unrelated = join(
+      archonHome,
+      'schedules',
+      'com.archon.trigger.isolation-cleanup-other.cmd'
+    );
+    await writeFile(unrelated, 'unrelated wrapper');
+    await chmod(unrelated, 0);
+    try {
+      await expect(readFile(unrelated)).rejects.toMatchObject({ code: 'EACCES' });
+      expect(
+        await findNativeScheduleTargets(archonHome, () => id, scheduler, 'workflow-wake-')
+      ).toEqual([{ id, archonHome }]);
+    } finally {
+      await chmod(unrelated, 0o600);
+    }
+  });
+
   itOnPosixHost('keeps a job file it cannot read, as unreadable', async () => {
     const directory = await scratchDirectory();
     await writeFile(join(directory, `${LABEL}.plist`), '<plist/>');
     expect(
-      await listNativeSchedules('/home', {
+      await listNativeSchedules(directory, {
         platform: 'darwin',
         uid: 501,
         launchAgentsDirectory: directory,
       })
     ).toEqual([expect.objectContaining({ label: LABEL, unreadable: expect.any(String) })]);
+  });
+
+  itOnPosixHost('falls back to the requested target when the job file is unreadable', async () => {
+    const directory = await scratchDirectory();
+    const archonHome = join(directory, 'home');
+    const scheduler = {
+      platform: 'darwin' as const,
+      uid: 501,
+      launchAgentsDirectory: directory,
+    };
+    await writeFile(join(directory, `${LABEL}.plist`), '<plist/>');
+
+    expect(await findNativeScheduleTargets(archonHome, () => 'source-refresh', scheduler)).toEqual([
+      { id: 'source-refresh', archonHome },
+    ]);
+  });
+
+  itOnPosixHost.each(['darwin', 'linux', 'win32'] as const)(
+    '%s refuses a malformed alternate target even beside a readable match',
+    async platform => {
+      const directory = await scratchDirectory();
+      const archonHome = join(directory, 'home');
+      const recordedHome = `${archonHome}/`;
+      const idForHome = (home: string): string =>
+        home === recordedHome ? 'workflow-wake-alternate' : 'workflow-wake-current';
+      const scheduler: NativeScheduleOptions = {
+        platform,
+        uid: 501,
+        windowsUserId: 'me',
+        launchAgentsDirectory: directory,
+        systemdUserDirectory: directory,
+        runCommand: recorder().runCommand,
+      };
+      const alternate = await installNativeSchedule(
+        config({
+          id: idForHome(recordedHome),
+          archonHome: recordedHome,
+          workingDirectory: recordedHome,
+          schedule: { intervalSeconds: 60, runAtLoad: false },
+        }),
+        scheduler
+      );
+      const definition = alternate.path.replace(
+        /\.(timer|xml)$/,
+        platform === 'linux' ? '.service' : '.cmd'
+      );
+      await writeFile(definition, 'malformed definition');
+
+      for (const readableMatch of [false, true]) {
+        if (readableMatch)
+          await installNativeSchedule(
+            config({
+              id: idForHome(archonHome),
+              archonHome,
+              workingDirectory: archonHome,
+              schedule: { intervalSeconds: 60, runAtLoad: false },
+            }),
+            scheduler
+          );
+        const failure: unknown = await findNativeScheduleTargets(
+          archonHome,
+          idForHome,
+          scheduler,
+          'workflow-wake-'
+        ).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({ message: expect.stringContaining(definition) });
+        expect(await readFile(definition, 'utf8')).toBe('malformed definition');
+      }
+    }
+  );
+
+  itOnPosixHost('keeps the requested target beside a readable alternate match', async () => {
+    const directory = await scratchDirectory();
+    const archonHome = join(directory, 'home');
+    const scheduler = {
+      platform: 'darwin' as const,
+      uid: 501,
+      launchAgentsDirectory: directory,
+      runCommand: recorder().runCommand,
+    };
+    const alternateHome = `${archonHome}/`;
+    const idForHome = (home: string): string => (home === alternateHome ? 'alternate' : 'current');
+    await installNativeSchedule(
+      config({ id: 'alternate', archonHome: alternateHome, workingDirectory: alternateHome }),
+      scheduler
+    );
+    await writeFile(join(directory, 'com.archon.trigger.current.plist'), '<plist/>');
+
+    expect(await findNativeScheduleTargets(archonHome, idForHome, scheduler)).toEqual([
+      { id: 'alternate', archonHome: alternateHome },
+      { id: 'current', archonHome },
+    ]);
   });
 });
 

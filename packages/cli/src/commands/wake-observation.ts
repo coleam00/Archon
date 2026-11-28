@@ -9,15 +9,16 @@ import type {
   WebhookSourcePluginHost,
 } from '@archon/core/workflows/source-plugins';
 import {
-  inspectNativeSchedule,
+  inspectNativeScheduleRegistrationTargets,
   NativeScheduleUnsupportedError,
   type NativeScheduleOptions,
+  type NativeScheduleTarget,
 } from '../triggers/native-schedule';
 import { readWakeLastPass, wakeLastPassPath } from '@archon/core/workflows/wake-last-pass';
 import {
   describeWakeLastPass,
   WAKE_SCHEDULE_INSTALL_COMMAND,
-  workflowWakeScheduleTarget,
+  workflowWakeScheduleTargets,
 } from './wake-schedule';
 import type { WakeObservation } from './workflow-continuations';
 
@@ -51,8 +52,11 @@ async function loadObservingSources(
  * Without ARCHON_WEBHOOK_SOURCES here, the file the installed job's watcher last loaded is
  * read: install passes the installing shell's file to the job with `--sources`.
  */
-async function observingSources(host: WorkflowHost): Promise<readonly ObservingSource[]> {
-  const recorded = await readWakeLastPass(wakeLastPassPath());
+async function observingSources(
+  host: WorkflowHost,
+  target: NativeScheduleTarget
+): Promise<readonly ObservingSource[]> {
+  const recorded = await readWakeLastPass(wakeLastPassPath(target));
   const configPath =
     process.env.ARCHON_WEBHOOK_SOURCES ||
     (recorded.kind === 'read' ? recorded.pass.sources : undefined);
@@ -66,7 +70,7 @@ async function observingSources(host: WorkflowHost): Promise<readonly ObservingS
  * never read as no pass.
  */
 async function registeredWatcher(
-  target: ReturnType<typeof workflowWakeScheduleTarget>,
+  target: NativeScheduleTarget,
   watcher: { installed: boolean; registered: boolean }
 ) {
   const path = wakeLastPassPath(target);
@@ -95,7 +99,13 @@ async function registeredWatcher(
  * check cannot tell whether one runs for this install.
  */
 export async function observingReport(host: WorkflowHost, schedules: NativeScheduleOptions) {
-  const sources = (await observingSources(host)).map(source => ({
+  const targets = await workflowWakeScheduleTargets(schedules);
+  const selected =
+    targets.length === 1
+      ? undefined
+      : await inspectNativeScheduleRegistrationTargets(targets, schedules);
+  const target = selected?.target ?? targets[0];
+  const sources = (await observingSources(host, target)).map(source => ({
     source: source.sourceInstanceId,
     everySeconds: source.everySeconds,
     labels: source.labels,
@@ -105,8 +115,9 @@ export async function observingReport(host: WorkflowHost, schedules: NativeSched
   if (sources.length === 0) return undefined;
   const server = `an Archon server started with ARCHON_WEBHOOK_SOURCES runs for this install`;
   try {
-    const target = workflowWakeScheduleTarget();
-    const job = await inspectNativeSchedule(target, schedules);
+    const job =
+      selected?.status ??
+      (await inspectNativeScheduleRegistrationTargets(targets, schedules)).status;
     const watcher = { installed: job !== undefined, registered: job?.registered ?? false };
     if (watcher.registered) {
       const seen = await registeredWatcher(target, watcher);

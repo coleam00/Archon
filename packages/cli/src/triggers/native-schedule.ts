@@ -112,10 +112,10 @@ export interface ScheduleBackend {
   /** Remove only, after the files are deleted. */
   afterRemove?(): Promise<void>;
   /**
-   * Every job under the Archon prefix whose files are on disk, read back from what `render`
-   * wrote. Reads files only; it never asks the scheduler.
+   * Jobs under the Archon prefix whose files are on disk, read back from what `render`
+   * wrote. Filters labels before opening definitions; never asks the scheduler.
    */
-  installed(): Promise<InstalledSchedule[]>;
+  installed(matchesLabel?: (label: string) => boolean): Promise<InstalledSchedule[]>;
 }
 
 /** No backend can install a timer here; the message says what to schedule by hand when it can. */
@@ -241,10 +241,12 @@ export async function readInstalled(
   labels: readonly string[],
   definition: (label: string) => string,
   read: (contents: string) => InstalledJob | undefined,
-  removeByHand: (label: string) => string
+  removeByHand: (label: string) => string,
+  matchesLabel?: (label: string) => boolean
 ): Promise<InstalledSchedule[]> {
   const installed: InstalledSchedule[] = [];
   for (const label of labels) {
+    if (matchesLabel && !matchesLabel(label)) continue;
     const path = definition(label);
     const contents = await readExisting(path);
     // Deleted between the listing and the read: nothing is installed under it any more.
@@ -379,23 +381,70 @@ export async function installNativeSchedule(
   return result;
 }
 
-/** `undefined` when none of the job's files exists. */
-export async function inspectNativeSchedule(
+type NativeScheduleRegistration = Pick<NativeScheduleStatus, 'path' | 'registered'>;
+
+async function inspectNativeScheduleRegistration(
   target: NativeScheduleTarget,
   options: NativeScheduleOptions = {}
-): Promise<NativeScheduleStatus | undefined> {
+): Promise<NativeScheduleRegistration | undefined> {
   const backend = requireBackend(target, options);
   const label = scheduleLabel(target.id);
   const paths = backend.filePaths(label);
   if ((await existingPaths(paths)).length === 0) return undefined;
-  const log = scheduleLogPath(target.archonHome, label);
+  return { path: paths[0], registered: await backend.isRegistered(label) };
+}
+
+async function nativeScheduleLogStatus(
+  target: NativeScheduleTarget
+): Promise<Pick<NativeScheduleStatus, 'log' | 'lastRunAt'>> {
+  const log = scheduleLogPath(target.archonHome, scheduleLabel(target.id));
   let lastRunAt: string | null = null;
   try {
     lastRunAt = (await stat(log)).mtime.toISOString();
   } catch (error) {
     if (errorCode(error) !== 'ENOENT') throw error;
   }
-  return { path: paths[0], registered: await backend.isRegistered(label), log, lastRunAt };
+  return { log, lastRunAt };
+}
+
+/** `undefined` when none of the job's files exists. */
+export async function inspectNativeSchedule(
+  target: NativeScheduleTarget,
+  options: NativeScheduleOptions = {}
+): Promise<NativeScheduleStatus | undefined> {
+  const registration = await inspectNativeScheduleRegistration(target, options);
+  if (!registration) return undefined;
+  return { ...registration, ...(await nativeScheduleLogStatus(target)) };
+}
+
+/** Registration selects a watcher without requiring metadata for its discarded output. */
+export async function inspectNativeScheduleRegistrationTargets(
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
+  options: NativeScheduleOptions = {}
+): Promise<{ target: NativeScheduleTarget; status: NativeScheduleRegistration | undefined }> {
+  let selectedTarget = targets[0];
+  let selectedStatus: NativeScheduleRegistration | undefined;
+  for (const target of targets) {
+    const status = await inspectNativeScheduleRegistration(target, options);
+    if (status?.registered) return { target, status };
+    if (status && !selectedStatus) {
+      selectedTarget = target;
+      selectedStatus = status;
+    }
+  }
+  return { target: selectedTarget, status: selectedStatus };
+}
+
+/** Prefers a loaded job, then the first installed job, then the original fallback target. */
+export async function inspectNativeScheduleTargets(
+  targets: readonly [NativeScheduleTarget, ...NativeScheduleTarget[]],
+  options: NativeScheduleOptions = {}
+): Promise<{ target: NativeScheduleTarget; status: NativeScheduleStatus | undefined }> {
+  const { target, status } = await inspectNativeScheduleRegistrationTargets(targets, options);
+  return {
+    target,
+    status: status ? { ...status, ...(await nativeScheduleLogStatus(target)) } : undefined,
+  };
 }
 
 /**
@@ -427,12 +476,14 @@ export async function removeNativeSchedule(
 
 /**
  * The jobs installed for `archonHome`, read from their files, plus any Archon job file that
- * cannot be read, whose home is unknown. None on a platform Archon has no scheduler for:
- * nothing can be installed there.
+ * cannot be parsed, whose home is unknown. Labels are filtered before opening definitions;
+ * `matchesJob` excludes readable jobs before resolving their homes. None on an unsupported platform.
  */
 export async function listNativeSchedules(
   archonHome: string,
-  options: NativeScheduleOptions = {}
+  options: NativeScheduleOptions = {},
+  matchesJob?: (job: InstalledJob, label: string) => boolean,
+  matchesLabel?: (label: string) => boolean
 ): Promise<InstalledSchedule[]> {
   const platform = options.platform ?? process.platform;
   const backend = backendFor(platform, archonHome, options);
@@ -441,11 +492,61 @@ export async function listNativeSchedules(
   // slash, a symlink) is the same install. Compare the directory, not the text.
   const { resolve } = platform === 'win32' ? win32 : posix;
   // A home that no longer exists has no real path; its resolved text is all there is.
-  const identity = (path: string): Promise<string> => realpath(path).catch(() => resolve(path));
+  const identity = async (path: string): Promise<string> => {
+    try {
+      return await realpath(path);
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return resolve(path);
+      throw error;
+    }
+  };
   const home = await identity(archonHome);
   const installed: InstalledSchedule[] = [];
-  for (const entry of await backend.installed())
-    if (!('archonHome' in entry) || (await identity(entry.archonHome)) === home)
+  for (const entry of await backend.installed(matchesLabel)) {
+    if (!('archonHome' in entry)) {
       installed.push(entry);
+      continue;
+    }
+    if (matchesJob && !matchesJob(entry, entry.label)) continue;
+    if ((await identity(entry.archonHome)) === home) installed.push(entry);
+  }
   return installed;
+}
+
+/**
+ * The targets for one logical job in `archonHome`, however that directory was spelled when
+ * the job was installed. The id always comes from the home the job file recorded. With no
+ * readable match, the current spelling's target still reaches a job file that cannot be read;
+ * a distinct current target also stays beside readable matches so removal cannot orphan it.
+ * An unparseable alternate has no known home, so lookup refuses it with manual recovery steps.
+ */
+export async function findNativeScheduleTargets(
+  archonHome: string,
+  idForHome: (archonHome: string) => string,
+  options: NativeScheduleOptions = {},
+  idPrefix?: string
+): Promise<[NativeScheduleTarget, ...NativeScheduleTarget[]]> {
+  const current = { id: idForHome(archonHome), archonHome };
+  const found: NativeScheduleTarget[] = [];
+  for (const job of await listNativeSchedules(
+    archonHome,
+    options,
+    (entry, label) => label === scheduleLabel(idForHome(entry.archonHome)),
+    idPrefix === undefined ? undefined : label => label.startsWith(`${LABEL_PREFIX}${idPrefix}`)
+  )) {
+    if ('unreadable' in job) {
+      if (job.label === scheduleLabel(current.id)) continue;
+      throw new Error(
+        `${job.unreadable}, so its home cannot be determined. ` +
+          `Fix it, or remove the job by hand: ${job.removeByHand}`
+      );
+    }
+    const id = idForHome(job.archonHome);
+    found.push({ id, archonHome: job.archonHome });
+  }
+  const [first, ...rest] = found;
+  if (!first) return [current];
+  if (found.some(target => target.id === current.id && target.archonHome === current.archonHome))
+    return [first, ...rest];
+  return [first, ...rest, current];
 }
