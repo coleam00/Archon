@@ -52,12 +52,13 @@ test('run lists, the header and lifecycle show the local start date and time', (
     </MemoryRouter>
   );
   expect(row).toContain('1d ago');
-  expect(row).toContain(`title="Started ${expectedStart}"`);
+  expect(row).toContain(`title="Ended ${expectedFinish}"`);
   expect(row).toContain('04:12');
 
   const activeCard = renderToStaticMarkup(
     <MemoryRouter>
       <ActiveRunCard
+        expanded
         run={{
           ...run,
           status: 'running',

@@ -243,6 +243,8 @@ interface RunsFeedProps {
   promotedRunIds: ReadonlySet<string>;
   /** Heading of the finished runs: on the Running tab they are the ones that just ended. */
   recentLabel: string;
+  /** Whether every active card shows its details; one page-level switch sets it. */
+  expanded: boolean;
   /** Shown in place of the runs while none are known (loading, or the load failed). */
   notice: ReactElement | null;
 }
@@ -257,13 +259,14 @@ interface RunsFeedProps {
  * card shape as a paused-approval card, just waiting for YOU instead of
  * the agent. Starting a new run is "another card in the list."
  */
-function RunsFeed({
+export function RunsFeed({
   runs,
   showProject,
   draftProject,
   selectedRunId,
   promotedRunIds,
   recentLabel,
+  expanded,
   notice,
 }: RunsFeedProps): ReactElement {
   const active = runs.filter(r => r.status === 'running' || r.status === 'paused');
@@ -289,6 +292,7 @@ function RunsFeed({
                 showProject={showProject}
                 selected={run.id === selectedRunId}
                 inputPromoted={promotedRunIds.has(run.id)}
+                expanded={expanded}
               />
             ))}
           </div>
@@ -330,6 +334,8 @@ export function RunsPage(): ReactElement {
   // retrospective view, not the first thing to see.
   const [filter, setFilter] = useState<Filter>('running');
   const [query, setQuery] = useState('');
+  // Not persisted: a reload returns to the compact list.
+  const [showDetails, setShowDetails] = useState(false);
   const searchRef = useRef<HTMLInputElement | null>(null);
 
   const { data, loading, error } = useEntity<FeedData>(K.runs(scope), () =>
@@ -389,8 +395,9 @@ export function RunsPage(): ReactElement {
 
       {/* Status sub-tabs — their own strip; the active underline overlaps the
           hairline below (design: .subtabs). */}
-      <div className="shrink-0 overflow-x-auto border-b border-border px-6">
+      <div className="flex shrink-0 items-center gap-4 overflow-x-auto border-b border-border px-6">
         <FilterChips value={filter} onChange={setFilter} counts={counts} />
+        <DetailsSwitch on={showDetails} onChange={setShowDetails} />
       </div>
 
       {pending.error !== undefined ? (
@@ -432,9 +439,50 @@ export function RunsPage(): ReactElement {
           draftProject={draftProject}
           selectedRunId={selectedRunId}
           promotedRunIds={pending.promotedRunIds}
+          expanded={showDetails}
         />
       </div>
     </section>
+  );
+}
+
+/** The one switch that expands every active card; there is none per card. */
+function DetailsSwitch({
+  on,
+  onChange,
+}: {
+  on: boolean;
+  onChange: (on: boolean) => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={() => {
+        onChange(!on);
+      }}
+      className={`ml-auto inline-flex shrink-0 items-center gap-2 rounded-lg border bg-surface-inset px-2.5 py-1 text-console-11 transition-colors hover:bg-surface-hover hover:text-text-primary ${
+        on ? 'text-text-primary' : 'text-text-secondary'
+      }`}
+      // Inline because the console scope's wildcard border-color rule repaints Tailwind
+      // border utilities (see theme.css).
+      style={{ borderColor: 'var(--border)' }}
+    >
+      <span
+        aria-hidden
+        className={`relative h-3.5 w-6 rounded-full transition-colors ${
+          on ? 'bg-accent-bright' : 'bg-surface-elevated'
+        }`}
+      >
+        <span
+          className={`absolute left-0.5 top-0.5 h-2.5 w-2.5 rounded-full transition-transform ${
+            on ? 'translate-x-2.5 bg-white' : 'bg-text-secondary'
+          }`}
+        />
+      </span>
+      Show details
+    </button>
   );
 }
 
@@ -761,6 +809,7 @@ function RunsFeedBody({
   draftProject,
   selectedRunId,
   promotedRunIds,
+  expanded,
 }: RunsFeedBodyProps): ReactElement {
   const notice =
     feedError !== undefined ? (
@@ -786,7 +835,8 @@ function RunsFeedBody({
       draftProject={draftProject}
       selectedRunId={selectedRunId}
       promotedRunIds={promotedRunIds}
-      recentLabel={filter === 'running' ? 'Just finished' : 'Recent'}
+      recentLabel={filter === 'running' ? 'Finished recently' : 'Recent'}
+      expanded={expanded}
       notice={notice}
     />
   );
