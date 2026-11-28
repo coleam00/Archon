@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-11-28
+
+The Console's project map loads, and `archon trigger check` finishes in about a minute, on a project with a pack's bindings installed.
+
+### Fixed
+
+- A check of many bindings reads each base branch and each project once, not once per binding. On Windows, with the software factory pack's 98 bindings, the Console's project map never loaded and `archon trigger check` did not finish within 15 minutes: every binding fetched its base branch and discovered its workflows again. The graph read now answers in about 13 seconds and `trigger check` in about a minute. Nothing is kept between operations, and a start still reads its base as it is when it starts. (#6461)
+
 ## [0.17.0] - 2026-11-28
 
 A project running a pack gets a Factory section in the Console, and every word it shows comes from the pack itself.

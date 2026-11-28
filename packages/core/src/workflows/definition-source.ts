@@ -416,6 +416,46 @@ export function bindingDefinitionsPlan(
 export interface BindingDefinitionsDeps extends Pick<WorkflowDeps, 'loadConfig' | 'providers'> {
   /** The registered project at a launch path, or null when none is registered there. */
   projectOf: (cwd: string) => Promise<DefinitionsProject | null>;
+  /**
+   * Reads shared by one operation that checks many bindings (`withOneDefinitionsRead`): each
+   * base is fetched and each tree discovered once for that operation, not once per binding.
+   * Absent, every check reads afresh, as a start does.
+   */
+  definitionsReads?: Map<string, Promise<unknown>>;
+}
+
+/**
+ * `deps` for one operation that checks many bindings, such as `trigger check` or the graph
+ * read: bindings that read the same definitions share one fetch and one discovery. The map
+ * lives only as long as the operation, so a later operation reads the base as it is then.
+ */
+export function withOneDefinitionsRead<T extends BindingDefinitionsDeps>(deps: T): T {
+  if (deps.definitionsReads) return deps;
+  const reads = new Map<string, Promise<unknown>>();
+  const shared: T = { ...deps, definitionsReads: reads };
+  // Each binding names its checkout; resolving it is a git call, so one per checkout.
+  shared.projectOf = (cwd: string) => readOnce(shared, `project:${cwd}`, () => deps.projectOf(cwd));
+  const keyOf = (deps as { projectKeyOf?: (cwd: string) => Promise<string | null> }).projectKeyOf;
+  if (keyOf)
+    (shared as { projectKeyOf?: (cwd: string) => Promise<string | null> }).projectKeyOf = (
+      cwd: string
+    ) => readOnce(shared, `project-key:${cwd}`, () => keyOf(cwd));
+  return shared;
+}
+
+/** `read()` once per key within the operation `deps` belongs to, or every time without one. */
+function readOnce<T>(
+  deps: BindingDefinitionsDeps,
+  key: string,
+  read: () => Promise<T>
+): Promise<T> {
+  const reads = deps.definitionsReads;
+  if (!reads) return read();
+  const known = reads.get(key) as Promise<T> | undefined;
+  if (known) return known;
+  const started = read();
+  reads.set(key, started);
+  return started;
 }
 
 /**
@@ -439,20 +479,26 @@ export async function discoverBindingWorkflows(
 ): Promise<{ discovered: WorkflowLoadResult } | { refused: string }> {
   const discover = (root: string, roots?: WorkflowSourceRoots): Promise<WorkflowLoadResult> =>
     discoverWorkflowsWithConfig(root, deps.loadConfig, deps.providers, roots);
-  const project = await deps.projectOf(launch.cwd);
-  if (!project && !(await insideGit(launch.cwd)))
-    return { discovered: await discover(launch.discoveryCwd ?? launch.cwd) };
+  // A check made as a run starts reads that run's own definitions, never shared ones.
+  const shared = launchRun ? { ...deps, definitionsReads: undefined } : deps;
+  const discoverOnce = (root: string): Promise<WorkflowLoadResult> =>
+    readOnce(shared, `directory:${root}`, () => discover(root));
+  const project = await shared.projectOf(launch.cwd);
+  if (!project && !(await readOnce(shared, `git:${launch.cwd}`, () => insideGit(launch.cwd))))
+    return { discovered: await discoverOnce(launch.discoveryCwd ?? launch.cwd) };
   const plan = bindingDefinitionsPlan(launch, launch.cwd, project, undefined);
-  if (plan.kind === 'directory') return { discovered: await discover(plan.root) };
+  if (plan.kind === 'directory') return { discovered: await discoverOnce(plan.root) };
   const capture = launchRun ? await launchCapture(launchRun) : undefined;
   if (capture) return { discovered: await discover(launch.cwd, capture) };
   try {
     return {
-      discovered: await withLayeredDefinitions(plan.input, composed => discover(composed.root)),
+      discovered: await readOnce(shared, `base:${JSON.stringify(plan.input)}`, () =>
+        withLayeredDefinitions(plan.input, composed => discover(composed.root))
+      ),
     };
   } catch (error) {
     if (!(error instanceof DefinitionSourceError)) throw error;
-    const live = await discover(launch.cwd);
+    const live = await discoverOnce(launch.cwd);
     if (startsPinnedInPlace(launch, live)) return { discovered: live };
     return { refused: error.message };
   }
