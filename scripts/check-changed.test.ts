@@ -12,6 +12,7 @@ import {
   changedFiles,
   lintInputs,
   lintPlan,
+  packageShippedInputs,
   scopedTypeChecks,
 } from './check-changed';
 import { REPO_ROOT } from './type-check';
@@ -39,6 +40,7 @@ const graph: WorkspaceGraph = {
 const inputs: ClassifierInputs = {
   packRunner: new Set(['scripts/repo-tests.ts']),
   workspaceTest: new Set(['scripts/package-tests.ts']),
+  shipped: new Map(),
 };
 
 function scoped(files: string[]) {
@@ -86,6 +88,17 @@ describe('changeScope', () => {
     expect(scope.packages.size).toBe(0);
     expect(scope.rootScripts || scope.pack).toBe(false);
     expect(scope.unchecked).toEqual(['README.md']);
+  });
+
+  test('a file a package ships from outside packages/ checks that package', () => {
+    const shipped = new Map([['.claude/skills/archon-cli/SKILL.md', new Set(['@x/leaf'])]]);
+    const scope = changeScope(['.claude/skills/archon-cli/SKILL.md'], graph, {
+      ...inputs,
+      shipped,
+    });
+    expect(scope.kind === 'scoped' && Object.fromEntries(scope.packages)).toEqual({
+      '@x/leaf': 'imported',
+    });
   });
 
   test('code in the docs site checks that package; its Markdown pages stay prose', () => {
@@ -207,6 +220,53 @@ describe('changedFiles', () => {
     const result = Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe' });
     if (result.exitCode !== 0) throw new Error(result.stderr.toString());
   }
+
+  test('a file a package names from outside packages/ belongs to that package', () => {
+    const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'shipped-inputs-')));
+    git(repo, 'init', '-q', '-b', 'main');
+    mkdirSync(join(repo, 'packages/cli/src'), { recursive: true });
+    mkdirSync(join(repo, '.claude/skills/archon-cli'), { recursive: true });
+    writeFileSync(join(repo, 'packages/cli/package.json'), '{"name":"@archon/cli"}');
+    writeFileSync(
+      join(repo, 'packages/cli/src/bundled-skill.ts'),
+      "import core from '../../../.claude/skills/archon-cli/SKILL.md' with { type: 'text' };\n" +
+        "import loader from './loader.ts';\n"
+    );
+    writeFileSync(
+      join(repo, 'packages/cli/src/loader.ts'),
+      "import settings from './config/settings.yaml';\n"
+    );
+    writeFileSync(
+      join(repo, 'packages/cli/src/example.ts'),
+      // Name other files whose tails read like the root settings file changed below.
+      "import example from 'config/settings.yaml.example';\n" +
+        "import alt from './alternate+config/settings.yaml';\n"
+    );
+    writeFileSync(join(repo, '.claude/skills/archon-cli/SKILL.md'), '# skill\n');
+    git(repo, 'add', '.');
+    const owners = packageShippedInputs(repo, new Map([['@archon/cli', 'packages/cli']]), [
+      '.claude/skills/archon-cli/SKILL.md',
+      '.claude/skills/archon-cli/operate/other.md',
+      // Named only relative to packages/cli/src/, which has no config/ of its own: the
+      // root file that shares that path is not what the import names.
+      'config/settings.yaml',
+    ]);
+    expect(owners.get('.claude/skills/archon-cli/SKILL.md')).toEqual(new Set(['@archon/cli']));
+    expect(owners.has('.claude/skills/archon-cli/operate/other.md')).toBe(false);
+    // Neither the relative import nor the `.example` reference names this root file.
+    expect(owners.has('config/settings.yaml')).toBe(false);
+  });
+
+  test('the real CLI owns the bundled skill file it imports', () => {
+    const owners = packageShippedInputs(REPO_ROOT, new Map([['@archon/cli', 'packages/cli']]), [
+      '.claude/skills/archon-cli/operate/running.md',
+      '.claude/commands/not-named.md',
+    ]);
+    expect(owners.get('.claude/skills/archon-cli/operate/running.md')).toEqual(
+      new Set(['@archon/cli'])
+    );
+    expect(owners.has('.claude/commands/not-named.md')).toBe(false);
+  });
 
   test('reports committed, modified, deleted and untracked files since the merge base', () => {
     const repo = trackTempRoot(mkdtempSync(join(tmpdir(), 'check-changed-')));

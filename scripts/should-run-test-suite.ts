@@ -90,7 +90,7 @@ const ROOT_SCRIPTS = 'scripts/';
 /** The files the workspace shards' CI step runs before any package test. */
 const WORKSPACE_RUNNER_ENTRY_POINTS = ['scripts/validate.ts', 'scripts/repo-tests.ts'];
 
-function trackedFiles(repo: string, ...paths: string[]): string[] {
+export function trackedFiles(repo: string, ...paths: string[]): string[] {
   const result = Bun.spawnSync(['git', 'ls-files', '-z', '--', ...paths], {
     cwd: repo,
     stdout: 'pipe',
