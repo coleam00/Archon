@@ -840,17 +840,15 @@ export async function placeItem(
   return { standing, run: own.values.find(run => run.id === standing.runId), read, cut };
 }
 
-/**
- * Read the item the run `runId` belongs to: the item of its root run, since a `workflow:`
- * child carries no item of its own. Null when the run is unknown or its root names no item.
- */
+/** The run's own item, else its nearest ancestor's; a child with none reads its root's. */
 export async function readItemOfRun(
   source: ItemReadSource,
   runId: string
 ): Promise<ItemRead | null> {
-  let run = await source.store.getWorkflowRun(runId);
-  while (run?.parent_run_id) run = await source.store.getWorkflowRun(run.parent_run_id);
+  const { store } = source;
+  let run = await store.getWorkflowRun(runId);
+  while (run?.parent_run_id && !run.item_id) run = await store.getWorkflowRun(run.parent_run_id);
   if (!run?.item_id) return null;
-  const item = await source.store.getItem(run.item_id);
+  const item = await store.getItem(run.item_id);
   return item === null ? null : readItem(source, item.projectKey, item.key);
 }
