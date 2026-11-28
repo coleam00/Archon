@@ -360,13 +360,19 @@ archon workflow run archon-ship --cwd /path/to/repo \
 Except on an execution handoff, foreground completion and failure output prints the run's recorded cost and input and output tokens, even with `--quiet`:
 
 ```text
-  Usage (recorded totals; completeness unknown):
-    Cost: $0.024
-    Input tokens: 8420
-    Output tokens: 2180
+  Usage: cost $0.024, input tokens 8420, output tokens 2180, recorded by all 2/2 AI nodes.
 ```
 
-These are stored figures, not a certified bill, so the completeness warning is always printed. Provider usage metadata is optional: a missing or malformed value prints `unknown`, and a recorded zero prints `0` (or `$0`). An unknown or malformed token-uncertainty marker makes both token counts unknown. If the persisted run cannot be read, the output shows `Usage: unavailable (persisted run unavailable)` and the execution result is unchanged. [`workflow get`](#workflow-get) shows the same summary for any run.
+Each metric is `complete`, `partial`, `unknown` or `not_applicable`. `complete` means every AI node that executed recorded that metric, and the usage is the one line above. Otherwise each metric carries its state and how many AI nodes recorded it, then one short line follows per gap, naming the node and the reason:
+
+```text
+  Usage: cost $0.024 (partial; 1/2 AI nodes recorded), input tokens 8420 (complete; 2/2 AI nodes recorded), output tokens 2180 (complete; 2/2 AI nodes recorded).
+    review: cost not recorded (unsupported)
+```
+
+`partial` means some node did not record the metric or recorded only a floor. `unknown` means the report cannot say: the run's history could not be read, a total was not recorded, or the recorded total disagrees with the node records. `not_applicable` means no AI node executed, and a run whose metrics are all `not_applicable` prints no usage line. Cost and token coverage are independent: a provider that reports tokens but not cost leaves cost partial and the tokens complete. A `?` in place of a count means the number of AI nodes could not be established.
+
+These are stored figures, not an estimate or a certified bill, and they are never repaired: a readable node measurement does not replace a total the run did not record. Provider usage metadata is optional: a missing or malformed value prints `unknown`, and a recorded zero prints `0` (or `$0`). An unknown or malformed token-uncertainty marker makes both token counts unknown. If the persisted run cannot be read, the output shows `Usage: unavailable (persisted run unavailable)` and the execution result is unchanged. [`workflow get`](#workflow-get) prints the same line for any run, and its `--json` has each gap with its reason.
 
 When the completed run's end caused a start that was refused before launch, the completion output also prints that refusal, under `Next stage not started:`, naming the refused workflow, its binding, the reason and `archon trigger inspect <receipt-id>`; the item is then [`stopped`](/guides/workflow-triggers/#when-nothing-follows-a-run). The exit status stays `0`: the run itself completed. A start that a later drain by another process refuses is recorded on the run too; [`workflow get <run-id>`](#workflow-get) and the item show it.
 
@@ -793,12 +799,29 @@ archon workflow get <run-id> --throughput
 archon workflow get <run-id> --throughput --json
 ```
 
-The text view includes the same [recorded usage summary](#workflow-run-name-message)
+The text view includes the same [recorded usage line](#workflow-run-name-message)
 for any run status. For a completed run whose end caused a start that was refused before
 launch, it also prints the refusal under `Next stage not started:`, as the foreground run
-does. It reads stored totals without recalculating them or certifying
-completeness. `--json` retains the raw usage values in `metadata`, including nulls or
-malformed historical values; it adds no formatted usage text.
+does. `--json` retains the raw usage values in `metadata`, including nulls or malformed
+historical values, and adds a top-level `usage` in default, verbose and raw-event modes:
+
+```json
+{
+  "totals": { "usd": 0.024, "inputTokens": 8420, "outputTokens": 2180 },
+  "coverage": {
+    "usd": {
+      "state": "partial",
+      "recordedNodes": 1,
+      "expectedNodes": 2,
+      "gaps": [{ "path": "review", "reason": "unsupported" }]
+    },
+    "inputTokens": { "state": "complete", "recordedNodes": 2, "expectedNodes": 2, "gaps": [] },
+    "outputTokens": { "state": "complete", "recordedNodes": 2, "expectedNodes": 2, "gaps": [] }
+  }
+}
+```
+
+Per metric, `state` is the coverage printed in the text view; `expectedNodes` is how many executed AI nodes should have recorded the metric, or `null` when that count cannot be established; `recordedNodes` is how many of them did. `gaps` has one entry per node that did not record a usable figure, with the reason: `unsupported`, `not_reported`, `unknown`, `not_applicable`, `invalid` or `incomplete` when the node itself recorded why it has no measurement, `partial_measurement` when it recorded only a floor, or what the report found, such as `unfinished_execution`, `measurement_source_absent` or `record_unreadable`. A gap about the run rather than a node has no `path`: `history_unavailable`, `history_absent`, `total_unavailable`, `total_invalid` or `total_mismatch`. A gap about a child run carries that run's id in `runId` and its reason, such as `child_unavailable`, `child_usage_mismatch` or `child_cycle`. Nodes that recorded are counted, not listed. Stored totals are read, never recalculated or repaired.
 
 `--throughput` adds **effective output throughput**, not model decode speed, beside the
 usage summary: output tokens divided by execution duration in seconds (`tok/s`). Each

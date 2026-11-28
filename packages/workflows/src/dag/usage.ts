@@ -84,7 +84,7 @@ export function sumFanOutTokens(
 export type { RunUsageFigures } from '../schemas/run-usage';
 
 // Float sums taken in a different order differ in the last bits.
-const COST_TOLERANCE_USD = 1e-9;
+export const COST_TOLERANCE_USD = 1e-9;
 
 const RECONCILED_TOKEN_AXES = tokenUsageSchema
   .omit({
