@@ -1,4 +1,7 @@
-/** `repo.overview`: one repository's facts, counts and newest open items, in one GraphQL call. */
+/**
+ * `repo.overview`: one repository's facts, counts and newest open items, in one GraphQL
+ * call, or two for a token with no user account.
+ */
 
 import { z } from 'zod';
 import {
