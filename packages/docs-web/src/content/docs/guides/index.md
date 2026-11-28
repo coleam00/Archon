@@ -47,3 +47,4 @@ To customize the pack, copy the whole `.archon/workflows/sdlc/` folder from the 
 
 - [Global Workflows](/guides/global-workflows/) — User-level workflows that apply to every project
 - [Multi-Repo Projects](/guides/multi-repo-projects/) — Drive many service repos under one folder-project root
+- [Claude Code Attention Plugin](/guides/claude-code-plugin/) — View and answer Archon's attention queue from inside Claude Code

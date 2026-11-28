@@ -1,0 +1,4 @@
+{
+  "description": "Archon attention queue live pane and answer_attention tool",
+  "modules": ["./register.ts"]
+}

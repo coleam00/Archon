@@ -32,6 +32,8 @@ To browse runs in a browser, start the console with `archon serve`.
 
 ## Find the runs that need you
 
+The seat can be read from the CLI (`archon workflow attention`), the Web UI, chat adapters, or inside Claude Code with the [Claude Code Attention Plugin](/guides/claude-code-plugin/).
+
 ```bash
 archon workflow attention                      # this project
 archon workflow attention --all                # the whole install
