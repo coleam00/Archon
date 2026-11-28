@@ -27,6 +27,30 @@ Use lowercase words joined by hyphens for `name` and entrypoint names. Each entr
 
 From Archon 0.15.0, Archon ignores a manifest key it does not know, so a manifest that uses a field from a newer Archon still installs on 0.15.0 or later. Releases before 0.15.0 refuse a manifest with any key they do not know, so a pack that must install on them can use only the fields they read. `archon validate workflows` run in the plugin root lists unknown keys as warnings, which catches a misspelled key. An unknown `schemaVersion` is refused. Do not add version, credentials, install scripts, dependencies, or permission grants: none of them is read. `compatibility.archon` is optional; when supplied, installation checks it. Put prerequisites and usage instructions in a `README.md` alongside the manifest. The index links to the README on GitHub; it does not execute plugin code or embed author-supplied HTML.
 
+### The pack's document
+
+A pack may ship one markdown document that explains it to an operator, and name it in the manifest:
+
+```json
+"document": "docs/how-it-works.md"
+```
+
+The path is relative to the plugin root, stays inside the pack and ends in `.md`. Installation refuses a pack whose manifest names a file it does not hold, and `archon validate workflows` run in the plugin root reports a document that is missing or does not read. A manifest that names no document falls back to `how-it-works.md` at the plugin root when the pack has one. The document's frontmatter may group the pack's stages for display, in order:
+
+```yaml
+---
+groups:
+  - name: Make
+    blurb: Plan, then build
+    kind: build
+    stages: [plan, build]
+  - name: Check
+    stages: [review, verify]
+---
+```
+
+A stage is named by its workflow's `name:`, as bindings name it. `blurb` (one line, at most 160 characters) and `kind` (a lowercase slug such as `intake` or `check`) are optional; Archon gives `kind` no meaning and serves it for a console to choose a colour by. Once a document declares groups, every stage work flows through belongs to exactly one. `archon validate workflows` fails on a group that names a workflow work does not flow through, a stage in two groups, and a stage in flow that no group holds, judging the flow by the bindings the pack declares; a frontmatter key Archon does not read is a warning. [`archon pack graph`](/reference/cli/#pack-graph) makes the same checks against the bindings an install has, lists each problem and drops only the stale entry. Two more frontmatter keys are optional: `words`, a map from a name a console looks a word up by (such as `round` or `workOrder`) to the pack's own word for it, served as written, and `exit`, the stage items leave the pack's flow by, which must be a stage work flows through (validate fails, and the graph drops it and lists the problem, otherwise). The engine gives the rest of the document no meaning.
+
 To try the pack before you publish or install it, pass its folder as the source: `archon validate workflows --workflow-source <plugin root>`, `archon workflow run <workflow> --workflow-source <plugin root>` or `archon pack graph <name> --workflow-source <plugin root>`. Archon reads it as the project pack `<name>`; see [A pack folder as the source](/reference/cli/#a-pack-folder-as-the-source).
 
 ## Tags and executable release assets

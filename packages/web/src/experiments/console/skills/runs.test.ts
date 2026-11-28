@@ -185,6 +185,7 @@ test('attention list keeps asks no run holds apart from run items, with refusals
     asks: [ask],
     answerRefusals: { 'ask:a1': 'No.' },
     itemIds: new Set(['item-1', 'item-2']),
+    refs: new Set([ask.ref, 'run-1:pause-1']),
     degraded: [],
   });
 });

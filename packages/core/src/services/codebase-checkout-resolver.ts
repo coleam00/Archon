@@ -65,6 +65,25 @@ async function findPrimaryCheckoutCodebase(
   }
 }
 
+/**
+ * A checkout that shares its Git common directory with more than one registered codebase, so
+ * which project it is in cannot be said. Typed so a bulk reader can isolate this one checkout
+ * without matching the message.
+ */
+export class CheckoutCodebaseAmbiguousError extends Error {
+  constructor(
+    readonly cwd: string,
+    readonly commonGitDir: string,
+    paths: string
+  ) {
+    super(
+      `Checkout ${cwd} matches multiple registered codebases through Git directory ` +
+        `${commonGitDir}: ${paths}. Register this exact checkout or remove the ambiguity.`
+    );
+    this.name = 'CheckoutCodebaseAmbiguousError';
+  }
+}
+
 /** The one registered repository checkout that shares the checkout's Git common directory. */
 async function findCodebaseByCommonGitDir(
   cwd: string,
@@ -79,10 +98,7 @@ async function findCodebaseByCommonGitDir(
 
   if (matches.length > 1) {
     const paths = matches.map(codebase => codebase.default_cwd).join(', ');
-    throw new Error(
-      `Checkout ${cwd} matches multiple registered codebases through Git directory ` +
-        `${checkoutIdentity.commonGitDir}: ${paths}. Register this exact checkout or remove the ambiguity.`
-    );
+    throw new CheckoutCodebaseAmbiguousError(cwd, checkoutIdentity.commonGitDir, paths);
   }
   return matches[0] ?? null;
 }

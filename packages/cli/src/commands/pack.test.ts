@@ -766,6 +766,42 @@ describe('archon pack: a pack folder as the workflow source', () => {
     });
   });
 
+  it('refuses a binding to a workflow the manifest does not list, as an installed copy does', async () => {
+    const source = await writePackFolder();
+    await writeWorkflow(
+      source,
+      'fixture-helper',
+      'name: fixture-helper\ndescription: d\nnodes:\n  - id: a\n    bash: echo hi\n'
+    );
+    // It wakes the unlisted workflow and reads an input that workflow does not declare: the
+    // refusal comes first, as validate and an installed copy give it.
+    await writeFile(
+      join(source, '.pack', 'pack.yaml'),
+      `bindings:
+  helper:
+    workflow: fixture-sweep
+    resource: helper
+    overlap: queue
+    event: { kind: check.changed, actions: [changed] }
+    wake: { workflow: fixture-helper, wait: checks, about: check.revision }
+    inputs:
+      issue: { input: undeclared }
+`
+    );
+    await mkdir(cwd, { recursive: true });
+
+    await expect(
+      packCommand(
+        'bindings',
+        ['fixture'],
+        options({ workflowSource: source, repo: 'github.com/acme/widgets' })
+      )
+    ).rejects.toThrow(
+      "Binding 'helper' names workflow 'fixture-helper', which pack 'fixture' does not provide."
+    );
+    expect(existsSync(out)).toBe(false);
+  });
+
   it('with an installed copy too, the hint to use it drops --workflow-source, and following it works', async () => {
     const source = await writePackFolder();
     // The same pack installed as acme/fixture, the way `archon plugin add` leaves it.

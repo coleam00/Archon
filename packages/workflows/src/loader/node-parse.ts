@@ -1,8 +1,9 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { DagNode, IncludeDirective } from '../schemas';
 import { isComposeFanOutNode, isIncludeDirective } from '../schemas';
 import { dagNodeSchema } from '../schemas/dag-node';
 import { ignoredFieldsForNode } from '../schemas/node-ignored-fields';
+import { nodeDisplaySchema } from '../schemas/display';
 import { getLog } from './log';
 import {
   collectLoopUntilDeprecationWarnings,
@@ -67,6 +68,55 @@ function collectIgnoredFieldWarnings(
 }
 
 /**
+ * The raw node with its `display:` made safe to parse, and the same for each loop body node.
+ * Words never stop a run, so nothing here refuses the node: an unknown display key is
+ * stripped, and a malformed block (a missing label, a nested typo) is dropped, each with a
+ * warning naming the node. An include expands into the included workflow's nodes, so its label
+ * would name no node anyone runs and is dropped too; an include with `fan_out:` stays one node
+ * and keeps its own. The caller's object is never changed.
+ */
+function withNodeWords(raw: unknown, index: number, label: string, warnings: string[]): unknown {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  let node = raw as Record<string, unknown>;
+  const id = nodeIdForMessages(raw, index);
+  const where = label === '' ? `Node '${id}'` : `${label} → loop_group node '${id}'`;
+  const group = node.loop_group;
+  if (group !== null && typeof group === 'object' && !Array.isArray(group)) {
+    const body = (group as Record<string, unknown>).nodes;
+    if (Array.isArray(body))
+      node = {
+        ...node,
+        loop_group: {
+          ...group,
+          nodes: body.map((bodyNode: unknown, i) => withNodeWords(bodyNode, i, where, warnings)),
+        },
+      };
+  }
+  if (node.display === undefined) return node;
+  const { display, ...withoutDisplay } = node;
+  if (node.include !== undefined && node.fan_out === undefined) {
+    warnings.push(
+      `${where}: 'display' is ignored on an include node: it expands into the included workflow's nodes. Put 'display:' on those nodes instead.`
+    );
+    return withoutDisplay;
+  }
+  let words = display;
+  if (words !== null && typeof words === 'object' && !Array.isArray(words)) {
+    const unknown = Object.keys(words).filter(key => !Object.hasOwn(nodeDisplaySchema.shape, key));
+    for (const key of unknown) warnings.push(`${where}: unknown display key '${key}' is ignored`);
+    words = Object.fromEntries(Object.entries(words).filter(([key]) => !unknown.includes(key)));
+  }
+  const parsed = nodeDisplaySchema.safeParse(words);
+  if (!parsed.success) {
+    warnings.push(
+      `${where}: display is invalid and ignored, expected { label, text? } (${z.prettifyError(parsed.error)})`
+    );
+    return withoutDisplay;
+  }
+  return { ...withoutDisplay, display: parsed.data };
+}
+
+/**
  * Validate and parse a single DAG node from raw YAML, recording schema errors
  * and author-facing warnings.
  */
@@ -114,7 +164,9 @@ export function parseDagNodes(
   const validationErrors: string[] = [];
   const warnings: string[] = [];
   const nodes = rawNodes
-    .map((n: unknown, i: number) => parseDagNode(n, i, validationErrors, warnings))
+    .map((n: unknown, i: number) =>
+      parseDagNode(withNodeWords(n, i, '', warnings), i, validationErrors, warnings)
+    )
     .filter((n): n is DagNode | IncludeDirective => n !== null);
 
   if (nodes.length !== rawNodes.length) {

@@ -373,6 +373,7 @@ test('with --project, the item metrics a pack declares are reported over the win
     listSkippedItemStarts: async () => [],
     getInstallHold: async () => null,
     listHeldItemStarts: async () => [],
+    listAllHeldItemStarts: async () => [],
     listItemStarts: async () => [],
     listItemLinks: async () => [],
   };

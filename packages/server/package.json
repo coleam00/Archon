@@ -1,6 +1,6 @@
 {
   "name": "@archon/server",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
@@ -65,6 +65,12 @@
       "src/routes/api.workflow-runs.test.ts"
     ],
     [
+      "src/routes/api.run-records.test.ts"
+    ],
+    [
+      "src/routes/api.forge.test.ts"
+    ],
+    [
       "src/routes/api.workflow-run-launch.test.ts"
     ],
     [
@@ -90,6 +96,9 @@
     ],
     [
       "src/routes/api.packs.test.ts"
+    ],
+    [
+      "src/routes/api.observing.test.ts"
     ],
     [
       "src/routes/api.config.project.test.ts"

@@ -17,7 +17,8 @@
  */
 
 import { useEffect } from 'react';
-import { invalidate } from '../store/cache';
+import { get, invalidate } from '../store/cache';
+import type { RunsAttention } from '../primitives/run';
 import { K } from './../store/keys';
 import { SSE_BASE_URL } from './http';
 import { ATTENTION_SSE_PATH, DASHBOARD_SSE_PATH } from './sse-endpoints';
@@ -26,6 +27,10 @@ import { createThrottledInvalidator } from './throttled-invalidator';
 
 interface ParsedEvent {
   type?: string;
+  /** On an attention stream line: whether it asks for someone (`attentionWatchReader`). */
+  needs?: string;
+  /** On an `attention` line: the queue item, whose `ref` the attention list also holds. */
+  item?: { ref?: string };
   runId?: string;
   locked?: boolean;
   /** On a `conversation_lock` that a starting reply emits: the turn a Stop names. */
@@ -80,6 +85,8 @@ export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
       if (ev.type === 'workflow_status' || ev.type === 'dag_node') {
         // Refetch every runs:* key (runs:all, runs:project:<id>).
         throttled.invalidate('runs');
+        // A run that starts, pauses or ends may move its item on an open board; a node does not.
+        if (ev.type === 'workflow_status') throttled.invalidate('board');
         // Node outputs record metrics, so every metrics:* report may have changed.
         throttled.invalidate('metrics');
         // Also refresh any open run-detail cache so the detail page picks
@@ -114,31 +121,69 @@ export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
  * closes. An ask a completed run left changes no run, so the dashboard stream never tells
  * of it. Lines are only a cue: the list stays the one source of what is open.
  *
+ * A stream opens with the open set, then `ready`. That replay is what the page's own first
+ * reads already show, so it refetches nothing: refetching it reread the attention list and
+ * every board window once more on each page load. The one exception is an item that opened
+ * between the list's read and the stream's open set: at `ready`, a replayed item that needs
+ * someone and that the loaded list does not hold refetches once (#286). A list still loading
+ * at `ready` is not compared, so an item that opened just before the stream's open set can
+ * still wait for the next line, and so does an item that closed in that gap.
+ * After `ready`, an item that opens and needs someone, or closes, refetches. The server sends
+ * the open set and `ready` on every connect, EventSource's own reconnects included, so each
+ * connect starts a replay again; changes past the resumed cursor come after its `ready`.
+ *
  * On `cursor_invalid` the server ends the stream, and a plain reconnect would resend the
- * same `Last-Event-ID`, so the stream is opened afresh instead.
+ * same `Last-Event-ID`, so the stream is opened afresh instead, with one refetch for what was
+ * missed.
  */
 export function useAttentionStreamSSE(): void {
   useEffect(() => {
     let es: EventSource;
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
-    // The open set arrives as a burst of `attention` lines; one refetch covers it.
+    // Several items opening or closing at once send a burst of lines; one refetch covers it.
     const scheduleRefetch = (): void => {
       if (flushTimer !== null) return;
       flushTimer = setTimeout(() => {
         flushTimer = null;
         invalidate(K.runsAttention);
+        invalidate(K.needsYouCount);
+        // An ask that opens or closes changes where its item stands, and no run changed.
+        invalidate('board');
       }, 100);
     };
     const open = (): void => {
       es = new EventSource(`${SSE_BASE_URL}${ATTENTION_SSE_PATH}`);
+      let replaying = true;
+      // The refs of the replayed items that need someone, compared with the list at `ready`.
+      let replayed: string[] = [];
+      es.onopen = (): void => {
+        replaying = true;
+        replayed = [];
+      };
       es.onmessage = (e: MessageEvent<string>): void => {
         const line = parse(e.data);
-        if (line?.type === 'attention' || line?.type === 'resolved') scheduleRefetch();
-        else if (line?.type === 'error') {
+        if (line?.type === 'ready') {
+          replaying = false;
+          const listed = get(K.runsAttention) as RunsAttention | undefined;
+          if (listed !== undefined && replayed.some(ref => !listed.refs.has(ref)))
+            scheduleRefetch();
+          replayed = [];
+        } else if (line?.type === 'error') {
           es.close();
           scheduleRefetch();
           open();
-        }
+        } else if (replaying) {
+          if (
+            line?.type === 'attention' &&
+            line.needs !== 'nothing' &&
+            line.item?.ref !== undefined
+          )
+            replayed.push(line.item.ref);
+        } else if (
+          (line?.type === 'attention' && line.needs !== 'nothing') ||
+          line?.type === 'resolved'
+        )
+          scheduleRefetch();
       };
       es.onerror = (): void => {
         if (es.readyState === EventSource.CLOSED) {

@@ -303,6 +303,12 @@ export interface IWorkflowStore
   recordItemLanding(
     input: import('./schemas/item-landing').ItemLandingReport
   ): Promise<import('./schemas/item-landing').ItemLanding>;
+  /** Set the title of the item `key` names, writing the item on first use; again replaces it. */
+  recordItemTitle(input: {
+    projectKey: string;
+    key: string;
+    title: string;
+  }): Promise<import('./schemas/workflow-run').WorkflowItem>;
   /** The item's priority, its own or through items it is `part_of`; null when it has none. */
   getItemPriority(itemId: string): Promise<import('./schemas/item-priority').ItemPriority | null>;
   /** Give the item `key` names its own priority, writing the item on first use. */

@@ -237,7 +237,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
   const resourceStarts = await createResourceStarts();
-  registerServerRoutes(app, {
+  const api = registerServerRoutes(app, {
     webAdapter: web.adapter,
     lockManager,
     activePlatforms: registry.activePlatforms,
@@ -299,6 +299,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   getLog().info({ activePlatforms: registry.activePlatforms, port }, 'server_ready');
 
   // Non-blocking: warn at startup if gh CLI auth is unavailable
+  // Non-blocking: discover each project's workflows once, so the first board is not the one
+  // that pays for it. It never throws.
+  void api.warmPackDiscovery();
+
   checkGhAuth().catch((err: unknown) => {
     getLog().debug({ err }, 'gh_auth.check_unexpected_error');
   });

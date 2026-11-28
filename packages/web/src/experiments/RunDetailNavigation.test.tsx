@@ -214,6 +214,7 @@ test('graph node clicks select Log and that node together in one history entry',
     defaultBranch: null,
     repositoryUrl: null,
     lastSyncedAt: null,
+    itemPacks: [],
   } satisfies Project);
   set('workflow-graph:review:/project', [
     { id: 'outcome', kind: 'prompt', dependsOn: [] },
@@ -278,6 +279,7 @@ function seedGraph(state: 'pending' | 'completed' | 'failed' = 'pending'): void 
     defaultBranch: null,
     repositoryUrl: null,
     lastSyncedAt: null,
+    itemPacks: [],
   } satisfies Project);
   set('workflow-graph:review:/project', [
     { id: 'outcome', kind: 'prompt', dependsOn: [] },

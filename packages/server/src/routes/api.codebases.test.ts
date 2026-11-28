@@ -5,6 +5,7 @@ import {
 } from '@archon/core/db/codebase-delete-error';
 import { mkdtemp, writeFile, unlink, stat, rm as realRm } from 'fs/promises';
 import { tmpdir } from 'os';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { join } from 'path';
 import { isPathInside } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -210,6 +211,14 @@ mock.module('@archon/core/db/conversations', () => ({
   getConversationById: mock(async () => null),
 }));
 
+const mockListItemPacks = mock(async () => new Map<string, string[]>());
+const realItems = await import('@archon/core/db/items');
+mock.module('@archon/core/db/items', () => ({ ...realItems, listItemPacks: mockListItemPacks }));
+
+/** Rows as the list returns them when no project has an item on a pack stage. */
+const listed = <T extends object>(rows: T[]): (T & { item_packs: string[] })[] =>
+  rows.map(row => ({ ...row, item_packs: [] }));
+
 mock.module('@archon/core/db/codebases', () => ({
   listCodebaseClaims: mockListCodebaseClaims,
   getCodebase: mockGetCodebase,
@@ -328,6 +337,40 @@ describe('GET /api/codebases', () => {
     mockListCodebaseClaims.mockReset();
   });
 
+  test('each project lists the packs with a run on one of its items, and no other project does', async () => {
+    const row = (id: string, name: string) => ({
+      ...MOCK_CODEBASE,
+      id,
+      name,
+      repository_url: null,
+      default_cwd: `/projects/${id}`,
+    });
+    const staged = row('staged', 'acme/staged');
+    mockListCodebaseClaims.mockResolvedValueOnce([staged, row('plain', 'acme/plain')]);
+    mockListItemPacks.mockResolvedValueOnce(
+      new Map([[projectKeyForCodebase(staged, staged.default_cwd), ['flow']]])
+    );
+    const body = (await (await makeApp().request('/api/codebases')).json()) as {
+      id: string;
+      item_packs: string[];
+    }[];
+    expect(body.map(codebase => [codebase.id, codebase.item_packs])).toEqual([
+      ['plain', []],
+      ['staged', ['flow']],
+    ]);
+  });
+
+  test('a pack scan that fails leaves item_packs unknown, not the whole list failed', async () => {
+    mockListCodebaseClaims.mockResolvedValueOnce([MOCK_CODEBASE]);
+    mockListItemPacks.mockRejectedValueOnce(new Error('item runs unreadable'));
+    const response = await makeApp().request('/api/codebases');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { id: string; item_packs: string[] | null }[];
+    expect(body.map(codebase => [codebase.id, codebase.item_packs])).toEqual([
+      [MOCK_CODEBASE.id, null],
+    ]);
+  });
+
   test('returns empty array when no codebases exist', async () => {
     mockListCodebaseClaims.mockImplementationOnce(async () => []);
 
@@ -392,7 +435,7 @@ describe('GET /api/codebases', () => {
 
     const response = await makeApp().request('/api/codebases');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual([unrelated, newest]);
+    expect(await response.json()).toEqual(listed([unrelated, newest]));
   });
 
   test('keeps URL-bearing folders separate from each other and repository owners', async () => {
@@ -408,7 +451,7 @@ describe('GET /api/codebases', () => {
 
     const response = await makeApp().request('/api/codebases');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual([...folders, repo]);
+    expect(await response.json()).toEqual(listed([...folders, repo]));
   });
 
   test('deduplicates equivalent absolute local paths and retains the newer original row', async () => {
@@ -430,7 +473,7 @@ describe('GET /api/codebases', () => {
 
       const response = await makeApp().request('/api/codebases');
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual([newer]);
+      expect(await response.json()).toEqual(listed([newer]));
     } finally {
       await removeTempTree(root);
     }
@@ -458,7 +501,7 @@ describe('GET /api/codebases', () => {
     try {
       const response = await makeApp().request('/api/codebases');
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual(rows);
+      expect(await response.json()).toEqual(listed(rows));
       expect(warningSpy).toHaveBeenCalledTimes(invalid.length);
       for (const row of invalid) {
         expect(warningSpy).toHaveBeenCalledWith(
@@ -493,7 +536,7 @@ describe('GET /api/codebases', () => {
 
     const response = await makeApp().request('/api/codebases');
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(rows);
+    expect(await response.json()).toEqual(listed(rows));
   });
 
   test('retains every unresolved and URL-less row, warning with each original error', async () => {
@@ -537,7 +580,7 @@ describe('GET /api/codebases', () => {
     try {
       const response = await makeApp().request('/api/codebases');
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual([...unresolved, ...urlLess, healthy]);
+      expect(await response.json()).toEqual(listed([...unresolved, ...urlLess, healthy]));
       expect(identitySpy).toHaveBeenCalledTimes(4);
       for (const row of [healthy, ...unresolved, older]) {
         expect(identitySpy).toHaveBeenCalledWith(row.repository_url, row.default_cwd);

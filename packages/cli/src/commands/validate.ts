@@ -13,7 +13,7 @@ import {
   type WorkflowLoadError,
   type WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
-import { declaredStops, nearestPackBindings } from '@archon/workflows/pack-graph';
+import { buildPackGraph, declaredStops, nearestPackBindings } from '@archon/workflows/pack-graph';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
@@ -36,21 +36,29 @@ import { packWakeInputProblems } from '@archon/core/workflows/declared-inputs';
 import { workflowValidationConfig } from '@archon/workflows/validation-config';
 import type { PluginDiscovery } from '@archon/forge/discovery';
 import type { WorkflowPack } from '@archon/workflows/schemas/pack-settings';
-import { bindingWorkflowNames, packWorkflowName } from '@archon/workflows/pack-graph';
-import {
-  loadPackDeclaration,
-  PACK_DECLARATION_PATH,
-  PackSettingsError,
-  type PackDeclaration,
-} from '@archon/workflows/pack-settings';
+import { manifestBindingRefusals, rootPackDirs } from '@archon/workflows/pack-binding-rule';
+import { PACK_DECLARATION_PATH } from '@archon/workflows/pack-settings';
+import { canonicalizeProjectPath } from '@archon/paths';
 import { discoverInstalledForgePlugins } from './forge';
+import {
+  checkGroups,
+  exitProblem,
+  loadPackDocument,
+  ungroupedStages,
+} from '@archon/workflows/pack-document';
+import {
+  replacedStillPresent,
+  replacedTwice,
+  unlabelled,
+} from '@archon/workflows/pack-graph-words';
+import { displayDeclarationIssues, withDisplayIssues } from './validate-display';
 import {
   PLUGIN_MANIFEST_FILE,
   unknownManifestKeys,
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
-import { readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, readFile, stat } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 
 /**
  * Build ValidationConfig from the repo's .archon/config.yaml
@@ -129,7 +137,12 @@ export async function validateWorkflowsCommand(
   source?: string
 ): Promise<number> {
   const config = await buildValidationConfig(source ?? cwd);
-  const results = await collectWorkflowResults(cwd, source, config, forgeTrustedEnv);
+  const { results, workflowEntries } = await collectWorkflowResults(
+    cwd,
+    source,
+    config,
+    forgeTrustedEnv
+  );
   if (source !== undefined && results.length === 0) {
     const message = `Error: no workflows found in --workflow-source ${source}`;
     if (json) await writeStdout(`${JSON.stringify({ error: message, source })}\n`);
@@ -146,8 +159,18 @@ export async function validateWorkflowsCommand(
       return 1;
     }
   }
-  // The manifest is not a workflow, so the name filter does not apply to it.
-  filteredResults.push(...(await manifestResults(source ?? pluginRoot)));
+  // A pack's bindings, the manifest and the pack document are not workflows, so the name filter
+  // does not apply to them.
+  filteredResults.push(
+    ...(await packBindingResults(source ?? cwd, source === undefined ? pluginRoot : undefined)),
+    ...(await manifestResults(source ?? pluginRoot)),
+    ...(await packDocumentResults(source ?? pluginRoot, workflowEntries))
+  );
+  filteredResults = withDisplayIssues(
+    filteredResults,
+    await packDisplayIssues(source ?? pluginRoot, workflowEntries),
+    name
+  );
 
   filteredResults.sort((a, b) => {
     const aErrors = a.issues.filter(i => i.level === 'error').length;
@@ -198,7 +221,10 @@ async function collectWorkflowResults(
   workflowSource: string | undefined,
   config: ValidationConfig,
   forgeTrustedEnv: NodeJS.ProcessEnv
-): Promise<WorkflowValidationResult[]> {
+): Promise<{
+  results: WorkflowValidationResult[];
+  workflowEntries: readonly WorkflowWithSource[];
+}> {
   const mergedConfig = await loadConfig(cwd);
   const defaultProvider = mergedConfig.assistant;
   const { workflowEntries, loadErrors } = await discoverForValidation(cwd, workflowSource);
@@ -254,7 +280,7 @@ async function collectWorkflowResults(
     results.push(makeWorkflowResult(workflow.name, issues));
   }
 
-  return results;
+  return { results, workflowEntries };
 }
 
 /** The workflows by pack key; a workflow outside a pack is a group of its own. */
@@ -271,7 +297,7 @@ function packGroups(entries: readonly WorkflowWithSource[]): Map<string, Workflo
  * Each input a pack's wake binding reads, as `{ input }`, that its `wake.workflow` does not
  * declare, by that workflow's name: the run that left the wait has no such input, so the
  * read maps nothing on every start. An error, as `archon pack bindings` refuses it. A
- * `wake.workflow` that is not a stage of the pack is the entrypoint check's.
+ * `wake.workflow` that is not a stage of the pack is `packBindingResults`'.
  */
 function wakeInputIssues(entries: readonly WorkflowWithSource[]): Map<string, ValidationIssue[]> {
   const issues = new Map<string, ValidationIssue[]>();
@@ -331,13 +357,131 @@ function stopIssues(entries: readonly WorkflowWithSource[]): Map<string, Validat
 }
 
 /**
+ * The stages a group of the pack at `packDir` may hold, and the ones it must: with the
+ * bindings the pack declares, its in-flow stages, read as `archon pack graph` reads them
+ * before anything is installed (declared arrows mark a stage in flow on their own). A pack
+ * that declares no bindings has no flow, so a group may hold any workflow of the pack and no
+ * stage must be in one. A source pack is keyed by its manifest's `name`; a plugin root whose
+ * pack discovery did not reach is checked against every workflow discovered.
+ */
+async function packStages(
+  packDir: string,
+  entries: readonly WorkflowWithSource[]
+): Promise<{ allowed: string[]; required: string[]; graph?: ReturnType<typeof buildPackGraph> }> {
+  const manifest = workflowPackManifestSchema.safeParse(
+    JSON.parse(await readFile(join(packDir, PLUGIN_MANIFEST_FILE), 'utf-8'))
+  );
+  const key = manifest.success ? manifest.data.name : undefined;
+  const own = entries.filter(entry => entry.workflow.pack?.key === key);
+  const declared = nearestPackBindings(own);
+  if (own.length === 0 || declared === undefined) {
+    // A document names a stage as its pack authored it, as an installed catalog's name need not.
+    const names = (own.length === 0 ? entries : own).map(
+      ({ workflow }) => workflow.pack?.workflow ?? workflow.name
+    );
+    return { allowed: names, required: [] };
+  }
+  const graph = buildPackGraph({
+    packKey: key ?? '',
+    stages: own.map(entry => entry.workflow),
+    declared,
+    installed: [],
+    workflows: entries.map(entry => entry.workflow),
+    discoveryErrors: [],
+  });
+  const inFlow = graph.stages.filter(stage => stage.inFlow).map(stage => stage.workflow);
+  return { allowed: inFlow, required: inFlow, graph };
+}
+
+/**
+ * What is wrong with the pack's document (the manifest's `document`, else its
+ * `how-it-works.md`): errors when it is missing or does not read, when a group names a stage
+ * that is not in the pack's flow or that another group holds, when an in-flow stage is in
+ * no group, and when `exit` names a stage not in the flow (`pack-document.ts`, the checks
+ * `archon pack graph` makes). A frontmatter key this
+ * Archon does not read is a warning, as an unknown manifest key is.
+ */
+async function packDocumentResults(
+  packDir: string,
+  entries: readonly WorkflowWithSource[]
+): Promise<WorkflowValidationResult[]> {
+  const read = await loadPackDocument(packDir);
+  if (read.document === null) return [];
+  const hint = read.fallback
+    ? `Fix ${read.document}, or name the pack's document in the manifest's \`document\`.`
+    : `Fix ${read.document} or the manifest's document path.`;
+  const stages = await packStages(packDir, entries);
+  const errors = [
+    ...read.problems,
+    ...checkGroups(read.groups, stages.allowed).problems,
+    ...ungroupedStages(read.groups, stages.required),
+    ...exitProblem(read.exit, stages.allowed),
+  ];
+  const issues = [
+    ...errors.map(
+      (message): ValidationIssue => ({
+        level: 'error',
+        field: 'pack_document',
+        message,
+        hint,
+      })
+    ),
+    ...read.warnings.map(
+      (message): ValidationIssue => ({
+        level: 'warning',
+        field: 'pack_document',
+        message,
+        hint: `Remove the key from ${read.document}, or check its spelling: a key a newer Archon reads is ignored by this one.`,
+      })
+    ),
+  ];
+  return issues.length > 0
+    ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
+    : [];
+}
+
+/**
+ * What the pack's in-flow stages leave a reader without words for, as warnings (a reader shows
+ * the id instead), and a `display.replaces` naming a stage the pack still has or a retired
+ * workflow named twice, as errors (`pack-graph-words.ts`), by the stage's workflow name. A
+ * mark's `means` and a `results` pointer are checked per workflow
+ * (`displayDeclarationIssues`). Beyond those, a folder with no pack manifest, or a pack with
+ * no flow, has nothing to check.
+ */
+async function packDisplayIssues(
+  packDir: string,
+  entries: readonly WorkflowWithSource[]
+): Promise<Map<string, ValidationIssue[]>> {
+  const byStage = displayDeclarationIssues(entries);
+  try {
+    await access(join(packDir, PLUGIN_MANIFEST_FILE));
+  } catch {
+    return byStage;
+  }
+  let graph: ReturnType<typeof buildPackGraph> | undefined;
+  try {
+    ({ graph } = await packStages(packDir, entries));
+  } catch {
+    // A manifest that does not read is reported by `manifestResults`.
+    return byStage;
+  }
+  if (graph === undefined) return byStage;
+  const add = (stage: string, issue: ValidationIssue): void => {
+    byStage.set(stage, [...(byStage.get(stage) ?? []), issue]);
+  };
+  for (const { stage, message, hint } of unlabelled(graph))
+    add(stage, { level: 'warning', field: 'display', message, hint });
+  for (const { stage, message, hint } of [...replacedStillPresent(graph), ...replacedTwice(graph)])
+    add(stage, { level: 'error', field: 'display', message, hint });
+  return byStage;
+}
+
+/**
  * The plugin root's own manifest. Keys this Archon ignores are warnings: readers strip
  * them so a newer Archon can add a field, and the author still sees a typo. A declared
- * skill folder without a `SKILL.md` is an error, because install refuses it. So is a
- * binding in `.pack/pack.yaml` that names a workflow the manifest does not list as an
- * entrypoint: an installed copy dispatches only entrypoints, so `pack bindings` refuses it
- * there, while a folder source sees every workflow and would accept it. Schema failures
- * are discovery load errors and are not repeated here.
+ * skill folder without a `SKILL.md` is an error, because install refuses it. Schema
+ * failures are discovery load errors and are not repeated here. A binding to a workflow
+ * the manifest does not list is `packBindingResults`'.
  */
 async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]> {
   let raw: unknown;
@@ -373,46 +517,70 @@ async function manifestResults(cwd: string): Promise<WorkflowValidationResult[]>
       });
     }
   }
-  if (pack.success) issues.push(...(await bindingEntrypointIssues(cwd, pack.data.entrypoints)));
   return issues.length > 0
     ? [makeWorkflowResult(PLUGIN_MANIFEST_FILE, issues, PLUGIN_MANIFEST_FILE)]
     : [];
 }
 
 /**
- * Each workflow a pack's bindings name that its manifest does not list as an entrypoint,
- * decided by `packWorkflowName`, the resolver `pack bindings` uses on an installed copy.
- * A binding names its own pack's stage by the bare key; `pack bindings` adds the installed
- * `owner/plugin:` prefix. A qualified name is refused, because the owner is set at install
- * and a pack folder cannot say whether a prefix is its own.
+ * Each pack whose `.pack/pack.yaml` binds a workflow its manifest does not list as an
+ * entrypoint (`manifestBindingRefusals`), with the refusal `archon pack bindings` gives. The
+ * packs checked are those of `root`, the project or explicit source, and the pack folder at
+ * or above `pluginRoot` that holds the nearest `archon-plugin.json` (a plugin kept in a
+ * repository subdirectory, which discovery does not read). Each directory is read once, so
+ * the result is the same from whatever directory of the project validation runs in.
  */
-async function bindingEntrypointIssues(
-  cwd: string,
-  entrypoints: Readonly<Record<string, string>>
-): Promise<ValidationIssue[]> {
-  let declaration: PackDeclaration;
-  try {
-    declaration = await loadPackDeclaration(cwd, '.');
-  } catch (error) {
-    // An invalid declaration is already a load error on every workflow of the pack.
-    if (error instanceof PackSettingsError) return [];
-    throw error;
+async function packBindingResults(
+  root: string,
+  pluginRoot: string | undefined
+): Promise<WorkflowValidationResult[]> {
+  const dirs = new Map<string, string | undefined>();
+  for (const { dir, key } of await rootPackDirs(root))
+    dirs.set(await canonicalizeProjectPath(dir), key);
+  const located = pluginRoot === undefined ? undefined : await nearestManifestDir(pluginRoot, root);
+  if (located !== undefined && !dirs.has(located)) dirs.set(located, undefined);
+  const results: WorkflowValidationResult[] = [];
+  for (const [dir, key] of dirs) {
+    try {
+      const found = await manifestBindingRefusals(dir, key);
+      if (found !== undefined) results.push(...refusalResult(found.key, found.refusals));
+    } catch (error) {
+      results.push(...refusalResult(key ?? dir, [(error as Error).message]));
+    }
   }
-  const listed = Object.keys(entrypoints);
-  return Object.entries(declaration.bindings ?? {}).flatMap(([id, binding]) =>
-    bindingWorkflowNames(binding)
-      .filter(name => packWorkflowName(listed, name) === undefined)
-      .map(
-        (name): ValidationIssue => ({
-          level: 'error',
-          field: 'manifest_entrypoints',
-          message: `binding '${id}' in ${PACK_DECLARATION_PATH} names workflow '${name}', which ${PLUGIN_MANIFEST_FILE} does not list as an entrypoint`,
-          hint: name.includes(':')
-            ? `Name a stage of this pack by its bare name, as the pack writes it; archon pack bindings adds the installed prefix. Bind one it lists: ${listed.join(', ')}.`
-            : `An installed copy refuses this binding at archon pack bindings. List '${name}' under entrypoints, or bind one it lists: ${listed.join(', ')}.`,
-        })
-      )
+  return results;
+}
+
+/** One pack's refusals as a result under its declaration, or nothing when there are none. */
+function refusalResult(key: string, messages: readonly string[]): WorkflowValidationResult[] {
+  const issues = messages.map(
+    (message): ValidationIssue => ({
+      level: 'error',
+      field: 'pack_bindings',
+      message,
+      hint: `A pack copy dispatches only the entrypoints its ${PLUGIN_MANIFEST_FILE} lists: bind one of them, or list this workflow there.`,
+    })
   );
+  return issues.length > 0 ? [makeWorkflowResult(`${key}: ${PACK_DECLARATION_PATH}`, issues)] : [];
+}
+
+/**
+ * The nearest directory at or above `from`, up to `root`, holding an `archon-plugin.json`;
+ * only `from` itself when it lies outside `root`. Canonical, as the root from git is.
+ */
+async function nearestManifestDir(from: string, root: string): Promise<string | undefined> {
+  const top = await canonicalizeProjectPath(root);
+  let dir = await canonicalizeProjectPath(from);
+  const inside = !relative(top, dir).startsWith('..');
+  for (;;) {
+    const present = await stat(join(dir, PLUGIN_MANIFEST_FILE)).then(
+      () => true,
+      () => false
+    );
+    if (present) return dir;
+    if (!inside || dir === top || dirname(dir) === dir) return undefined;
+    dir = dirname(dir);
+  }
 }
 
 /**

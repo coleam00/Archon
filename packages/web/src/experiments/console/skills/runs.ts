@@ -48,6 +48,7 @@ export async function listRunsNeedingAttention(): Promise<RunsAttention> {
     asks: res.items.filter(isItemAsk),
     answerRefusals: res.answerRefusals,
     itemIds: new Set(res.items.flatMap(item => (item.item === undefined ? [] : [item.item.id]))),
+    refs: new Set(res.items.map(item => item.ref)),
     degraded: res.degraded ?? [],
   };
 }

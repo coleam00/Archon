@@ -212,6 +212,9 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   // is nothing to carry; warning "dropped" would fire on every discovery of a
   // composer that includes a deprecated block.
   'deprecated',
+  // Words for the file as a stage of its own; its nodes carry their own `display:`
+  // through inlining, so nothing a composer runs or shows is lost.
+  'display',
 ]);
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
