@@ -31,5 +31,11 @@ test('a run on no item leaves the row without one', () => {
 
 test('an item key is shown whole, however long it runs', () => {
   const long = `owner/${'r'.repeat(120)}#1`;
-  expect(render(long)).toContain(long);
+  const row = render(long);
+  expect(row).toContain(long);
+  // Whole and wrapping: the row shrinks the key rather than cutting it off, so a long key
+  // costs the row a line instead of the operator half an identifier.
+  const key = row.slice(row.indexOf(`title="On item ${long}"`) - 200, row.indexOf(`>${long}<`));
+  expect(key).toContain('break-words');
+  expect(key).not.toContain('truncate');
 });

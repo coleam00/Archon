@@ -88,7 +88,7 @@ export function RecentRunRow({
             and half of one identifies nothing. Absent for a run on no item. */}
         {run.itemKey != null ? (
           <span
-            className="shrink-0 font-mono text-console-11 text-text-tertiary"
+            className="min-w-0 break-words font-mono text-console-11 text-text-tertiary"
             title={`On item ${run.itemKey}`}
           >
             {run.itemKey}
