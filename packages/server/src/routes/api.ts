@@ -15,20 +15,23 @@ import {
 import { readPackGraph } from '@archon/core/workflows/pack-graph';
 import { getTriggersPath, launchProjectKey } from '@archon/core/workflows/run-ended';
 import { providerRegistry } from '@archon/providers';
+import { resolveWorkflowGithubEnvironment } from '@archon/workflows/run-credential-env';
 import type { WebAdapter } from '../adapters/web';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import { isApiGateEnabled } from '../auth';
 import type { AttentionRouter } from '../services/attention-router';
+import { createProjectForgeReader, hostForgeAccess } from '../services/project-forge';
 import type { ItemTracker } from '@archon/adapters/item-tracker/item-tracker';
 import type { WebPushDestination } from '../services/web-push';
 import { createOrchestratorDispatch } from './api-message-dispatch';
-import { requireWebUser, resolveAuthContext } from './api-request-auth';
+import { requireWebUser, resolveAuthContext, resolveWebUserId } from './api-request-auth';
 import { registerArtifactRoutes } from './api.artifacts';
 import { registerAuthRoutes } from './api.auth';
 import { registerCodebaseEnvironmentRoute, registerCodebaseRoutes } from './api.codebases';
 import { registerConfigRoutes } from './api.config';
 import { registerConversationRoutes } from './api.conversations';
 import { registerConversationProcessingRoute } from './api.conversation-processing';
+import { registerProjectForgeRoute } from './api.forge';
 import { registerHealthRoutes } from './api.health';
 import { registerItemRoutes } from './api.items';
 import { registerMessageRoutes } from './api.messages';
@@ -157,6 +160,24 @@ export function registerApiRoutes(
   registerConfigRoutes(app);
   registerProviderRoutes(app);
   registerCodebaseEnvironmentRoute(app);
+  registerProjectForgeRoute(app, {
+    getCodebase: codebaseDb.getCodebase,
+    userId: resolveWebUserId,
+    readProjectForge: createProjectForgeReader({
+      ...hostForgeAccess(),
+      // The credential a run for this user on this project would get: the App installation
+      // token, the user's own token, or the per-user scrub. The shared token is never borrowed.
+      credentialEnv: async (codebase, userId) => ({
+        ...process.env,
+        ...(
+          await resolveWorkflowGithubEnvironment(createSqlWorkflowHost().deps, codebase, userId, {
+            envVars: {},
+          })
+        ).envVars,
+      }),
+      now: () => new Date(),
+    }),
+  });
   registerWebPushRoutes(app, attention);
   registerHealthRoutes(app, { lockManager, activePlatforms, attention, commit });
 }
