@@ -392,6 +392,17 @@ const providerRegistry: ProviderRegistry = {
 // The vendor a chat turn's provider needs; per-test overrides pick another.
 export const mockChatVendor = mock((_model?: string): string | undefined => 'anthropic');
 export const mockIsRegisteredProvider = mock((_provider: string): boolean => true);
+// Vendor → env-var names, each in pi-ai's order: a read walks the list and a write
+// targets the first name, so the mock says what the generated map says.
+const mockPiEnvVars: Record<string, readonly string[]> = {
+  anthropic: ['ANTHROPIC_API_KEY'],
+  openai: ['OPENAI_API_KEY'],
+  'github-copilot': ['COPILOT_GITHUB_TOKEN'],
+  openrouter: ['OPENROUTER_API_KEY'],
+  google: ['GEMINI_API_KEY'],
+  huggingface: ['HF_TOKEN'],
+};
+
 mock.module('@archon/providers', () => ({
   providerRegistry,
   getRegistration: (provider: string) => {
@@ -418,16 +429,11 @@ mock.module('@archon/providers', () => ({
   getProviderCapabilities: mockGetProviderCapabilities,
   isRegisteredProvider: (provider: string) => mockIsRegisteredProvider(provider),
   getRegisteredProviders: mock(() => []),
-  // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
-  // subset of the generated map (the chat inject tests deliver through it).
-  PI_PROVIDER_ENV_VARS: {
-    anthropic: 'ANTHROPIC_API_KEY',
-    openai: 'OPENAI_API_KEY',
-    'github-copilot': 'COPILOT_GITHUB_TOKEN',
-    openrouter: 'OPENROUTER_API_KEY',
-    google: 'GEMINI_API_KEY',
-    huggingface: 'HF_TOKEN',
-  },
+  // Vendor → env-var names consumed by credentials/delivery (#1955). A realistic subset
+  // of the generated map (the chat inject tests deliver through it).
+  PI_PROVIDER_ENV_VARS: mockPiEnvVars,
+  piEnvVarNames: (vendor: string): readonly string[] => mockPiEnvVars[vendor] ?? [],
+  primaryPiEnvVar: (vendor: string): string | undefined => mockPiEnvVars[vendor]?.[0],
   PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 

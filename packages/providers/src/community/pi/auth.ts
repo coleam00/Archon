@@ -20,6 +20,7 @@ import { parsePiModelRef } from './model-ref';
 // Pi provider id → env var name used by pi-ai's getEnvApiKey(). Generated
 // from the installed pi-ai SDK (full backend coverage) — see
 // scripts/generate-pi-vendor-map.ts; `bun run check:pi-vendor-map` guards drift.
+import { piEnvVarNames } from './env-vars';
 import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 import { createRequestModelRuntime, type RequestModelRuntime } from './request-auth';
 
@@ -214,8 +215,11 @@ export async function applyPiEnvOverride(
 ): Promise<void> {
   if (authPath && authEnv.deliveredEnvKeys.includes(PI_AUTH_PATH_ENV)) return;
   const env = authEnv.credentialEnv;
-  const keyVar = PI_PROVIDER_ENV_VARS[providerId];
-  const key = keyVar ? env[keyVar] : undefined;
+  // The first of pi-ai's names that carries a value: a delivered key lands on the first,
+  // a hand-set fallback on a later one.
+  const key = piEnvVarNames(providerId)
+    .map(name => env[name])
+    .find(Boolean);
   if (key) await runtime.setRuntimeApiKey(providerId, key);
 }
 
@@ -226,10 +230,11 @@ export async function applyPiEnvOverride(
  * user's subscription and is not offered either.
  */
 export function piNotConnectedMessage(providerId: string): string {
-  const envVarName = PI_PROVIDER_ENV_VARS[providerId];
-  const envHint = envVarName
-    ? ` Set ${envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
-    : '';
+  const envVarNames = piEnvVarNames(providerId);
+  const envHint =
+    envVarNames.length > 0
+      ? ` Set ${envVarNames.join(' or ')} in the environment or codebase env vars (.archon/config.yaml env: section).`
+      : '';
   if (providerId === 'anthropic') {
     return (
       `Pi auth: no Anthropic API key. Pi runs Anthropic models with an API key.${envHint} ` +
@@ -302,13 +307,14 @@ export async function createPiModelRuntime(
   );
   const authoritativeCredential = Boolean(
     (authPath && authEnv.deliveredEnvKeys.includes(PI_AUTH_PATH_ENV)) ||
-      (authEnv.deliveredEnvKeys.includes(PI_PROVIDER_ENV_VARS[provider] ?? '') &&
-        authEnv.credentialEnv[PI_PROVIDER_ENV_VARS[provider] ?? ''])
+      piEnvVarNames(provider).some(
+        name => authEnv.deliveredEnvKeys.includes(name) && Boolean(authEnv.credentialEnv[name])
+      )
   );
   const requestRuntime = await createRequestModelRuntime(
     options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
     authPath,
-    authoritativeCredential || !PI_PROVIDER_ENV_VARS[provider]
+    authoritativeCredential || piEnvVarNames(provider).length === 0
       ? {
           provider,
           env: authEnv.credentialEnv,

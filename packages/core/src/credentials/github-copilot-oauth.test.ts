@@ -83,13 +83,13 @@ test('device login polls pending and slow_down, mints a bearer and enables only 
     if (url.endsWith('/models'))
       return Response.json({
         data: [
-          model('gpt-5.4', 'unconfigured'),
+          model('gpt-5.4-nano', 'unconfigured'),
           model('unknown-future-model', 'unconfigured'),
           model('disabled', 'disabled'),
           model('no-tools', 'enabled', true, false),
         ],
       });
-    expect(url).toBe('https://api.individual.githubcopilot.com/models/gpt-5.4/policy');
+    expect(url).toBe('https://api.individual.githubcopilot.com/models/gpt-5.4-nano/policy');
     expect(JSON.parse(String(init?.body))).toEqual({ state: 'enabled' });
     return new Response(null, { status: 204 });
   });
@@ -108,7 +108,7 @@ test('device login polls pending and slow_down, mints a bearer and enables only 
     access: bearer,
     refresh: 'github-token',
     type: 'oauth',
-    availableModelIds: ['gpt-5.4', 'unknown-future-model'],
+    availableModelIds: ['gpt-5.4-nano', 'unknown-future-model'],
   });
   expect(polls).toBe(3);
   expect(waits).toEqual([1000, 1000, 6000]);
@@ -240,7 +240,7 @@ test('model discovery honors Retry-After and policy failures remain observable a
       catalogCalls++;
       return catalogCalls === 1
         ? new Response('secret-account', { status: 429, headers: { 'Retry-After': '1' } })
-        : Response.json({ data: [model('gpt-5.4', 'unconfigured', false)] });
+        : Response.json({ data: [model('gpt-5.4-nano', 'unconfigured', false)] });
     }
     return new Response('secret-account', { status: 403 });
   });

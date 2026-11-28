@@ -102,6 +102,20 @@ mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
 }));
 
+// Vendor → env-var names consumed by credentials/delivery (#1955). A realistic subset of
+// the generated map (incl. HF_TOKEN, the upstream var), each in pi-ai's order: delivery
+// writes to the first name.
+const mockPiEnvVars: Record<string, readonly string[]> = {
+  anthropic: ['ANTHROPIC_API_KEY'],
+  openai: ['OPENAI_API_KEY'],
+  'github-copilot': ['COPILOT_GITHUB_TOKEN'],
+  openrouter: ['OPENROUTER_API_KEY'],
+  google: ['GEMINI_API_KEY'],
+  groq: ['GROQ_API_KEY'],
+  huggingface: ['HF_TOKEN'],
+  'google-vertex': ['GOOGLE_CLOUD_API_KEY'],
+};
+
 const credentialCatalog = await import('../../../providers/src/credential-catalog');
 const codexCredentialEnv = await import('../../../providers/src/codex/credential-env');
 mock.module('@archon/providers', () => ({
@@ -120,18 +134,9 @@ mock.module('@archon/providers', () => ({
   isRegisteredProvider: mock((): boolean => false),
   InvalidProviderRunConfigError: class InvalidProviderRunConfigError extends Error {},
   getProviderCapabilities: mock((): { effortControl: boolean } => ({ effortControl: false })),
-  // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
-  // subset of the generated map (incl. HF_TOKEN, the upstream var).
-  PI_PROVIDER_ENV_VARS: {
-    anthropic: 'ANTHROPIC_API_KEY',
-    openai: 'OPENAI_API_KEY',
-    'github-copilot': 'COPILOT_GITHUB_TOKEN',
-    openrouter: 'OPENROUTER_API_KEY',
-    google: 'GEMINI_API_KEY',
-    groq: 'GROQ_API_KEY',
-    huggingface: 'HF_TOKEN',
-    'google-vertex': 'GOOGLE_CLOUD_API_KEY',
-  },
+  PI_PROVIDER_ENV_VARS: mockPiEnvVars,
+  piEnvVarNames: (vendor: string): readonly string[] => mockPiEnvVars[vendor] ?? [],
+  primaryPiEnvVar: (vendor: string): string | undefined => mockPiEnvVars[vendor]?.[0],
   PI_AMBIENT_VENDORS: ['amazon-bedrock', 'google-vertex'],
 }));
 

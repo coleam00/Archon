@@ -36,6 +36,9 @@ export { InvalidProviderRunConfigError } from '@archon/provider-contract';
 // Pi runtime bridge and @archon/core's credential delivery — see #1955).
 export { PI_PROVIDER_ENV_VARS, PI_AMBIENT_VENDORS } from './community/pi/pi-vendor-map.generated';
 
+// Which of those names a read walks (pi-ai's order) and which one a write targets.
+export { piEnvVarNames, primaryPiEnvVar } from './community/pi/env-vars';
+
 // Env names core's credential delivery writes and the Codex provider reads.
 export { CODEX_CREDENTIAL_ENV } from './codex/credential-env';
 

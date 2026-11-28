@@ -203,7 +203,7 @@ async function smokePiOAuth(binary: string): Promise<void> {
 
 const PI_OAUTH_DOCTOR_MODELS = [
   { model: 'xai/grok-4.7', grant: 'xai' },
-  { model: 'openai-codex/gpt-5.5', grant: 'openai-codex' },
+  { model: 'openai-codex/gpt-5.6-sol', grant: 'openai-codex' },
 ] as const;
 
 /** Doctor's database line when it opened the temp home's SQLite, not an inherited PostgreSQL. */

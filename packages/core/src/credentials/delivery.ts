@@ -26,6 +26,7 @@ import {
   PI_PROVIDER_ENV_VARS,
   PI_AMBIENT_VENDORS,
   normalizeCredentialVendor,
+  primaryPiEnvVar,
 } from '@archon/providers';
 import { descriptor as piDescriptor } from '@archon/providers/pi/descriptor';
 import { PI_AUTH_PATH_ENV } from '@archon/providers/pi/auth-path-env';
@@ -129,7 +130,7 @@ function deliverPiBackend(vendor: string, cred: ResolvedCredential): DeliveryRes
   // API key. This includes google-vertex, which is BOTH api_key-capable
   // and ambient — a stored Vertex key must deliver, so the env lookup
   // takes precedence over the ambient check.
-  const piEnvVar = PI_PROVIDER_ENV_VARS[vendor];
+  const piEnvVar = primaryPiEnvVar(vendor);
   if (piEnvVar) {
     if (cred.kind === 'oauth') {
       // Reached only if an oauth row exists under a Pi-backend id (connect
