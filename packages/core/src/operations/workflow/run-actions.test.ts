@@ -43,6 +43,18 @@ describe('getWorkflowStatus', () => {
     });
   });
 
+  test('drops the bound when asked for every active run', async () => {
+    mockListWorkflowRuns.mockResolvedValueOnce({
+      runs: [],
+      total: 0,
+      counts: EMPTY_COUNTS,
+    });
+
+    await getWorkflowStatus({ every: true });
+
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith({ status: ['running', 'paused'] });
+  });
+
   test('passes an explicit codebase scope to the active-run query', async () => {
     mockListWorkflowRuns.mockResolvedValueOnce({
       runs: [],

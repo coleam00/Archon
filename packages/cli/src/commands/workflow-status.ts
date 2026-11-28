@@ -42,7 +42,7 @@ export async function resolveStatusCodebase(
 
 /**
  * What this process sees of each run's owner, by the rule `workflow wait` and `workflow resume`
- * use, in `runs`' order. Reading changes nothing: a run whose owner is gone is listed, never
+ * use, in `runs`' order. Reading changes nothing: a run whose owner does not answer is listed, never
  * ended. An observation that itself failed reads `unknown`: a read that cannot be made must
  * never read as gone, and must not fail the listing.
  */
@@ -62,7 +62,7 @@ export async function statusOwners(
   return new Map(runs.map((run, index) => [run.id, observed[index] ?? null]));
 }
 
-/** `--lost` keeps only runs whose owner this process proved gone; `unknown` is never lost. */
+/** `--lost` keeps only runs reported unreachable; `unknown` is never lost. */
 export function lostOnly(
   runs: DashboardWorkflowRun[],
   owners: ReadonlyMap<string, RunOwnerObservation | null>
@@ -138,7 +138,7 @@ export async function printStatusText(
   opts: { verbose?: boolean; lost?: boolean }
 ): Promise<void> {
   if (opts.lost) {
-    console.log('Showing only runs whose owner this process proved gone (--lost).');
+    console.log('Showing only runs whose recorded owner on this host does not answer (--lost).');
   }
   if (runs.length === 0) {
     console.log(opts.lost ? 'No active run has an unreachable owner.' : 'No active workflows.');

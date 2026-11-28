@@ -310,9 +310,12 @@ export async function workflowStatusCommand(
   let runs: DashboardWorkflowRun[];
   let notices: Awaited<ReturnType<typeof latestWorkflowNotices>>;
   try {
-    const result = await host.operations.getWorkflowStatus(
-      codebase ? { codebaseId: codebase.id } : undefined
-    );
+    // `--lost` answers "which runs were left behind", so it reads every active run rather
+    // than the dashboard's bounded listing.
+    const result = await host.operations.getWorkflowStatus({
+      ...(codebase ? { codebaseId: codebase.id } : {}),
+      every: opts.lost === true,
+    });
     runs = result.runs;
     // What each live run last said it is doing, so one read answers "what is running".
     notices = await latestWorkflowNotices(

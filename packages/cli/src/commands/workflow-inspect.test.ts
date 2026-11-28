@@ -572,7 +572,7 @@ describe('workflowStatusCommand', () => {
     expect(printed).toContain('No active run has an unreachable owner.');
   });
 
-  it('--lost keeps only runs whose owner this process proved gone, and names the moves', async () => {
+  it('--lost keeps only runs reported unreachable, and names the moves', async () => {
     // The owner check re-reads the row once an attach fails, so the store must know the run.
     const orphan = recordedOwnerRun('run-orphan', { host: hostname(), pid: 424242 });
     const live = {
@@ -589,6 +589,8 @@ describe('workflowStatusCommand', () => {
 
     await workflowStatusCommand(host, '/test/path', { all: true, lost: true });
     const printed = consoleSpy.mock.calls.flat().join('\n');
+    // A recovery read is only honest if it checks every active run, not the bounded listing.
+    expect(mockListDashboardRuns).toHaveBeenLastCalledWith({ status: ['running', 'paused'] });
     expect(printed).toContain('run-orphan');
     expect(printed).toContain('Owner:  unreachable');
     expect(printed).toContain('resume: archon workflow resume run-orphan');

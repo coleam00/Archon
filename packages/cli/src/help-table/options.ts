@@ -228,7 +228,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--lost',
     description:
-      "For 'workflow status': show only active runs whose owner process this host proves gone",
+      "For 'workflow status': show only active runs reported unreachable: their recorded owner on this host does not answer",
     owners: [{ command: 'workflow', subcommand: 'status' }],
   },
   {

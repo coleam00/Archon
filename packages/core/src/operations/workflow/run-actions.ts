@@ -104,11 +104,11 @@ export async function deleteWorkflowRun(
 /** List running and paused workflow runs, optionally scoped to one codebase. */
 export async function getWorkflowStatus(
   ctx: OperationContext,
-  options?: { codebaseId?: string }
+  options?: { codebaseId?: string; every?: boolean }
 ): Promise<WorkflowStatusData> {
   const { runs } = await ctx.store.listWorkflowRuns({
     status: ['running', 'paused'],
-    limit: 50,
+    ...(options?.every ? {} : { limit: 50 }),
     ...(options?.codebaseId ? { codebaseId: options.codebaseId } : {}),
   });
   return { runs };

@@ -80,6 +80,8 @@ export const cliArgOptions: CliArgOptions = {
   priority: { type: 'boolean' },
   clear: { type: 'boolean' },
   all: { type: 'boolean' },
+  // `workflow status --lost`: only the runs whose recorded owner does not answer.
+  lost: { type: 'boolean' },
   status: { type: 'string' },
   limit: { type: 'string' },
   'if-revision': { type: 'string' },

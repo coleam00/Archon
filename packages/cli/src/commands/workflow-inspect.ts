@@ -88,7 +88,7 @@ export async function printStatusRun(
   console.log(`  Name:   ${run.workflow_name}`);
   console.log(`  Path:   ${run.working_path ?? '(none)'}`);
   console.log(`  Status: ${run.status}`);
-  // Only a run this process proved ownerless has a move to name; `unknown` has none.
+  // Only a run reported unreachable has a move to name; `unknown` has none.
   const ownerLine =
     owner === 'unreachable'
       ? `unreachable — resume: archon workflow resume ${run.id}   abandon: archon workflow abandon ${run.id}`

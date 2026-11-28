@@ -684,7 +684,7 @@ Show active runs (running and paused) for the current project, resolved from `cw
 archon workflow status
 archon workflow status --json
 archon workflow status --all       # active runs across all projects
-archon workflow status --lost      # only active runs whose owner process is gone
+archon workflow status --all --lost # only active runs reported unreachable, install-wide
 archon workflow status --verbose   # add a per-node summary for each run
 archon workflow status --json --verbose
 ```
@@ -706,9 +706,13 @@ Each `running` run also carries what this process observes about its owner, by t
 `reachable`, `unreachable` or `unknown`. An owner on another host or user is `unknown`, never
 `unreachable`; a run that needs no owner carries null. For an `unreachable` run the text names
 the two commands that move it, `archon workflow resume <id>` and `archon workflow abandon <id>`.
-Reading changes nothing. `--lost` keeps only the `unreachable` runs, so one read finds every run
-a closed lid or a killed terminal left behind; JSON then carries `ownerFilter: "unreachable"`
-(`null` otherwise). After a crash or a kill, the first recovery step is this read.
+Reading changes nothing. `--lost` keeps only the `unreachable` runs in the selected scope, like
+the rest of `status`; `archon workflow status --all --lost` is the install-wide recovery read
+after a crash or a kill, since it checks every active run rather than the bounded listing. A run
+whose owner reads `unknown` is never listed. JSON carries `ownerFilter: "unreachable"` with
+`--lost` (`null` otherwise). `unreachable` means the recorded owner on this host did not answer
+on two reads; a live process whose endpoint is unresponsive reads the same way, so check before
+`abandon`.
 
 Tool-call advisories appear in nonverbose text and in the JSON `attention` field. The run remains `running`; every overdue tool shows its node, provider, sanitized command/title, and elapsed/no-progress duration. The default is 30 minutes without reported progress; see [workflow attention settings](/reference/configuration/#workflow-attention-and-continuation-settings).
 
