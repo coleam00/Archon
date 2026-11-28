@@ -108,6 +108,19 @@ describe('recorded usage coverage', () => {
     expect(result.coverage.inputTokens.state).toBe('complete');
     expect(result.coverage.outputTokens.state).toBe('complete');
     expect(result.coverage.inputTokens.expectedNodes).not.toBeNull();
+    // Both rows name the same node, so the conflict hides no node.
+    expect(result.coverage.usd.expectedNodes).toBe(1);
+  });
+
+  it('certifies a node only when its usage figure and typed spend agree', () => {
+    const event = serializeNodeStateRecord(agent('build', measured));
+    event.data.cost_usd = 0.5;
+    const result = report([event]);
+    expect(result.totals.usd).toBe(0.5);
+    expect(result.coverage.usd.state).toBe('unknown');
+    expect(result.coverage.usd).toMatchObject({ recordedNodes: 1, expectedNodes: 1 });
+    expect(result.coverage.usd.gaps).toEqual([{ path: 'build', reason: 'record_unreadable' }]);
+    expect(result.coverage.inputTokens.state).toBe('complete');
   });
 
   it('separates unsupported cost from complete gross-token coverage', () => {
@@ -234,6 +247,27 @@ describe('recorded usage coverage', () => {
         gaps: [],
       });
     expect(formatUsageReport(result)).toEqual([]);
+  });
+
+  it('names an invalid recorded total on a zero-AI run instead of dropping it', () => {
+    const deterministic = startNodeExecution({
+      runId: 'run',
+      path: 'script',
+      node: { id: 'script', kind: 'exec', runtime: 'sh', script: 'true' },
+      invocation: newNodeInvocation(),
+    });
+    const result = report(
+      [serializeNodeStateRecord(finishNodeExecution(deterministic, { status: 'completed' }, {}))],
+      { total_cost_usd: -1 }
+    );
+    expect(result.totals.usd).toBeNull();
+    expect(result.coverage.usd).toEqual({
+      state: 'unknown',
+      recordedNodes: 0,
+      expectedNodes: 0,
+      gaps: [{ reason: 'total_invalid' }],
+    });
+    expect(result.coverage.inputTokens.state).toBe('not_applicable');
   });
 
   it('names an unmatched start without inventing a provider measurement', () => {
@@ -415,6 +449,67 @@ describe('recorded usage coverage', () => {
       path: 'fan__item',
       reason: 'partial_measurement',
     });
+  });
+
+  it('keeps a child attributable under an instance terminal that reconciles with its leaf', () => {
+    const leaf: DagResumeEvent = {
+      event_type: 'node_completed',
+      step_name: 'fan__item__children',
+      data: {
+        type: 'workflow',
+        cost_usd: 0.25,
+        tokens: measured.tokens,
+        child_usage: [{ childRunId: 'child', costUsd: 0.25, tokens: measured.tokens }],
+      },
+    };
+    const wrapper: DagResumeEvent = {
+      event_type: 'node_completed',
+      step_name: 'fan__item',
+      data: {
+        type: 'compose_fan_out_instance',
+        cost_scope: 'total',
+        cost_usd: 0.25,
+        tokens: measured.tokens,
+      },
+    };
+    const childFold = foldDagUsage([serializeNodeStateRecord(agent('build', measured))], 'child');
+    const child = collectRunUsageEvidence(
+      { id: 'child', metadata: serializeRunUsage(countedUsage(childFold)) },
+      childFold
+    );
+    const result = buildRunUsageReport(
+      {
+        id: 'run',
+        metadata: serializeRunUsage(countedUsage(foldDagUsage([leaf, wrapper], 'run'))),
+      },
+      foldDagUsage([leaf, wrapper], 'run'),
+      { children: new Map([['child', { evidence: child }]]) }
+    );
+    expect(result.coverage.usd).toEqual({
+      state: 'complete',
+      recordedNodes: 1,
+      expectedNodes: 1,
+      gaps: [],
+    });
+  });
+
+  it('lets a node limitation explain a partial wrapper instead of listing both', () => {
+    const leaf = serializeNodeStateRecord(agent('fan__item__build', measured));
+    const wrapper: DagResumeEvent = {
+      event_type: 'node_completed',
+      step_name: 'fan__item',
+      data: {
+        type: 'compose_fan_out_instance',
+        cost_scope: 'total',
+        cost_usd: 5,
+        cost_partial: true,
+        tokens: { input: 30, output: 10 },
+      },
+    };
+    const result = report([leaf, wrapper]);
+    expect(result.coverage.usd.gaps.filter(gap => gap.path === 'fan__item')).toEqual([
+      { path: 'fan__item', reason: 'scope_unattributed' },
+    ]);
   });
 
   it('keeps numerical duplicate-terminal behavior but marks contradictory evidence unreadable', () => {

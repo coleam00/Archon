@@ -222,14 +222,16 @@ function populationLimitations(run: ReportRun, fold: DagUsageFold): UsageLimitat
       limitations.push({ runId: run.id, path: observation.path, reason: 'node_kind_unavailable' });
   }
   const graph = runGraphSchema.safeParse(run.metadata[RUN_GRAPH_METADATA_KEY]);
-  if (graph.success)
-    for (const path of graph.data.node_ids)
-      if (
-        !fold.observations.some(
-          observation => observation.path === path && observation.nodeKind !== undefined
-        )
+  if (graph.success) {
+    const known = new Set(
+      fold.observations.flatMap(observation =>
+        observation.nodeKind === undefined ? [] : [observation.path]
       )
+    );
+    for (const path of graph.data.node_ids)
+      if (!known.has(path))
         limitations.push({ runId: run.id, path, reason: 'node_kind_unavailable' });
+  }
   if (fold.observations.length === 0 && !(graph.success && graph.data.node_ids.length === 0))
     limitations.push({ runId: run.id, reason: 'history_absent' });
   return limitations;
@@ -306,7 +308,8 @@ function attributedContributors(
   contributions: readonly UsageContribution[],
   metric: UsageMetric,
   limitations: UsageLimitation[],
-  history: readonly DagUsageObservation[]
+  history: readonly DagUsageObservation[],
+  reconciled: Set<string>
 ): UsageNodeIdentity[] {
   return contributions.flatMap(contribution => {
     const evidence = contribution.evidence;
@@ -321,19 +324,25 @@ function attributedContributors(
         limitations.push({ runId, path: contribution.stepName, reason: 'scope_unattributed' });
         return [];
       }
+      for (const covered of contribution.coveredContributions) reconciled.add(covered.stepName);
       return attributedContributors(
         runId,
         contribution.coveredContributions,
         metric,
         limitations,
-        history
+        history,
+        reconciled
       );
     }
     if (evidence !== undefined && aiObservation(evidence, history)) {
-      return validUsageAmount(metric, contributionAmount(contribution, metric)) &&
-        validUsageAmount(metric, measurementValue(evidence, metric))
-        ? [identity(runId, evidence)]
-        : [];
+      const amount = contributionAmount(contribution, metric);
+      const typed = measurementValue(evidence, metric);
+      if (!validUsageAmount(metric, amount) || !validUsageAmount(metric, typed)) return [];
+      // The row's usage figure and its typed spend record one measurement twice. When they
+      // disagree the row does not say which figure is right, so neither is certified.
+      if (usageAmountsAgree(metric, amount, typed)) return [identity(runId, evidence)];
+      limitations.push({ runId, path: contribution.stepName, reason: 'record_unreadable' });
+      return [];
     }
     if (evidence?.nodeKind !== 'workflow' && contributionAmount(contribution, metric) !== undefined)
       limitations.push({ runId, path: contribution.stepName, reason: 'scope_unattributed' });
@@ -498,19 +507,24 @@ function buildMetricEvidence(
     ...evidence.limitations,
     ...child.limitations,
   ];
+  const reconciled = new Set<string>();
   let contributors = attributedContributors(
     run.id,
     fold.usageContributions,
     metric,
     limitations,
-    fold.observations
+    fold.observations,
+    reconciled
   );
-  const attributedChildren = childMetricCoverage(
-    fold,
-    children,
-    metric,
-    new Set(fold.opaqueChildUsagePaths.keys())
+  // The fold marks a child opaque when an instance terminal replaces the segment that
+  // reported it, before it can know whether the terminal's amount agrees with what it covered.
+  // A child under a terminal that agrees still has its own evidence describing that amount.
+  const opaque = new Set(
+    [...fold.opaqueChildUsagePaths]
+      .filter(([, paths]) => ![...paths].every(path => reconciled.has(path)))
+      .map(([childId]) => childId)
   );
+  const attributedChildren = childMetricCoverage(fold, children, metric, opaque);
   contributors.push(...attributedChildren.reports.flatMap(report => report.contributors));
   const population = uniqueUsageNodes(
     [...observations, ...unfinished].map(observation => identity(run.id, observation))
@@ -525,8 +539,14 @@ function buildMetricEvidence(
     })),
   ];
   limitations.push(...child.reports.flatMap(report => report.limitations));
+  // A row the reader could not decode may be any node, so it leaves the population unknown. An
+  // unreadable or contradicted figure on a node the fold already counted hides no node.
   const aiNodes =
-    hasUnknownPopulation(limitations) || child.reports.some(report => report.aiNodes === null)
+    readLimitations.some(limitation => limitation.reason === 'record_unreadable') ||
+    hasUnknownPopulation(
+      limitations.filter(limitation => limitation.reason !== 'record_unreadable')
+    ) ||
+    child.reports.some(report => report.aiNodes === null)
       ? null
       : population.length;
   const totalLimitations = totalLimitation(run, metric, totals[metric]);
@@ -659,12 +679,25 @@ function reportedCoverage(runId: string, evidence: MetricEvidence): MetricCovera
     seen.add(key);
     gaps.push(gap);
   };
-  const inRun = (nodeRunId: string | undefined): { runId?: string } =>
-    nodeRunId === undefined || nodeRunId === runId ? {} : { runId: nodeRunId };
+  // The report's own run is known to the reader, so its gaps carry no run id.
+  const childRunId = (nodeRunId: string | undefined): string | undefined =>
+    nodeRunId === undefined || nodeRunId === runId ? undefined : nodeRunId;
+  const inRun = (nodeRunId: string | undefined): { runId?: string } => {
+    const id = childRunId(nodeRunId);
+    return id === undefined ? {} : { runId: id };
+  };
+  // Limitations are added to the gaps after the partial nodes, so a node one of them already
+  // explains is looked up in the evidence here.
+  const explained = (node: UsageNodeIdentity): boolean =>
+    evidence.limitations.some(
+      limitation =>
+        limitation.path === node.path && childRunId(limitation.runId) === childRunId(node.runId)
+    );
   for (const gap of evidence.gaps)
     addGap({ path: gap.node.path, reason: gap.reason, ...inRun(gap.node.runId) });
   for (const node of evidence.partial)
-    addGap({ path: node.path, reason: 'partial_measurement', ...inRun(node.runId) }, true);
+    if (!explained(node))
+      addGap({ path: node.path, reason: 'partial_measurement', ...inRun(node.runId) }, true);
   for (const limitation of evidence.limitations)
     addGap({
       ...inRun(limitation.runId),
