@@ -819,6 +819,28 @@ describe('reading an item', () => {
     expect(await readItemOfRun(source, 'missing')).toBeNull();
   });
 
+  test('a child that recorded its own item reads it, and its children read the nearest item', async () => {
+    const own: WorkflowItem = { id: 'item-row-2', projectKey: 'acme/web', key: 'issue-8' };
+    const onOwn = run('on-own', { parent_run_id: 'second', item_id: own.id });
+    const below = run('below', { parent_run_id: 'on-own', item_id: null });
+    const withOwn: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getWorkflowRun: async id =>
+          id === 'on-own' ? onOwn : id === 'below' ? below : (runs.get(id) ?? null),
+        getItem: async id => (id === own.id ? own : id === item.id ? item : null),
+        getItemRuns: async (projectKey, key) =>
+          projectKey === own.projectKey && key === own.key
+            ? { item: own, runs: [onOwn], descendantIds: ['below'] }
+            : source.store.getItemRuns(projectKey, key),
+      },
+    };
+    expect((await readItemOfRun(withOwn, 'on-own'))?.item).toEqual(own);
+    // No item of its own: the nearest ancestor that recorded one, not the root's.
+    expect((await readItemOfRun(withOwn, 'below'))?.item).toEqual(own);
+  });
+
   test('a run the store could not read is reported, and the rest of the item still reads', async () => {
     // One of the item's own runs and one paused child do not normalize. The store still
     // finds both by id, and the queue reports the paused one as unreadable.
