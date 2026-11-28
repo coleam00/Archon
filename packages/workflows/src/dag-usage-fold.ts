@@ -193,8 +193,15 @@ function dataIsNotJson(runId: string, row: DagUsageRow): boolean {
     JSON.parse(row.data);
     return false;
   } catch (parseErr) {
+    // A JSON.parse error message quotes the rejected input, which may hold user text, so the
+    // warning carries the error's name and the data's length, never the error or the data.
     getLog().warn(
-      { err: parseErr as Error, runId, stepName: row.step_name },
+      {
+        errorName: (parseErr as Error).name,
+        dataLength: row.data.length,
+        runId,
+        stepName: row.step_name,
+      },
       'db.workflow_dag_node_output_parse_failed'
     );
     return true;
