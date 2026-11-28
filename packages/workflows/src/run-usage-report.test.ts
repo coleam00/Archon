@@ -396,11 +396,18 @@ describe('recorded usage coverage', () => {
 
   it('leaves an amendment out of the comparison of one attempt\u2019s terminals', () => {
     const record = agent('build', measured);
-    const amendment = finishNodeExecution(
+    const finishedAmendment = finishNodeExecution(
       { ...record, accounting: 'amendment' },
       { status: 'failed', error: 'contract' },
       {}
     );
+    const amendment = {
+      ...finishedAmendment,
+      spend: {
+        ...finishedAmendment.spend,
+        costUsd: { source: 'unavailable' as const, reason: 'unknown' as const },
+      },
+    };
     expect(amendment.attempt.id).toBe(record.attempt.id);
     const result = report([serializeNodeStateRecord(record), serializeNodeStateRecord(amendment)]);
     expect(result.coverage.usd).toMatchObject({ state: 'complete', recordedNodes: 1 });
@@ -718,6 +725,28 @@ describe('recorded usage coverage', () => {
       recordedNodes: 1,
       expectedNodes: 1,
       gaps: [],
+    });
+  });
+
+  it('records a limitation when a present USD figure is negative instead of certifying complete coverage', () => {
+    const first = serializeNodeStateRecord(
+      agent('build', { costUsd: 0.5, tokens: measured.tokens })
+    );
+    const secondRecord = agent('build', { costUsd: 0.1, tokens: measured.tokens });
+    const secondSerialized = serializeNodeStateRecord(secondRecord);
+    const second: DagResumeEvent = {
+      ...secondSerialized,
+      data: { ...(secondSerialized.data as Record<string, unknown>), cost_usd: -0.1 },
+    };
+    const result = report([first, second], {
+      total_cost_usd: 0.4,
+      total_tokens_in: 8,
+      total_tokens_out: 4,
+    });
+    expect(result.coverage.usd.state).not.toBe('complete');
+    expect(result.coverage.usd.gaps).toContainEqual({
+      path: 'build',
+      reason: 'record_unreadable',
     });
   });
 });

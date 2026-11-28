@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, it, spyOn } from 'bun:test';
 import * as paths from '@archon/paths';
 import {
@@ -12,7 +13,11 @@ import type { WorkflowRun } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { USAGE_METRICS } from './schemas/run-usage-report';
 
-/** Every warning the reader logs; installed before its lazily created logger exists. */
+/**
+ * Every warning the reader logs. The reader caches its logger on first use, so this file runs in
+ * its own process (`@archon-test-isolated`): a shared process would either hand the reader the
+ * real logger first or leak this `createLogger` spy into other tests.
+ */
 const loggedWarnings: Record<string, unknown>[] = [];
 {
   const logger = paths.createLogger('test');

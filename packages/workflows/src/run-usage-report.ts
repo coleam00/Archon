@@ -190,25 +190,39 @@ function allContributions(contributions: readonly UsageContribution[]): UsageCon
 /**
  * AI starts that no later end closes. An end counts only when it was recorded after the
  * start: rows without attempt ids share a path across reruns, and an earlier completion
- * must not close a later start. Ends are indexed by path so a long history is read once.
+ * must not close a later start. Recording only the latest matching end index per key keeps
+ * matching linear even when one path has thousands of alternating starts and ends.
  */
 function unfinishedObservations(fold: DagUsageFold): DagUsageObservation[] {
-  const ends = new Map<string, { at: number; end: DagUsageObservation }[]>();
+  const lastDeferredByPathAndInvocation = new Map<string, number>();
+  const lastNonDeferredByPath = new Map<string, number>();
+  const lastNonDeferredByPathAndAttempt = new Map<string, number>();
   fold.observations.forEach((end, at) => {
     if (!executedObservation(end) && end.eventType !== 'node_skipped') return;
-    const list = ends.get(end.path) ?? [];
-    list.push({ at, end });
-    ends.set(end.path, list);
+    if (end.eventType === DEFERRED_NODE_USAGE_EVENT_TYPE) {
+      lastDeferredByPathAndInvocation.set(JSON.stringify([end.path, end.invocationId ?? null]), at);
+      return;
+    }
+    lastNonDeferredByPath.set(end.path, at);
+    if (end.attemptId !== undefined)
+      lastNonDeferredByPathAndAttempt.set(JSON.stringify([end.path, end.attemptId]), at);
   });
-  const closes = (start: DagUsageObservation, end: DagUsageObservation): boolean =>
-    end.eventType === DEFERRED_NODE_USAGE_EVENT_TYPE
-      ? end.invocationId === start.invocationId
-      : start.attemptId === undefined || end.attemptId === start.attemptId;
+  const closedAfter = (start: DagUsageObservation, startAt: number): boolean => {
+    const deferredAt = lastDeferredByPathAndInvocation.get(
+      JSON.stringify([start.path, start.invocationId ?? null])
+    );
+    if (deferredAt !== undefined && deferredAt > startAt) return true;
+    const endAt =
+      start.attemptId === undefined
+        ? lastNonDeferredByPath.get(start.path)
+        : lastNonDeferredByPathAndAttempt.get(JSON.stringify([start.path, start.attemptId]));
+    return endAt !== undefined && endAt > startAt;
+  };
   return fold.observations.filter(
     (start, startAt) =>
       start.eventType === 'node_started' &&
       aiObservation(start, fold.observations) &&
-      !(ends.get(start.path) ?? []).some(({ at, end }) => at > startAt && closes(start, end))
+      !closedAfter(start, startAt)
   );
 }
 
@@ -337,6 +351,10 @@ function attributedContributors(
     if (evidence !== undefined && aiObservation(evidence, history)) {
       const amount = contributionAmount(contribution, metric);
       const typed = measurementValue(evidence, metric);
+      if (amount !== undefined && !validUsageAmount(metric, amount)) {
+        limitations.push({ runId, path: contribution.stepName, reason: 'record_unreadable' });
+        return [];
+      }
       if (!validUsageAmount(metric, amount) || !validUsageAmount(metric, typed)) return [];
       // The row's usage figure and its typed spend record one measurement twice. When they
       // disagree the row does not say which figure is right, so neither is certified.
